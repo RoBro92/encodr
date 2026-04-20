@@ -25,7 +25,7 @@ def test_command_version_prints_release_summary(
 
     output = capsys.readouterr().out
     assert result == 0
-    assert "Encodr 0.1.0" in output
+    assert "Encodr 0.1.2" in output
     assert "API base path: /api" in output
 
 
@@ -43,7 +43,7 @@ def test_command_doctor_reports_runtime_and_storage_status(
 
         def runtime_status(self) -> dict[str, object]:
             return {
-                "version": "0.1.0",
+                "version": "0.1.2",
                 "status": "healthy",
                 "summary": "Runtime health is healthy.",
                 "db_reachable": True,
@@ -74,7 +74,7 @@ def test_command_doctor_reports_runtime_and_storage_status(
 
     output = capsys.readouterr().out
     assert result == 0
-    assert "Version: 0.1.0" in output
+    assert "Version: 0.1.2" in output
     assert "API health: healthy" in output
 
 
@@ -92,7 +92,7 @@ def test_command_status_reports_media_mount_problem_clearly(
 
         def runtime_status(self) -> dict[str, object]:
             return {
-                "version": "0.1.0",
+                "version": "0.1.2",
                 "status": "degraded",
                 "summary": "Runtime health completed with warnings.",
                 "db_reachable": True,
@@ -220,6 +220,7 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "tmp_dir: unbound variable" not in install_script
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
     assert 'ENCODR_INSTALL_LIB_ONLY:-0' in install_script
+    assert "Stopping existing Docker services" in install_script
 
 
 def test_encodr_wrapper_prefers_managed_cli_venv(repo_root: Path) -> None:
@@ -271,7 +272,7 @@ def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> 
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in install_doc
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair" in install_doc
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh" in install_doc
-    assert "--version 0.1.0" in install_doc
+    assert "--version 0.1.2" in install_doc
     assert "latest tagged release by default" in install_doc
 
 

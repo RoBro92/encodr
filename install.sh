@@ -346,6 +346,30 @@ show_fresh_install_plan() {
   printf '  - %s application files\n' "${INSTALL_ROOT}"
 }
 
+stop_existing_stack_for_fresh_install() {
+  if [[ ! -f "${INSTALL_ROOT}/docker-compose.yml" ]]; then
+    info "No existing Docker Compose project file was found to stop."
+    return 0
+  fi
+
+  if ! command -v docker >/dev/null 2>&1; then
+    warn "Docker is not available, so the existing Encodr stack could not be stopped explicitly."
+    return 0
+  fi
+
+  if ! docker compose version >/dev/null 2>&1; then
+    warn "Docker Compose is not available, so the existing Encodr stack could not be stopped explicitly."
+    return 0
+  fi
+
+  section "Stopping existing Encodr stack"
+  run_with_progress \
+    "Stopping existing Docker services" \
+    docker compose down --remove-orphans \
+    --project-directory "${INSTALL_ROOT}" || \
+    fail "Unable to stop the existing Encodr Docker stack before the fresh reinstall."
+}
+
 confirm_fresh_install() {
   show_fresh_install_plan
   local confirmation=""
@@ -386,6 +410,7 @@ perform_fresh_install_reset() {
   fi
 
   show_fresh_install_plan
+  stop_existing_stack_for_fresh_install
   rm -rf "${INSTALL_ROOT}" || fail "Unable to remove the existing Encodr installation."
   success "Existing installation removed"
 }

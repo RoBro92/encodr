@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased / Internal `0.1.0`
+## Unreleased / Internal `0.1.2`
 
 Initial internal release line covering:
 

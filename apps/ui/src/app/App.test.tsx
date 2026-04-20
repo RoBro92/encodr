@@ -17,7 +17,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/" });
 
     expect(await screen.findByRole("heading", { name: /sign in to the operator console/i })).toBeInTheDocument();
-    expect(screen.getByText(/encodr v0\.1\.0/i)).toBeInTheDocument();
+    expect(screen.getByText(/encodr v0\.1\.2/i)).toBeInTheDocument();
   });
 
   it("shows the first-user setup flow when bootstrap is still allowed", async () => {
@@ -29,7 +29,7 @@ describe("Encodr UI shell", () => {
           bootstrap_allowed: true,
           first_user_setup_required: true,
           user_count: 0,
-          version: "0.1.0",
+          version: "0.1.2",
         },
       },
       {
@@ -127,7 +127,7 @@ describe("Encodr UI shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     expect(await screen.findByText(/operator console/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/encodr v0\.1\.0/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/encodr v0\.1\.2/i).length).toBeGreaterThan(0);
     expect(JSON.parse(window.localStorage.getItem("encodr.session") ?? "{}").tokens.access_token).toBe("new-access");
   });
 
@@ -141,15 +141,15 @@ describe("Encodr UI shell", () => {
         method: "GET",
         path: "/api/system/update",
         body: {
-          current_version: "0.1.0",
-          latest_version: "0.1.1",
+          current_version: "0.1.2",
+          latest_version: "0.1.3",
           update_available: true,
           channel: "internal",
           status: "ok",
           checked_at: "2026-04-20T12:30:00Z",
           error: null,
-          download_url: "https://example.invalid/encodr-0.1.1.tar.gz",
-          release_notes_url: "https://example.invalid/encodr-0.1.1-notes",
+          download_url: "https://example.invalid/encodr-0.1.3.tar.gz",
+          release_notes_url: "https://example.invalid/encodr-0.1.3-notes",
         },
       },
     ]);
@@ -157,7 +157,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/", initialSession: makeSession() });
 
     expect(await screen.findByText(/update available/i)).toBeInTheDocument();
-    expect(screen.getByText(/encodr 0\.1\.1 is available/i)).toBeInTheDocument();
+    expect(screen.getByText(/encodr 0\.1\.3 is available/i)).toBeInTheDocument();
   });
 
   it("renders the dashboard with analytics and operational sections from API data", async () => {
@@ -720,7 +720,7 @@ function runtimeStatus({
   return {
     status,
     summary: status === "healthy" ? "Runtime health is healthy." : "Runtime health completed with warnings.",
-    version: "0.1.0",
+    version: "0.1.2",
     environment: "testing",
     db_reachable: true,
     schema_reachable: true,
@@ -952,7 +952,7 @@ function remoteWorkerSummary() {
     host_summary: {
       hostname: "worker-amd",
       platform: "Linux",
-      agent_version: "0.1.0",
+      agent_version: "0.1.2",
       python_version: "3.12",
     },
     pending_assignment_count: 0,

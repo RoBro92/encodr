@@ -50,7 +50,7 @@ export function mockFetchRoutes(routes: MockRoute[]) {
           bootstrap_allowed: false,
           first_user_setup_required: false,
           user_count: 1,
-          version: "0.1.0",
+          version: "0.1.2",
         }),
         {
           status: 200,
@@ -64,7 +64,7 @@ export function mockFetchRoutes(routes: MockRoute[]) {
     if (!route && method === "GET" && url.includes("/api/system/update")) {
       return new Response(
         JSON.stringify({
-          current_version: "0.1.0",
+          current_version: "0.1.2",
           latest_version: null,
           update_available: false,
           channel: "internal",
