@@ -204,7 +204,7 @@ install_base_packages() {
   run_with_progress "Refreshing package metadata" apt-get update || fail "Unable to refresh package metadata."
   run_with_progress \
     "Installing base system packages" \
-    apt-get install -y ca-certificates curl git jq gnupg lsb-release python3 iproute2 tar || \
+    apt-get install -y ca-certificates curl git jq gnupg lsb-release python3 python3-venv iproute2 tar || \
     fail "Unable to install the required base packages."
 }
 
@@ -491,6 +491,30 @@ PY
   fi
 }
 
+prepare_management_cli_runtime() {
+  section "Preparing management CLI"
+  local cli_venv="${INSTALL_ROOT}/.runtime/cli-venv"
+  local cli_python="${cli_venv}/bin/python"
+  local cli_pip="${cli_venv}/bin/pip"
+
+  if [[ ! -x "${cli_python}" ]]; then
+    run_with_progress "Creating the Encodr management virtual environment" \
+      python3 -m venv "${cli_venv}" || fail "Unable to create the Encodr management virtual environment."
+  else
+    info "Encodr management virtual environment already exists"
+  fi
+
+  run_with_progress \
+    "Installing Encodr management command dependencies" \
+    "${cli_pip}" install --no-cache-dir \
+      "psycopg[binary]>=3.1,<4.0" \
+      -e "${INSTALL_ROOT}/packages/core" \
+      -e "${INSTALL_ROOT}/packages/shared" \
+      -e "${INSTALL_ROOT}/packages/db" \
+      -e "${INSTALL_ROOT}/apps/api" || \
+    fail "Unable to install Encodr management command dependencies."
+}
+
 load_env() {
   local env_file="${INSTALL_ROOT}/.env"
   [[ -f "${env_file}" ]] || fail "Expected environment file at ${env_file}."
@@ -590,6 +614,7 @@ main() {
   ./infra/scripts/bootstrap.sh >/dev/null
   ensure_secret "ENCODR_AUTH_SECRET"
   ensure_secret "ENCODR_WORKER_REGISTRATION_SECRET"
+  prepare_management_cli_runtime
 
   mkdir -p /usr/local/bin
   ln -sf "${INSTALL_ROOT}/encodr" /usr/local/bin/encodr

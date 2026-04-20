@@ -195,6 +195,9 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
 
     assert "./infra/scripts/bootstrap.sh" in install_script
+    assert "prepare_management_cli_runtime" in install_script
+    assert "python3 -m venv" in install_script
+    assert "\"psycopg[binary]>=3.1,<4.0\"" in install_script
     assert 'run_with_progress "Launching Docker services" docker compose up -d --build' in install_script
     assert "run_with_progress()" in install_script
     assert "./encodr doctor" in install_script
@@ -217,6 +220,15 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "tmp_dir: unbound variable" not in install_script
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
     assert 'ENCODR_INSTALL_LIB_ONLY:-0' in install_script
+
+
+def test_encodr_wrapper_prefers_managed_cli_venv(repo_root: Path) -> None:
+    wrapper = (repo_root / "encodr").read_text(encoding="utf-8")
+
+    assert 'CLI_VENV_PYTHON="${ROOT_DIR}/.runtime/cli-venv/bin/python"' in wrapper
+    assert 'if [[ -x "${CLI_VENV_PYTHON}" ]]; then' in wrapper
+    assert 'exec "${CLI_VENV_PYTHON}" "${ROOT_DIR}/encodr_cli.py" "$@"' in wrapper
+    assert 'exec python3 "${ROOT_DIR}/encodr_cli.py" "$@"' in wrapper
 
 
 def test_install_script_uses_latest_tagged_release_by_default(repo_root: Path) -> None:

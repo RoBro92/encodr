@@ -1,7 +1,11 @@
-#!/usr/bin/env python3
+#!/usr/bin/env bash
+set -euo pipefail
 
-from encodr_cli import main
+ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+CLI_VENV_PYTHON="${ROOT_DIR}/.runtime/cli-venv/bin/python"
 
+if [[ -x "${CLI_VENV_PYTHON}" ]]; then
+  exec "${CLI_VENV_PYTHON}" "${ROOT_DIR}/encodr_cli.py" "$@"
+fi
 
-if __name__ == "__main__":
-    raise SystemExit(main())
+exec python3 "${ROOT_DIR}/encodr_cli.py" "$@"
