@@ -9,9 +9,13 @@ description = "FastAPI application for encodr"
 requires-python = ">=3.12"
 dependencies = [
   "fastapi>=0.115,<1.0",
+  "PyJWT>=2.8,<3.0",
+  "SQLAlchemy>=2.0,<3.0",
+  "argon2-cffi>=23.1,<24.0",
   "uvicorn[standard]>=0.30,<1.0",
+  "encodr-core",
+  "encodr-db",
 ]
 
 [tool.hatch.build.targets.wheel]
 packages = ["app"]
-

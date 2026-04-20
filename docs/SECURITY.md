@@ -8,8 +8,8 @@
 
 - Authentication required for all non-health endpoints
 - Passwords stored as strong hashes, not reversible secrets
-- Prefer `argon2id` for password hashing
-- Use short-lived access tokens plus refresh tokens or equivalent server-side session control
+- `argon2id` password hashing for local credentials
+- Short-lived JWT access tokens plus revocable refresh tokens
 - Record audit logs for logins, configuration changes, job control actions, and manual review actions
 - Follow least-privilege principles for containers, mounts, and worker file access
 
@@ -21,9 +21,21 @@
 
 ## Session approach
 
-- API issues short-lived JWT access tokens
-- Refresh tokens are revocable and stored server-side or in a revocation-aware model
-- UI stores tokens using the least risky approach chosen during implementation
+- API issues short-lived JWT access tokens for bearer authentication
+- Refresh tokens are opaque, revocable, and stored server-side with rotation on refresh
+- Logout revokes active refresh tokens for the current user
+- `/health` remains public; operational and control endpoints require authenticated access
+
+## Bootstrap admin
+
+- First-run bootstrap admin creation is allowed only while no user records exist
+- Once a user exists, bootstrap admin creation is blocked
+- There is no open self-registration endpoint
+
+## Audit trail
+
+- Append-only audit events record bootstrap admin creation, bootstrap blocking, login success or failure, logout, and token refresh
+- Events retain the acting username or user id where available, plus source IP, user agent, outcome, and structured details
 
 ## File-system and process controls
 
@@ -38,4 +50,3 @@
 - mTLS for remote workers
 - finer role-based access control
 - signed job hand-off for remote execution
-

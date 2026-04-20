@@ -24,6 +24,7 @@
 
 - internal tool, trusted network, authenticated users
 - conservative defaults for file replacement and deletion
+- API auth secret must come from environment configuration in deployed environments
 - logs and metrics retained long enough for operational review
 
 ## Later deployment work

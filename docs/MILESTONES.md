@@ -47,9 +47,9 @@ Use this file as the working delivery checklist. Each milestone is intended to l
 
 ## Milestone 7: auth and security baseline
 
-- [ ] PR 7.1 Add user model, password hashing, and login flow
-- [ ] PR 7.2 Add JWT or session token handling with refresh flow
-- [ ] PR 7.3 Add audit logging for sensitive actions
+- [x] PR 7.1 Add user model, password hashing, and login flow
+- [x] PR 7.2 Add JWT or session token handling with refresh flow
+- [x] PR 7.3 Add audit logging for sensitive actions
 
 ## Milestone 8: API endpoints
 

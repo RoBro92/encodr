@@ -1,2 +1,3 @@
-"""API route packages."""
+from app.api.routes import router
 
+__all__ = ["router"]

@@ -35,6 +35,7 @@ class AuthSettings(ConfigModel):
     access_token_ttl_minutes: PositiveInt = 30
     refresh_token_ttl_days: PositiveInt = 14
     password_hash_scheme: NonEmptyString = "argon2id"
+    access_token_algorithm: NonEmptyString = "HS256"
 
 
 class DatabaseSettings(ConfigModel):
@@ -82,4 +83,3 @@ class AppConfig(ConfigModel):
 
 class AppConfigDocument(ConfigModel):
     app: AppConfig
-

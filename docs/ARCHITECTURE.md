@@ -26,7 +26,7 @@ The repository is organised as a small monorepo:
 
 ## Service boundaries
 
-- API owns authentication, user/session handling, job visibility, dashboard aggregation, configuration views, and administrative actions.
+- API owns authentication, user/session handling, audit logging for security-relevant actions, job visibility, dashboard aggregation, configuration views, and administrative actions.
 - Worker owns ffprobe, ffmpeg invocation, output verification, and safe replacement logic.
 - Core package owns configuration loading, ffprobe parsing, internal media models, policy parsing, planning, naming, and verification rules.
 - DB package owns persistent state and repository access patterns.
@@ -38,6 +38,7 @@ The repository is organised as a small monorepo:
 - Probe and plan snapshots are immutable historical records linked back to that tracked file.
 - Jobs reference the chosen plan snapshot and carry execution, verification, and replacement state.
 - Probe and plan snapshots remain immutable; job rows hold operational outcomes for later audit and analytics.
+- Users, refresh tokens, and audit events provide the local authentication baseline for the API.
 
 ## Planning layer
 
@@ -68,6 +69,7 @@ The repository is organised as a small monorepo:
 - The planner must be deterministic and explain its decision.
 - Output replacement must be safe and verifiable.
 - Authentication is mandatory because the system has networked file access.
+- Bootstrap access is tightly scoped to first-run admin creation only.
 
 ## Future expansion points
 

@@ -20,6 +20,7 @@ app:
     access_token_ttl_minutes: 30
     refresh_token_ttl_days: 14
     password_hash_scheme: argon2id
+    access_token_algorithm: HS256
   database:
     dsn: postgresql+psycopg://encodr:encodr-dev-password@postgres:5432/encodr
   redis:
@@ -32,4 +33,3 @@ app:
   dashboard:
     recent_job_limit: 25
     analytics_window_days: 30
-

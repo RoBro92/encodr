@@ -34,7 +34,7 @@
 
 ## `apps/`
 
-- `api/`: FastAPI service entry point and route package placeholders
+- `api/`: FastAPI service entry point, auth routes, dependencies, schemas, and service-layer wiring
 - `worker/`: local worker entry point and execution module placeholders
 - `ui/`: Vite + React starter UI
 - `worker-agent/`: future remote worker control-plane process
@@ -47,8 +47,8 @@
 - `core/encodr_core/planning/`: deterministic policy evaluation, profile resolution, stream selection intent, and plan models
 - `core/encodr_core/probe/`: ffprobe client, parser, and structured probe errors
 - `db/`: persistence layer and migrations
-- `db/encodr_db/models/`: SQLAlchemy models for tracked files, snapshots, and jobs
-- `db/encodr_db/repositories/`: repository helpers for file, snapshot, and job persistence
+- `db/encodr_db/models/`: SQLAlchemy models for tracked files, snapshots, jobs, users, refresh tokens, and audit events
+- `db/encodr_db/repositories/`: repository helpers for file, snapshot, job, auth, and audit persistence
 - `db/encodr_db/migrations/`: Alembic environment and revision history
 - `shared/`: small enums and type helpers
 
