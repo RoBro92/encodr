@@ -65,9 +65,9 @@ Use this file as the working delivery checklist. Each milestone is intended to l
 
 ## Milestone 9: initial UI shell and dashboard
 
-- [ ] PR 9.1 Add UI shell, routing, and API client baseline
-- [ ] PR 9.2 Build dashboard placeholders from live API data
-- [ ] PR 9.3 Add queue and recent-job views
+- [x] PR 9.1 Add UI shell, routing, and API client baseline
+- [x] PR 9.2 Build dashboard placeholders from live API data
+- [x] PR 9.3 Add queue and recent-job views
 
 ## Milestone 10: analytics and reporting
 

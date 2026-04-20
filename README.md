@@ -17,6 +17,8 @@ This repository currently contains:
 
 The broader job, file, and operational API surface is still intentionally narrow at this stage.
 
+The repository also now includes an initial authenticated operational UI shell for dashboard, files, jobs, system status, and read-only config visibility.
+
 ## Planned stack
 
 - Python backend with FastAPI
@@ -48,3 +50,9 @@ The broader job, file, and operational API surface is still intentionally narrow
 - `make test-e2e`
 - `make test-security`
 - `make test-all`
+
+## UI development
+
+- `cd apps/ui && npm install`
+- `cd apps/ui && npm run dev`
+- `cd apps/ui && npm test`

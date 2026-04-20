@@ -28,6 +28,7 @@ The repository is organised as a small monorepo:
 
 - API owns authentication, user/session handling, audit logging for security-relevant actions, operational file and job visibility, probe or plan task entry points, local worker run-once control, configuration views, and administrative actions.
 - Worker owns ffprobe, ffmpeg invocation, output verification, and safe replacement logic.
+- UI owns the authenticated operator shell, token-backed session handling, typed API queries and mutations, and concise operational views over files, jobs, system status, and effective config.
 - Core package owns configuration loading, ffprobe parsing, internal media models, policy parsing, planning, naming, and verification rules.
 - DB package owns persistent state and repository access patterns.
 - Shared package stays intentionally small.
@@ -90,3 +91,10 @@ The repository is organised as a small monorepo:
 - The initial operational API exposes authenticated read access for tracked files, jobs, latest probe or plan snapshots, local worker status, storage status, runtime status, and sanitised effective config.
 - Conservative write endpoints allow probing a file, planning a file, creating a job, retrying an eligible job by creating a new record, and triggering one local worker pass.
 - The API and worker now share the same local run-once runtime path through the DB runtime layer.
+
+## Current UI surface
+
+- The UI is a small React application with an authenticated shell, sidebar navigation, and protected routes.
+- The dashboard derives simple operational summaries from existing file, job, worker, runtime, and storage endpoints.
+- Files and jobs pages provide minimal operator actions for probing, planning, job creation or retry, and worker run-once.
+- System and config pages remain read-only and intentionally sanitised.

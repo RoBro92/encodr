@@ -36,7 +36,7 @@
 
 - `api/`: FastAPI service entry point, auth routes, operational file or job routes, system or config visibility routes, dependencies, schemas, and service-layer wiring
 - `worker/`: local worker entry point and execution module placeholders
-- `ui/`: Vite + React starter UI
+- `ui/`: Vite + React operational UI with authenticated shell, routed pages, typed API client, and frontend tests
 - `worker-agent/`: future remote worker control-plane process
 
 ## `packages/`

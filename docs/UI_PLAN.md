@@ -12,6 +12,8 @@ The UI is an operational console, not a marketing site. It should help an operat
 - storage status
 - policy summary and version display
 - analytics overview
+- authenticated files and jobs views
+- read-only effective configuration view
 
 ## Design principles
 
@@ -23,8 +25,7 @@ The UI is an operational console, not a marketing site. It should help an operat
 ## Milestone mapping
 
 - Milestone 0: placeholder dashboard shell
-- Milestone 9: initial routed UI with live dashboard data
+- Milestone 9: authenticated routed UI shell with dashboard, files, jobs, system, and config pages backed by the operational API
 - Milestone 10: analytics pages
 - Milestone 11: storage and worker health pages
 - Milestone 12: manual review flows
-
