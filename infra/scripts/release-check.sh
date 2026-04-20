@@ -5,6 +5,31 @@ ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
 
 cd "${ROOT_DIR}"
 
+LOCAL_CONFIG_FILES=(
+  "config/app.yaml"
+  "config/policy.yaml"
+  "config/workers.yaml"
+)
+TEMP_BACKUPS=()
+
+restore_local_config() {
+  local backup original
+  for backup in "${TEMP_BACKUPS[@]}"; do
+    original="${backup%.release-check.bak}"
+    mv "${backup}" "${original}"
+  done
+}
+
+trap restore_local_config EXIT
+
+for file in "${LOCAL_CONFIG_FILES[@]}"; do
+  if [[ -f "${file}" ]]; then
+    backup="${file}.release-check.bak"
+    mv "${file}" "${backup}"
+    TEMP_BACKUPS+=("${backup}")
+  fi
+done
+
 echo "Running release validation for Encodr $(cat VERSION)"
 make check
 
