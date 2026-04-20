@@ -1,0 +1,117 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_long_name": "H.265 / HEVC",
+      "profile": "Main",
+      "codec_type": "video",
+      "width": 1920,
+      "height": 1080,
+      "coded_width": 1920,
+      "coded_height": 1080,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "16:9",
+      "pix_fmt": "yuv420p",
+      "level": 120,
+      "field_order": "progressive",
+      "r_frame_rate": "24000/1001",
+      "avg_frame_rate": "24000/1001",
+      "duration": "5000.000000",
+      "bit_rate": "6800000",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      }
+    },
+    {
+      "index": 1,
+      "codec_name": "eac3",
+      "codec_long_name": "ATSC A/52B (AC-3, E-AC-3)",
+      "profile": "Dolby Digital Plus",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 6,
+      "channel_layout": "5.1(side)",
+      "bit_rate": "768000",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "jpn",
+        "title": "Japanese 5.1"
+      }
+    },
+    {
+      "index": 2,
+      "codec_name": "subrip",
+      "codec_long_name": "SubRip subtitle",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English"
+      }
+    }
+  ],
+  "format": {
+    "filename": "/media/Movies/Example Foreign Audio Film.mkv",
+    "nb_streams": 3,
+    "format_name": "matroska,webm",
+    "format_long_name": "Matroska / WebM",
+    "start_time": "0.000000",
+    "duration": "5000.000000",
+    "size": "7234567890",
+    "bit_rate": "7800000",
+    "probe_score": 100
+  }
+}

@@ -1,0 +1,184 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+      "profile": "High",
+      "codec_type": "video",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "width": 1920,
+      "height": 1080,
+      "coded_width": 1920,
+      "coded_height": 1088,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "16:9",
+      "pix_fmt": "yuv420p",
+      "level": 40,
+      "field_order": "progressive",
+      "chroma_location": "left",
+      "r_frame_rate": "24000/1001",
+      "avg_frame_rate": "24000/1001",
+      "duration": "7200.123000",
+      "bit_rate": "9500000",
+      "bits_per_raw_sample": "8",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "Feature Video"
+      }
+    },
+    {
+      "index": 1,
+      "codec_name": "eac3",
+      "codec_long_name": "ATSC A/52B (AC-3, E-AC-3)",
+      "profile": "Dolby Digital Plus",
+      "codec_type": "audio",
+      "codec_tag_string": "[0][0][0][0]",
+      "codec_tag": "0x0000",
+      "sample_rate": "48000",
+      "channels": 6,
+      "channel_layout": "5.1(side)",
+      "bit_rate": "768000",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English 5.1"
+      }
+    },
+    {
+      "index": 2,
+      "codec_name": "subrip",
+      "codec_long_name": "SubRip subtitle",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English"
+      }
+    },
+    {
+      "index": 3,
+      "codec_name": "subrip",
+      "codec_long_name": "SubRip subtitle",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "spa",
+        "title": "Spanish"
+      }
+    }
+  ],
+  "chapters": [
+    {
+      "id": 0,
+      "time_base": "1/1000",
+      "start": 0,
+      "start_time": "0.000000",
+      "end": 600000,
+      "end_time": "600.000000",
+      "tags": {
+        "title": "Opening"
+      }
+    },
+    {
+      "id": 1,
+      "time_base": "1/1000",
+      "start": 600000,
+      "start_time": "600.000000",
+      "end": 7200123,
+      "end_time": "7200.123000",
+      "tags": {
+        "title": "Feature"
+      }
+    }
+  ],
+  "format": {
+    "filename": "/media/Movies/Example Film (2024).mkv",
+    "nb_streams": 4,
+    "nb_programs": 0,
+    "format_name": "matroska,webm",
+    "format_long_name": "Matroska / WebM",
+    "start_time": "0.000000",
+    "duration": "7200.123000",
+    "size": "12345678901",
+    "bit_rate": "12100000",
+    "probe_score": 100,
+    "tags": {
+      "title": "Example Film (2024)"
+    }
+  }
+}

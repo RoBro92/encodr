@@ -1,0 +1,247 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "h264",
+      "codec_long_name": "H.264 / AVC / MPEG-4 AVC / MPEG-4 part 10",
+      "profile": "High",
+      "codec_type": "video",
+      "width": 1920,
+      "height": 800,
+      "coded_width": 1920,
+      "coded_height": 800,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "12:5",
+      "pix_fmt": "yuv420p",
+      "level": 41,
+      "field_order": "progressive",
+      "r_frame_rate": "24000/1001",
+      "avg_frame_rate": "24000/1001",
+      "duration": "6500.000000",
+      "bit_rate": "8000000",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "Feature Video"
+      }
+    },
+    {
+      "index": 1,
+      "codec_name": "dts",
+      "codec_long_name": "DCA (DTS Coherent Acoustics)",
+      "profile": "DTS-HD MA",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 8,
+      "channel_layout": "7.1",
+      "bit_rate": "3000000",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English 7.1"
+      }
+    },
+    {
+      "index": 2,
+      "codec_name": "ac3",
+      "codec_long_name": "ATSC A/52A (AC-3)",
+      "profile": "Dolby Digital",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 2,
+      "channel_layout": "stereo",
+      "bit_rate": "192000",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "jpn",
+        "title": "Japanese Stereo"
+      }
+    },
+    {
+      "index": 3,
+      "codec_name": "ac3",
+      "codec_long_name": "ATSC A/52A (AC-3)",
+      "profile": "Dolby Digital",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 2,
+      "channel_layout": "stereo",
+      "bit_rate": "192000",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 1,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "Director Commentary"
+      }
+    },
+    {
+      "index": 4,
+      "codec_name": "subrip",
+      "codec_long_name": "SubRip subtitle",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English"
+      }
+    },
+    {
+      "index": 5,
+      "codec_name": "subrip",
+      "codec_long_name": "SubRip subtitle",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 1,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English Forced"
+      }
+    },
+    {
+      "index": 6,
+      "codec_name": "subrip",
+      "codec_long_name": "SubRip subtitle",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "fra",
+        "title": "French"
+      }
+    }
+  ],
+  "format": {
+    "filename": "/media/Movies/Example Multi-Language Film.mkv",
+    "nb_streams": 7,
+    "format_name": "matroska,webm",
+    "format_long_name": "Matroska / WebM",
+    "start_time": "0.000000",
+    "duration": "6500.000000",
+    "size": "9876543210",
+    "bit_rate": "12000000",
+    "probe_score": 100
+  }
+}

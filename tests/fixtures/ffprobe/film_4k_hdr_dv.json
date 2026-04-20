@@ -1,0 +1,204 @@
+{
+  "streams": [
+    {
+      "index": 0,
+      "codec_name": "hevc",
+      "codec_long_name": "H.265 / HEVC",
+      "profile": "Main 10",
+      "codec_type": "video",
+      "width": 3840,
+      "height": 2160,
+      "coded_width": 3840,
+      "coded_height": 2160,
+      "sample_aspect_ratio": "1:1",
+      "display_aspect_ratio": "16:9",
+      "pix_fmt": "yuv420p10le",
+      "level": 153,
+      "field_order": "progressive",
+      "r_frame_rate": "24000/1001",
+      "avg_frame_rate": "24000/1001",
+      "duration": "8100.000000",
+      "bit_rate": "52000000",
+      "bits_per_raw_sample": "10",
+      "color_range": "tv",
+      "color_space": "bt2020nc",
+      "color_transfer": "smpte2084",
+      "color_primaries": "bt2020",
+      "chroma_location": "left",
+      "side_data_list": [
+        {
+          "side_data_type": "Mastering display metadata"
+        },
+        {
+          "side_data_type": "Content light level metadata"
+        },
+        {
+          "side_data_type": "DOVI configuration record"
+        }
+      ],
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "UHD Dolby Vision"
+      }
+    },
+    {
+      "index": 1,
+      "codec_name": "truehd",
+      "codec_long_name": "TrueHD",
+      "profile": "Dolby TrueHD with Dolby Atmos",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 8,
+      "channel_layout": "7.1",
+      "bit_rate": "4000000",
+      "disposition": {
+        "default": 1,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English Atmos 7.1"
+      }
+    },
+    {
+      "index": 2,
+      "codec_name": "eac3",
+      "codec_long_name": "ATSC A/52B (AC-3, E-AC-3)",
+      "profile": "Dolby Digital Plus",
+      "codec_type": "audio",
+      "sample_rate": "48000",
+      "channels": 6,
+      "channel_layout": "5.1(side)",
+      "bit_rate": "1024000",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "jpn",
+        "title": "Japanese 5.1"
+      }
+    },
+    {
+      "index": 3,
+      "codec_name": "hdmv_pgs_subtitle",
+      "codec_long_name": "HDMV Presentation Graphic Stream subtitles",
+      "codec_type": "subtitle",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 1,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "language": "eng",
+        "title": "English Forced"
+      }
+    },
+    {
+      "index": 4,
+      "codec_name": "ttf",
+      "codec_long_name": "TrueType font",
+      "codec_type": "attachment",
+      "disposition": {
+        "default": 0,
+        "dub": 0,
+        "original": 0,
+        "comment": 0,
+        "lyrics": 0,
+        "karaoke": 0,
+        "forced": 0,
+        "hearing_impaired": 0,
+        "visual_impaired": 0,
+        "clean_effects": 0,
+        "attached_pic": 0,
+        "timed_thumbnails": 0,
+        "captions": 0,
+        "descriptions": 0,
+        "metadata": 0,
+        "dependent": 0,
+        "still_image": 0
+      },
+      "tags": {
+        "filename": "OpenSans-Regular.ttf",
+        "mimetype": "application/x-truetype-font"
+      }
+    }
+  ],
+  "format": {
+    "filename": "/media/Movies/Example UHD Film (2023).mkv",
+    "nb_streams": 5,
+    "format_name": "matroska,webm",
+    "format_long_name": "Matroska / WebM",
+    "start_time": "0.000000",
+    "duration": "8100.000000",
+    "size": "45678901234",
+    "bit_rate": "59000000",
+    "probe_score": 100,
+    "tags": {
+      "title": "Example UHD Film (2023)"
+    }
+  }
+}
