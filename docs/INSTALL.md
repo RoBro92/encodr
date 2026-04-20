@@ -17,6 +17,7 @@ The installer will:
 - start the stack
 - verify health with `encodr doctor`
 - print the local URL, detected IP addresses, and next steps
+- install the latest tagged release by default
 
 No manual config editing is required before first use.
 

@@ -12,9 +12,15 @@ WORKER_AGENT_ROOT = Path(__file__).resolve().parents[2] / "apps" / "worker-agent
 sys.path.insert(0, str(WORKER_AGENT_ROOT))
 sys.modules.pop("app", None)
 
+import app.version as worker_agent_version  # type: ignore  # noqa: E402
 from app.client import WorkerApiClient  # type: ignore  # noqa: E402
 from app.config import load_settings  # type: ignore  # noqa: E402
 from app.service import WorkerAgentService  # type: ignore  # noqa: E402
+from app.version import read_agent_version  # type: ignore  # noqa: E402
+
+for module_name in [name for name in list(sys.modules) if name == "app" or name.startswith("app.")]:
+    sys.modules.pop(module_name, None)
+sys.path.remove(str(WORKER_AGENT_ROOT))
 
 
 class FakeRequester:
@@ -132,3 +138,25 @@ def test_worker_agent_rejects_non_positive_heartbeat_interval() -> None:
                 "ENCODR_WORKER_AGENT_HEARTBEAT_INTERVAL_SECONDS": "0",
             }
         )
+
+
+def test_worker_agent_version_lookup_handles_shallow_paths(monkeypatch: pytest.MonkeyPatch) -> None:
+    class FakeResolvedPath:
+        parents = (Path("/virtual"),)
+
+    class FakePath:
+        def __init__(self, value: str) -> None:
+            self.value = value
+
+        def resolve(self) -> FakeResolvedPath:
+            return FakeResolvedPath()
+
+        def exists(self) -> bool:
+            return False
+
+        def read_text(self, encoding: str = "utf-8") -> str:
+            raise AssertionError("read_text should not be called when no version file exists")
+
+    monkeypatch.setattr(worker_agent_version, "Path", FakePath)
+
+    assert read_agent_version() == "0.0.0+unknown"

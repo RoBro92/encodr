@@ -28,6 +28,7 @@ The installer:
 - starts the stack
 - checks health
 - prints the local URL and next steps
+- installs the latest tagged release by default
 
 You do not need to edit config files before first use.
 

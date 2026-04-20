@@ -5,6 +5,7 @@ import getpass
 import importlib
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -54,11 +55,40 @@ def build_parser() -> argparse.ArgumentParser:
     version_parser = subparsers.add_parser("version", help="Show the installed Encodr version.")
     version_parser.set_defaults(func=command_version)
 
+    help_parser = subparsers.add_parser("help", help="Show command help.")
+    help_parser.set_defaults(func=lambda args: parser.print_help() or 0)
+
     doctor_parser = subparsers.add_parser("doctor", help="Run local health and configuration checks.")
     doctor_parser.set_defaults(func=command_doctor)
 
     status_parser = subparsers.add_parser("status", help="Alias for doctor.")
     status_parser.set_defaults(func=command_doctor)
+
+    start_parser = subparsers.add_parser("start", help="Start the local Docker Compose stack from the repo root.")
+    start_parser.set_defaults(func=command_start)
+
+    stop_parser = subparsers.add_parser("stop", help="Stop the local Docker Compose stack.")
+    stop_parser.set_defaults(func=command_stop)
+
+    restart_parser = subparsers.add_parser("restart", help="Restart the local Docker Compose stack.")
+    restart_parser.set_defaults(func=command_restart)
+
+    down_parser = subparsers.add_parser("down", help="Stop and remove local Docker Compose services.")
+    down_parser.set_defaults(func=command_down)
+
+    logs_parser = subparsers.add_parser("logs", help="Show local Docker Compose logs.")
+    logs_parser.add_argument("--follow", action="store_true", help="Follow the log output.")
+    logs_parser.add_argument("--tail", type=int, default=120, help="Number of lines to show per service.")
+    logs_parser.set_defaults(func=command_logs)
+
+    health_parser = subparsers.add_parser("health", help="Run a quick local stack health check.")
+    health_parser.set_defaults(func=command_health)
+
+    rebuild_parser = subparsers.add_parser("rebuild", help="Rebuild and recreate the local Docker Compose stack.")
+    rebuild_parser.set_defaults(func=command_rebuild)
+
+    dev_ui_parser = subparsers.add_parser("dev-ui", help="Run the UI in local development mode against the local API.")
+    dev_ui_parser.set_defaults(func=command_dev_ui)
 
     update_parser = subparsers.add_parser("update", help="Check for updates and optionally apply one.")
     update_parser.add_argument("--apply", action="store_true", help="Download and apply the available update.")
@@ -91,6 +121,95 @@ def command_version(args: argparse.Namespace) -> int:
     print(f"Environment: {bundle.app.environment.value}")
     print(f"API base path: {bundle.app.api.base_path}")
     print(f"UI URL: {bundle.app.ui.public_url}")
+    return 0
+
+
+def command_start(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bootstrap_repo(project_root)
+    ensure_local_media_mount(project_root)
+    print("Starting Encodr locally with Docker Compose...")
+    return run_compose(args, ["up", "-d", "--build"])
+
+
+def command_stop(args: argparse.Namespace) -> int:
+    print("Stopping the local Encodr stack...")
+    return run_compose(args, ["stop"])
+
+
+def command_restart(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bootstrap_repo(project_root)
+    ensure_local_media_mount(project_root)
+    print("Restarting the local Encodr stack...")
+    return run_compose(args, ["restart"])
+
+
+def command_down(args: argparse.Namespace) -> int:
+    print("Stopping and removing local Encodr containers...")
+    return run_compose(args, ["down", "--remove-orphans"])
+
+
+def command_logs(args: argparse.Namespace) -> int:
+    command = ["logs", f"--tail={args.tail}"]
+    if args.follow:
+        command.append("--follow")
+    return run_compose(args, command)
+
+
+def command_health(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bootstrap_repo(project_root)
+    bundle = load_bundle(project_root)
+    compose_result = subprocess.run(
+        ["docker", "compose", "ps"],
+        cwd=project_root,
+        env=compose_env(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+
+    api_status = check_url(f"http://127.0.0.1:{bundle.app.api.port}{bundle.app.api.base_path}/health")
+    ui_status = check_url(str(bundle.app.ui.public_url))
+
+    print("Local stack health")
+    print("------------------")
+    print(f"API: {api_status['status']} - {api_status['summary']}")
+    print(f"UI: {ui_status['status']} - {ui_status['summary']}")
+    print(f"API URL: http://127.0.0.1:{bundle.app.api.port}{bundle.app.api.base_path}/health")
+    print(f"UI URL: {bundle.app.ui.public_url}")
+    print("\nDocker Compose services:")
+    print(compose_result.stdout.strip() or compose_result.stderr.strip() or "(no compose output)")
+
+    if api_status["status"] != "healthy" or compose_result.returncode != 0:
+        print("\nNext steps:")
+        print("  ./encodr logs")
+        print("  ./encodr doctor")
+        print("  docker compose ps")
+        return 1
+
+    return 0
+
+
+def command_rebuild(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bootstrap_repo(project_root)
+    ensure_local_media_mount(project_root)
+    print("Rebuilding and recreating the local Encodr stack...")
+    return run_compose(args, ["up", "-d", "--build", "--force-recreate"])
+
+
+def command_dev_ui(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bootstrap_repo(project_root)
+    env = os.environ.copy()
+    env.setdefault("ENCODR_UI_API_PROXY_TARGET", "http://127.0.0.1:8000")
+    ui_root = project_root / "apps" / "ui"
+    if not (ui_root / "node_modules").exists():
+        subprocess.run(["npm", "install"], cwd=ui_root, env=env, check=True)
+    print("Starting the UI development server on http://127.0.0.1:5173 ...")
+    subprocess.run(["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"], cwd=ui_root, env=env, check=True)
     return 0
 
 
@@ -258,6 +377,47 @@ def command_mount_setup(args: argparse.Namespace) -> int:
 
 def load_bundle(project_root: str | Path) -> ConfigBundle:
     return load_config_bundle(project_root=Path(project_root).resolve())
+
+
+def bootstrap_repo(project_root: Path) -> None:
+    subprocess.run(["bash", "./infra/scripts/bootstrap.sh"], cwd=project_root, check=True)
+
+
+def ensure_local_media_mount(project_root: Path) -> Path:
+    media_root = project_root / ".runtime" / "media"
+    media_root.mkdir(parents=True, exist_ok=True)
+    return media_root
+
+
+def compose_env(project_root: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env.setdefault("ENCODR_MEDIA_HOST_PATH", str(ensure_local_media_mount(project_root)))
+    return env
+
+
+def run_compose(args: argparse.Namespace, compose_args: list[str]) -> int:
+    project_root = Path(args.project_root).resolve()
+    result = subprocess.run(
+        ["docker", "compose", *compose_args],
+        cwd=project_root,
+        env=compose_env(project_root),
+        check=False,
+    )
+    return int(result.returncode)
+
+
+def check_url(url: str) -> dict[str, str]:
+    try:
+        with urlopen(url, timeout=5) as response:
+            return {
+                "status": "healthy",
+                "summary": f"HTTP {response.status}",
+            }
+    except URLError as exc:
+        return {
+            "status": "failed",
+            "summary": str(exc.reason),
+        }
 
 
 def create_session_factory(bundle: ConfigBundle) -> sessionmaker:

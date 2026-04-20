@@ -52,6 +52,9 @@ class ExecutionRunner:
                 completed_at=datetime.now(timezone.utc),
             )
 
+        if command_plan.output_path is not None:
+            command_plan.output_path.parent.mkdir(parents=True, exist_ok=True)
+
         execution_result = self.ffmpeg_client.run(command_plan)
         execution_result.status = "staged"
         return execution_result

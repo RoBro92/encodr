@@ -198,7 +198,7 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert 'run_with_progress "Launching Docker services" docker compose up -d --build' in install_script
     assert "run_with_progress()" in install_script
     assert "./encodr doctor" in install_script
-    assert "DEFAULT_INSTALL_REF=\"main\"" in install_script
+    assert "DEFAULT_RELEASE_CHANNEL=\"latest\"" in install_script
     assert "docker info >/dev/null 2>&1" in install_script
     assert "Docker daemon is not available" in install_script
     assert "Docker Compose is not available" in install_script
@@ -219,6 +219,16 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert 'ENCODR_INSTALL_LIB_ONLY:-0' in install_script
 
 
+def test_install_script_uses_latest_tagged_release_by_default(repo_root: Path) -> None:
+    install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
+
+    assert 'ref="$(resolve_latest_release_tag)"' in install_script
+    assert 'release_metadata_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"' in install_script
+    assert 'selected_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${ref}.tar.gz"' in install_script
+    assert "Unable to download the Encodr tagged release" in install_script
+    assert "archive/refs/heads" not in install_script
+
+
 def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
     install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
 
@@ -227,7 +237,7 @@ def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
     assert "--fresh" in install_script
     assert "--force-fresh" in install_script
     assert "--abort-if-exists" in install_script
-    assert "instead of the default ${DEFAULT_INSTALL_REF}" in install_script
+    assert "specific tagged release instead of the default latest tagged release" in install_script
     assert "Unknown installer option" in install_script
 
 
@@ -237,6 +247,7 @@ def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in readme
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair" in readme
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh" in readme
+    assert "latest tagged release by default" in readme
     assert "encodr update" in readme
 
 
@@ -247,6 +258,7 @@ def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> 
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair" in install_doc
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh" in install_doc
     assert "--version 0.1.0" in install_doc
+    assert "latest tagged release by default" in install_doc
 
 
 def test_install_script_help_works_when_piped_into_bash(repo_root: Path) -> None:

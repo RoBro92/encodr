@@ -12,8 +12,16 @@ services:
       - ./scratch:/scratch
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
-      - postgres
-      - redis
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=5).read()"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 15s
 
   worker:
     build:
@@ -26,8 +34,8 @@ services:
       - ./scratch:/scratch
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
-      - postgres
-      - redis
+      api:
+        condition: service_healthy
 
   worker-agent:
     build:
@@ -35,8 +43,15 @@ services:
       dockerfile: infra/docker/worker-agent.Dockerfile
     env_file:
       - .env
+    environment:
+      ENCODR_WORKER_AGENT_API_BASE_URL: http://api:8000/api
+      ENCODR_WORKER_AGENT_REGISTRATION_SECRET: ${ENCODR_WORKER_REGISTRATION_SECRET}
     volumes:
       - ./config:/config:ro
+    depends_on:
+      api:
+        condition: service_healthy
+    command: ["python", "-m", "app.main", "loop", "999999"]
 
   ui:
     build:
@@ -47,7 +62,8 @@ services:
     ports:
       - "${UI_PORT:-5173}:5173"
     depends_on:
-      - api
+      api:
+        condition: service_healthy
 
   postgres:
     image: postgres:16-alpine
@@ -59,6 +75,11 @@ services:
       - "${POSTGRES_PORT:-5432}:5432"
     volumes:
       - ./postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-encodr} -d ${POSTGRES_DB:-encodr}"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
 
   redis:
     image: redis:7-alpine
@@ -66,3 +87,8 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - ./redis-data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 12

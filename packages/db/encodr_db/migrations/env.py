@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from logging.config import fileConfig
+import os
 from pathlib import Path
 import sys
 
@@ -9,6 +10,7 @@ from sqlalchemy import engine_from_config, pool
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
+from encodr_core.config import load_config_bundle  # noqa: E402
 from encodr_db.models import Base  # noqa: E402
 from encodr_db.models import audit_event, job, plan_snapshot, probe_snapshot, refresh_token, tracked_file, user  # noqa: F401,E402
 
@@ -20,8 +22,25 @@ if config.config_file_name is not None:
 target_metadata = Base.metadata
 
 
+def resolve_database_url() -> str:
+    explicit_url = os.environ.get("ENCODR_DATABASE_URL")
+    if explicit_url:
+        return explicit_url
+
+    configured_url = config.get_main_option("sqlalchemy.url")
+    if configured_url and "localhost" not in configured_url:
+        return configured_url
+
+    try:
+        bundle = load_config_bundle()
+    except Exception:
+        return configured_url
+
+    return str(bundle.app.database.dsn)
+
+
 def run_migrations_offline() -> None:
-    url = config.get_main_option("sqlalchemy.url")
+    url = resolve_database_url()
     context.configure(
         url=url,
         target_metadata=target_metadata,
@@ -35,6 +54,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
+    config.set_main_option("sqlalchemy.url", resolve_database_url())
     connectable = engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",

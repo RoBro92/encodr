@@ -322,6 +322,25 @@ class FailIfCalledClient:
         raise AssertionError("ffmpeg execution should not have been called")
 
 
+class CapturingClient:
+    def __init__(self) -> None:
+        self.command_plan = None
+
+    def run(self, command_plan):  # type: ignore[no-untyped-def]
+        self.command_plan = command_plan
+        return ExecutionResult(
+            mode=command_plan.mode,
+            status="staged",
+            command=command_plan.command,
+            output_path=command_plan.output_path,
+            stdout="",
+            stderr="",
+            exit_code=0,
+            started_at=datetime.now(timezone.utc),
+            completed_at=datetime.now(timezone.utc),
+        )
+
+
 class StaticProbeClient:
     def __init__(self, media: MediaFile) -> None:
         self.media = media
@@ -401,3 +420,25 @@ class FailingRunner(ExecutionRunner):
             command=["/usr/bin/ffmpeg", "-y"],
             details={"exit_code": 1, "stderr": "bad input", "stdout": ""},
         )
+
+
+def test_execute_plan_creates_missing_scratch_directory(tmp_path: Path) -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    media = media_at_path(parse_fixture("film_1080p.json"), tmp_path / "Example Film (2024).mkv")
+    scratch_dir = tmp_path / "nested" / "scratch" / "encodr"
+    client = CapturingClient()
+    runner = ExecutionRunner(ffmpeg_client=client)
+    plan = build_processing_plan(media, bundle, source_path=media.file_path.as_posix())
+
+    result = runner.execute_plan(
+        plan,
+        input_path=media.file_path,
+        scratch_dir=scratch_dir,
+        ffmpeg_path="/usr/bin/ffmpeg",
+        job_id="job-dir-create",
+    )
+
+    assert result.status == "staged"
+    assert client.command_plan is not None
+    assert client.command_plan.output_path is not None
+    assert client.command_plan.output_path.parent.exists()

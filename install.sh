@@ -5,7 +5,7 @@ APP_NAME="Encodr"
 REPO_OWNER="RoBro92"
 REPO_NAME="encodr"
 DEFAULT_INSTALL_ROOT="/opt/encodr"
-DEFAULT_INSTALL_REF="main"
+DEFAULT_RELEASE_CHANNEL="latest"
 STANDARD_MEDIA_ROOT="/media"
 API_HEALTH_PATH="/api/health"
 
@@ -49,7 +49,7 @@ Usage:
   install.sh [--version REF] [--install-root PATH] [--repair|--fresh|--force-fresh|--abort-if-exists]
 
 Options:
-  --version REF       Install a specific git tag or branch instead of the default ${DEFAULT_INSTALL_REF}
+  --version REF       Install a specific tagged release instead of the default latest tagged release
   --install-root PATH Install into a custom directory instead of ${DEFAULT_INSTALL_ROOT}
   --repair            Repair an existing Encodr installation in place
   --fresh             Perform a fresh reinstall if an existing install is found
@@ -391,10 +391,13 @@ perform_fresh_install_reset() {
 }
 
 download_release_tree() {
-  local ref="${INSTALL_REF_OVERRIDE:-${ENCODR_INSTALL_REF:-${DEFAULT_INSTALL_REF}}}"
-  local tag_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${ref}.tar.gz"
-  local branch_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${ref}.tar.gz"
-  local selected_url="${tag_url}"
+  local ref="${INSTALL_REF_OVERRIDE:-${ENCODR_INSTALL_REF:-}}"
+  local selected_url=""
+
+  if [[ -z "${ref}" ]]; then
+    info "Resolving the latest tagged release"
+    ref="$(resolve_latest_release_tag)"
+  fi
 
   section "Resolving release source"
   info "Installing ${ref} into ${INSTALL_ROOT}"
@@ -403,12 +406,9 @@ download_release_tree() {
   section "Downloading release files"
   mkdir -p "${INSTALL_ROOT}" || fail "Unable to create ${INSTALL_ROOT}."
 
-  if ! curl -fsSL "${selected_url}" -o "${INSTALL_TMP_DIR}/encodr.tar.gz"; then
-    selected_url="${branch_url}"
-    info "Tag archive not found, falling back to branch archive ${ref}"
-    curl -fsSL "${selected_url}" -o "${INSTALL_TMP_DIR}/encodr.tar.gz" || \
-      fail "Unable to download Encodr from ${ref}."
-  fi
+  selected_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${ref}.tar.gz"
+  curl -fsSL "${selected_url}" -o "${INSTALL_TMP_DIR}/encodr.tar.gz" || \
+    fail "Unable to download the Encodr tagged release ${ref}."
 
   tar -xzf "${INSTALL_TMP_DIR}/encodr.tar.gz" -C "${INSTALL_TMP_DIR}" || fail "Downloaded archive could not be unpacked."
   local extracted_dir
@@ -428,6 +428,26 @@ download_release_tree() {
     -exec rm -rf {} +
   cp -R "${extracted_dir}/." "${INSTALL_ROOT}/"
   success "Release files are in place"
+}
+
+resolve_latest_release_tag() {
+  local release_metadata_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
+  local latest_tag=""
+
+  latest_tag="$(
+    curl -fsSL "${release_metadata_url}" | python3 - <<'PY'
+import json
+import sys
+
+payload = json.load(sys.stdin)
+tag_name = str(payload.get("tag_name") or "").strip()
+if not tag_name:
+    raise SystemExit(1)
+print(tag_name)
+PY
+  )" || fail "Unable to resolve the latest Encodr tagged release."
+
+  printf '%s\n' "${latest_tag}"
 }
 
 ensure_release_tree() {
