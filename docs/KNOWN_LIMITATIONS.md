@@ -7,4 +7,6 @@
 - analytics are operational and concise, not BI-grade
 - rich rename execution is still limited even though policy templates exist
 - user management remains minimal beyond bootstrap/login/session handling
+- update handling assumes a trusted release metadata source and archive download path
+- automatic rollback is not implemented for failed updates; operator validation is still required
 - current release is internal `v0.x`, not a fully hardened general release

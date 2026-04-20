@@ -23,3 +23,24 @@ postgres-data/
 redis-data/
 scratch/
 
+# Private/internal working documents kept out of the public repo
+docs/ANALYTICS_PLAN.md
+docs/API_PLAN.md
+docs/ARCHITECTURE.md
+docs/DATA_MODEL.md
+docs/DECISIONS.md
+docs/MILESTONES.md
+docs/PROJECT_MAP.md
+docs/PROJECT_OVERVIEW.md
+docs/RENAMING_RULES.md
+docs/SPEC.md
+docs/UI_PLAN.md
+docs/WORKER_PLAN.md
+apps/api/README.md
+apps/ui/README.md
+apps/worker/README.md
+apps/worker-agent/README.md
+packages/core/README.md
+packages/db/README.md
+packages/shared/README.md
+tests/README.md

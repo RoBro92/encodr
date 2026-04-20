@@ -17,6 +17,74 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/" });
 
     expect(await screen.findByRole("heading", { name: /sign in to the operator console/i })).toBeInTheDocument();
+    expect(screen.getByText(/encodr v0\.1\.0/i)).toBeInTheDocument();
+  });
+
+  it("shows the first-user setup flow when bootstrap is still allowed", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/auth/bootstrap-status",
+        body: {
+          bootstrap_allowed: true,
+          first_user_setup_required: true,
+          user_count: 0,
+          version: "0.1.0",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/auth/bootstrap-admin",
+        body: {
+          user: {
+            id: "user-1",
+            username: "admin",
+            role: "admin",
+            is_active: true,
+            is_bootstrap_admin: true,
+            last_login_at: null,
+          },
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/auth/login",
+        body: {
+          access_token: "new-access",
+          refresh_token: "new-refresh",
+          token_type: "bearer",
+          access_token_expires_in: 1800,
+          refresh_token_expires_in: 1209600,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/auth/me",
+        body: {
+          id: "user-1",
+          username: "admin",
+          role: "admin",
+          is_active: true,
+          is_bootstrap_admin: true,
+          last_login_at: null,
+        },
+      },
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/login" });
+
+    expect(await screen.findByRole("heading", { name: /set up the first admin user/i })).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText(/username/i));
+    await userEvent.type(screen.getByLabelText(/username/i), "admin");
+    await userEvent.type(screen.getByLabelText(/^password$/i), "super-secure-password");
+    await userEvent.type(screen.getByLabelText(/confirm password/i), "super-secure-password");
+    await userEvent.click(screen.getByRole("button", { name: /create first admin/i }));
+
+    expect(await screen.findByText(/operator console/i)).toBeInTheDocument();
   });
 
   it("signs in, stores the session, and loads the app shell", async () => {
@@ -52,13 +120,44 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/login" });
 
+    expect(await screen.findByRole("heading", { name: /sign in to the operator console/i })).toBeInTheDocument();
     await userEvent.clear(screen.getByLabelText(/username/i));
     await userEvent.type(screen.getByLabelText(/username/i), "admin");
     await userEvent.type(screen.getByLabelText(/password/i), "super-secure-password");
     await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     expect(await screen.findByText(/operator console/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/encodr v0\.1\.0/i).length).toBeGreaterThan(0);
     expect(JSON.parse(window.localStorage.getItem("encodr.session") ?? "{}").tokens.access_token).toBe("new-access");
+  });
+
+  it("shows an update banner when a newer version is available", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      {
+        method: "GET",
+        path: "/api/system/update",
+        body: {
+          current_version: "0.1.0",
+          latest_version: "0.1.1",
+          update_available: true,
+          channel: "internal",
+          status: "ok",
+          checked_at: "2026-04-20T12:30:00Z",
+          error: null,
+          download_url: "https://example.invalid/encodr-0.1.1.tar.gz",
+          release_notes_url: "https://example.invalid/encodr-0.1.1-notes",
+        },
+      },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByText(/update available/i)).toBeInTheDocument();
+    expect(screen.getByText(/encodr 0\.1\.1 is available/i)).toBeInTheDocument();
   });
 
   it("renders the dashboard with analytics and operational sections from API data", async () => {
@@ -309,6 +408,7 @@ describe("Encodr UI shell", () => {
       /storage is reachable but needs attention|one or more configured paths are unavailable/i,
     );
     expect(storageWarnings.length).toBeGreaterThan(0);
+    expect(screen.getByText(/storage needs attention/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /run self-test/i }));
 
     await waitFor(() => {
@@ -629,6 +729,8 @@ function runtimeStatus({
     data_dir: "/tmp/data",
     media_mounts: ["/media"],
     local_worker_enabled: true,
+    first_user_setup_required: false,
+    storage_setup_incomplete: status !== "healthy",
     user_count: 1,
     config_sources: {
       app: "/config/app.example.yaml",

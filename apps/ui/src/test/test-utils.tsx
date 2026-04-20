@@ -44,6 +44,45 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       return candidate.path.test(url);
     });
 
+    if (!route && method === "GET" && url.includes("/api/auth/bootstrap-status")) {
+      return new Response(
+        JSON.stringify({
+          bootstrap_allowed: false,
+          first_user_setup_required: false,
+          user_count: 1,
+          version: "0.1.0",
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    }
+
+    if (!route && method === "GET" && url.includes("/api/system/update")) {
+      return new Response(
+        JSON.stringify({
+          current_version: "0.1.0",
+          latest_version: null,
+          update_available: false,
+          channel: "internal",
+          status: "disabled",
+          checked_at: null,
+          error: null,
+          download_url: null,
+          release_notes_url: null,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    }
+
     if (!route) {
       throw new Error(`Unhandled fetch request: ${method} ${url}`);
     }

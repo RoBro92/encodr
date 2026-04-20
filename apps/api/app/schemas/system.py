@@ -41,7 +41,21 @@ class RuntimeStatusResponse(BaseModel):
     data_dir: str
     media_mounts: list[str]
     local_worker_enabled: bool
+    first_user_setup_required: bool
+    storage_setup_incomplete: bool
     user_count: int | None = None
     config_sources: dict[str, str]
     warnings: list[str]
     queue_health: QueueHealthSummaryResponse
+
+
+class UpdateStatusResponse(BaseModel):
+    current_version: str
+    latest_version: str | None = None
+    update_available: bool
+    channel: str
+    status: str
+    checked_at: str | None = None
+    error: str | None = None
+    download_url: str | None = None
+    release_notes_url: str | None = None

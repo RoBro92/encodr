@@ -12,6 +12,9 @@ Initial internal release line covering:
 - analytics/reporting baseline
 - manual review and protected-file workflows
 - remote worker registration/heartbeat groundwork
+- central versioning, update-check plumbing, and version visibility in API/UI/CLI
+- root/operator CLI commands for doctor, update, reset-admin, and mount guidance
+- fresh-LXC install/bootstrap script and first-user setup path
 
 Known important limitations:
 

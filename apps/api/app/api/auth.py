@@ -15,6 +15,7 @@ from app.schemas.auth import (
     AuthTokenResponse,
     BootstrapAdminRequest,
     BootstrapAdminResponse,
+    BootstrapStatusResponse,
     LoginRequest,
     LogoutResponse,
     RefreshRequest,
@@ -22,6 +23,7 @@ from app.schemas.auth import (
 from app.schemas.user import CurrentUserResponse
 from app.services.audit import AuditService
 from app.services.auth import AuthService
+from encodr_db.repositories import UserRepository
 from encodr_db.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
@@ -35,6 +37,21 @@ def get_auth_service(
         password_hasher=password_hasher,
         token_service=token_service,
         audit_service=AuditService(),
+    )
+
+
+@router.get("/bootstrap-status", response_model=BootstrapStatusResponse)
+def bootstrap_status(
+    request: Request,
+    session: Session = Depends(get_session),
+) -> BootstrapStatusResponse:
+    user_count = UserRepository(session).count_users()
+    bootstrap_allowed = user_count == 0
+    return BootstrapStatusResponse(
+        bootstrap_allowed=bootstrap_allowed,
+        first_user_setup_required=bootstrap_allowed,
+        user_count=user_count,
+        version=request.app.state.app_version,
     )
 
 

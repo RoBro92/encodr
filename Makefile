@@ -1,7 +1,7 @@
 PYTHON ?= python3
 PYTEST ?= pytest
 
-.PHONY: help bootstrap api worker worker-agent ui-install ui ui-test ui-build lint format dev-up test-unit test-integration test-e2e test-security test-all check
+.PHONY: help bootstrap api worker worker-agent ui-install ui ui-test ui-build lint format dev-up version release-check test-unit test-integration test-e2e test-security test-all check
 
 help:
 	@printf "Targets:\n"
@@ -15,6 +15,8 @@ help:
 	@printf "  ui-build      Build the frontend\n"
 	@printf "  lint          Run lightweight sanity checks\n"
 	@printf "  dev-up        Start the local Compose stack\n"
+	@printf "  version       Print the current Encodr release version\n"
+	@printf "  release-check Run the release validation set and print manual release steps\n"
 	@printf "  test-unit     Run the unit test layer\n"
 	@printf "  test-integration Run the integration test layer\n"
 	@printf "  test-e2e      Run the end-to-end test layer\n"
@@ -51,6 +53,12 @@ lint:
 
 dev-up:
 	./infra/scripts/dev-up.sh
+
+version:
+	@cat VERSION
+
+release-check:
+	./infra/scripts/release-check.sh
 
 test-unit:
 	$(PYTEST) -m unit

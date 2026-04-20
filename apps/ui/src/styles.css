@@ -174,12 +174,49 @@ pre {
   display: flex;
   align-items: center;
   justify-content: space-between;
+  gap: 12px;
 }
 
 .topbar-title {
   display: block;
   font-size: 1rem;
   font-weight: 600;
+}
+
+.topbar-meta {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.topbar-version {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 7px 12px;
+  border: 1px solid rgba(31, 93, 72, 0.16);
+  background: rgba(31, 93, 72, 0.08);
+  color: var(--brand-strong);
+  font-size: 0.88rem;
+  font-weight: 600;
+}
+
+.update-banner {
+  margin-top: 18px;
+  border-radius: 18px;
+  border: 1px solid rgba(167, 103, 31, 0.2);
+  background: rgba(255, 244, 229, 0.92);
+  box-shadow: var(--shadow);
+  padding: 16px 18px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.update-banner p {
+  margin: 6px 0 0;
+  color: var(--text-muted);
 }
 
 .page-shell {
@@ -211,6 +248,12 @@ pre {
   max-width: 72ch;
   line-height: 1.6;
   color: var(--text-muted);
+}
+
+.login-version {
+  margin: 14px 0 0;
+  color: var(--text-muted);
+  font-size: 0.92rem;
 }
 
 .page-actions {
@@ -255,6 +298,16 @@ pre {
 .button-small {
   padding: 8px 12px;
   font-size: 0.92rem;
+}
+
+.app-footer {
+  margin-top: 18px;
+  padding: 14px 4px 0;
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  color: var(--text-muted);
+  font-size: 0.9rem;
 }
 
 .stats-grid {
@@ -679,5 +732,11 @@ pre {
   .inline-form {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .update-banner,
+  .app-footer {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

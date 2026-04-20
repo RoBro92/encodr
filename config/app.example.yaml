@@ -33,3 +33,8 @@ app:
   dashboard:
     recent_job_limit: 25
     analytics_window_days: 30
+  update:
+    enabled: false
+    metadata_url: null
+    channel: internal
+    check_timeout_seconds: 5
