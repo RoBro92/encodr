@@ -546,6 +546,51 @@ prepare_management_cli_runtime() {
     fail "Unable to install Encodr management command dependencies."
 }
 
+normalise_host_config_paths_in_env() {
+  local env_file="${INSTALL_ROOT}/.env"
+  [[ -f "${env_file}" ]] || return 0
+
+  local app_config_path="${INSTALL_ROOT}/config/app.yaml"
+  local policy_config_path="${INSTALL_ROOT}/config/policy.yaml"
+  local workers_config_path="${INSTALL_ROOT}/config/workers.yaml"
+
+  python3 - "${env_file}" "${app_config_path}" "${policy_config_path}" "${workers_config_path}" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+desired = {
+    "ENCODR_APP_CONFIG_FILE": sys.argv[2],
+    "ENCODR_POLICY_CONFIG_FILE": sys.argv[3],
+    "ENCODR_WORKERS_CONFIG_FILE": sys.argv[4],
+}
+
+lines = env_path.read_text(encoding="utf-8").splitlines()
+seen = set()
+updated = []
+
+for line in lines:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#") or "=" not in line:
+        updated.append(line)
+        continue
+
+    key, value = line.split("=", 1)
+    key = key.strip()
+    if key in desired:
+        updated.append(f"{key}={desired[key]}")
+        seen.add(key)
+    else:
+        updated.append(line)
+
+for key, value in desired.items():
+    if key not in seen:
+        updated.append(f"{key}={value}")
+
+env_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+PY
+}
+
 load_env() {
   local env_file="${INSTALL_ROOT}/.env"
   [[ -f "${env_file}" ]] || fail "Expected environment file at ${env_file}."
@@ -643,6 +688,7 @@ main() {
 
   section "Bootstrapping Encodr"
   ./infra/scripts/bootstrap.sh >/dev/null
+  normalise_host_config_paths_in_env
   ensure_secret "ENCODR_AUTH_SECRET"
   ensure_secret "ENCODR_WORKER_REGISTRATION_SECRET"
   prepare_management_cli_runtime

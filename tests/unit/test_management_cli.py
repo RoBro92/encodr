@@ -282,6 +282,34 @@ def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> 
     assert "latest tagged release by default" in install_doc
 
 
+def test_install_script_normalises_host_config_paths_in_env(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "PROJECT_NAME=encodr\n"
+        "ENCODR_APP_CONFIG_FILE=/config/app.yaml\n"
+        "ENCODR_POLICY_CONFIG_FILE=/config/policy.yaml\n"
+        "ENCODR_WORKERS_CONFIG_FILE=/config/workers.yaml\n",
+        encoding="utf-8",
+    )
+
+    result = run_install_shell(
+        repo_root,
+        (
+            f"INSTALL_ROOT='{tmp_path}'; "
+            "normalise_host_config_paths_in_env; "
+            f"cat '{env_file}'"
+        ),
+    )
+
+    assert result.returncode == 0
+    assert f"ENCODR_APP_CONFIG_FILE={tmp_path}/config/app.yaml" in result.stdout
+    assert f"ENCODR_POLICY_CONFIG_FILE={tmp_path}/config/policy.yaml" in result.stdout
+    assert f"ENCODR_WORKERS_CONFIG_FILE={tmp_path}/config/workers.yaml" in result.stdout
+
+
 def test_install_script_help_works_when_piped_into_bash(repo_root: Path) -> None:
     result = subprocess.run(
         ["bash", "-lc", f"cat '{repo_root / 'install.sh'}' | bash -s -- --help"],
