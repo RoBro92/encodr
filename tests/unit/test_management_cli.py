@@ -200,12 +200,26 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "Docker daemon is not available" in install_script
     assert "Docker Compose is not available" in install_script
     assert "API health check did not succeed" in install_script
+    assert "An existing Encodr installation was found at ${INSTALL_ROOT}." in install_script
+    assert "Continuing will attempt a repair/reinstall in place." in install_script
+    assert "INSTALL_TMP_DIR" in install_script
+    assert "trap cleanup EXIT" in install_script
+    assert "mkdir -p \"${STANDARD_MEDIA_ROOT}\"" not in install_script
+    assert "Open Encodr in your browser." in install_script
+    assert "Create your first admin user if prompted." in install_script
+    assert "Mount your media library at %s." in install_script
+    assert "encodr mount-setup --validate-only" in install_script
+    assert "tmp_dir: unbound variable" not in install_script
+    assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
 
 
 def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
     install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
 
     assert "--version REF" in install_script
+    assert "--repair" in install_script
+    assert "--reinstall" in install_script
+    assert "--force" in install_script
     assert "instead of the default ${DEFAULT_INSTALL_REF}" in install_script
     assert "Unknown installer option" in install_script
 
@@ -213,9 +227,17 @@ def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
 def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
 
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash" in readme
-    assert "--version 0.1.0" in readme
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in readme
+    assert "sudo bash" in readme
     assert "encodr update" in readme
+
+
+def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> None:
+    install_doc = (repo_root / "docs" / "INSTALL.md").read_text(encoding="utf-8")
+
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in install_doc
+    assert "sudo bash" in install_doc
+    assert "--version 0.1.0" in install_doc
 
 
 def test_gitignore_excludes_local_ui_workspace(repo_root: Path) -> None:

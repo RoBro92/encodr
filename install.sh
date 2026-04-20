@@ -29,17 +29,30 @@ INSTALL_ROOT=""
 SCRIPT_ROOT=""
 REMOTE_BOOTSTRAP=0
 INSTALL_REF_OVERRIDE=""
+INSTALL_MODE_OVERRIDE=""
+INSTALL_TMP_DIR=""
+
+cleanup() {
+  if [[ -n "${INSTALL_TMP_DIR:-}" && -d "${INSTALL_TMP_DIR}" ]]; then
+    rm -rf "${INSTALL_TMP_DIR}"
+  fi
+}
+
+trap cleanup EXIT
 
 print_help() {
   cat <<EOF
 Encodr installer
 
 Usage:
-  install.sh [--version REF] [--install-root PATH]
+  install.sh [--version REF] [--install-root PATH] [--repair|--reinstall|--force]
 
 Options:
   --version REF       Install a specific git tag or branch instead of the default ${DEFAULT_INSTALL_REF}
   --install-root PATH Install into a custom directory instead of ${DEFAULT_INSTALL_ROOT}
+  --repair            Re-run install steps against an existing Encodr install in place
+  --reinstall         Refresh application files in place while preserving runtime state
+  --force             Continue without treating an existing install as a warning condition
   --help              Show this help message
 EOF
 }
@@ -77,6 +90,14 @@ parse_args() {
         [[ $# -ge 2 ]] || fail "--install-root requires a value."
         INSTALL_ROOT="$2"
         shift 2
+        ;;
+      --repair)
+        INSTALL_MODE_OVERRIDE="repair"
+        shift
+        ;;
+      --reinstall|--force)
+        INSTALL_MODE_OVERRIDE="reinstall"
+        shift
         ;;
       --help|-h)
         print_help
@@ -162,31 +183,58 @@ ensure_docker() {
   ensure_compose
 }
 
+existing_install_found() {
+  [[ -d "${INSTALL_ROOT}" ]] || return 1
+  [[ -f "${INSTALL_ROOT}/.env" ]] && return 0
+  [[ -f "${INSTALL_ROOT}/docker-compose.yml" ]] && return 0
+  [[ -d "${INSTALL_ROOT}/config" ]] && return 0
+  [[ -d "${INSTALL_ROOT}/.runtime" ]] && return 0
+  [[ -d "${INSTALL_ROOT}/postgres-data" ]] && return 0
+  [[ -d "${INSTALL_ROOT}/redis-data" ]] && return 0
+  return 1
+}
+
+resolve_install_mode() {
+  if existing_install_found; then
+    section "Existing installation detected"
+    warn "An existing Encodr installation was found at ${INSTALL_ROOT}."
+    if [[ "${INSTALL_MODE_OVERRIDE:-}" == "repair" ]]; then
+      info "Continuing with a repair install in place."
+    else
+      info "Continuing will attempt a repair/reinstall in place."
+    fi
+    success "Runtime data, generated config, and secrets will be preserved where possible"
+  fi
+}
+
 download_release_tree() {
   local ref="${INSTALL_REF_OVERRIDE:-${ENCODR_INSTALL_REF:-${DEFAULT_INSTALL_REF}}}"
-  local archive_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${ref}.tar.gz"
-  local tmp_dir
-  tmp_dir="$(mktemp -d)"
-  trap 'rm -rf "${tmp_dir}"' RETURN
+  local tag_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${ref}.tar.gz"
+  local branch_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${ref}.tar.gz"
+  local selected_url="${tag_url}"
 
-  section "Downloading ${APP_NAME}"
+  section "Resolving release source"
   info "Installing ${ref} into ${INSTALL_ROOT}"
+  INSTALL_TMP_DIR="$(mktemp -d)" || fail "Unable to create a temporary installer directory."
 
-  mkdir -p "${INSTALL_ROOT}"
+  section "Downloading release files"
+  mkdir -p "${INSTALL_ROOT}" || fail "Unable to create ${INSTALL_ROOT}."
 
-  if ! curl -fsSL "${archive_url}" -o "${tmp_dir}/encodr.tar.gz"; then
-    archive_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/heads/${ref}.tar.gz"
+  if ! curl -fsSL "${selected_url}" -o "${INSTALL_TMP_DIR}/encodr.tar.gz"; then
+    selected_url="${branch_url}"
     info "Tag archive not found, falling back to branch archive ${ref}"
-    curl -fsSL "${archive_url}" -o "${tmp_dir}/encodr.tar.gz" || \
+    curl -fsSL "${selected_url}" -o "${INSTALL_TMP_DIR}/encodr.tar.gz" || \
       fail "Unable to download Encodr from ${ref}."
   fi
 
-  tar -xzf "${tmp_dir}/encodr.tar.gz" -C "${tmp_dir}" || fail "Downloaded archive could not be unpacked."
+  tar -xzf "${INSTALL_TMP_DIR}/encodr.tar.gz" -C "${INSTALL_TMP_DIR}" || fail "Downloaded archive could not be unpacked."
   local extracted_dir
-  extracted_dir="$(find "${tmp_dir}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
+  extracted_dir="$(find "${INSTALL_TMP_DIR}" -mindepth 1 -maxdepth 1 -type d | head -n 1)"
   [[ -n "${extracted_dir}" ]] || fail "Downloaded archive could not be unpacked."
 
+  section "Preparing install directory"
   mkdir -p "${INSTALL_ROOT}"
+  # Preserve runtime state and generated local config during repair/reinstall runs.
   find "${INSTALL_ROOT}" -mindepth 1 -maxdepth 1 \
     ! -name '.env' \
     ! -name '.runtime' \
@@ -201,13 +249,12 @@ download_release_tree() {
 
 ensure_release_tree() {
   if [[ "${REMOTE_BOOTSTRAP}" -eq 1 ]]; then
-    if [[ ! -f "${INSTALL_ROOT}/docker-compose.yml" || ! -f "${INSTALL_ROOT}/.env.example" ]]; then
-      download_release_tree
-    else
-      section "Using existing installation"
-      info "Found an existing Encodr tree at ${INSTALL_ROOT}"
-      success "Installer will reuse the existing installation files"
-    fi
+    resolve_install_mode
+    download_release_tree
+  else
+    section "Using local checkout"
+    info "Installing from ${INSTALL_ROOT}"
+    success "Installer will use the local repository files"
   fi
 }
 
@@ -291,16 +338,15 @@ main() {
   require_root
   resolve_script_root
 
-  section "Preparing environment"
+  section "Checking environment"
   install_base_packages
   ensure_docker
 
   ensure_release_tree
   cd "${INSTALL_ROOT}"
 
-  section "Configuring Encodr"
+  section "Bootstrapping Encodr"
   ./infra/scripts/bootstrap.sh >/dev/null
-  mkdir -p "${STANDARD_MEDIA_ROOT}"
   ensure_secret "ENCODR_AUTH_SECRET"
   ensure_secret "ENCODR_WORKER_REGISTRATION_SECRET"
 
@@ -314,11 +360,13 @@ main() {
   info "Launching Docker services"
   docker compose up -d --build >/dev/null || fail "Docker Compose could not start the Encodr stack."
 
-  section "Verifying health"
+  section "Waiting for health"
   wait_for_health
+  section "Verifying installation"
   ./encodr doctor >/dev/null || fail "Encodr started, but the final doctor checks did not pass."
   success "Doctor checks passed"
 
+  section "Final summary"
   show_urls
 }
 

@@ -5,8 +5,10 @@
 For a Debian LXC or Linux VM, run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash
 ```
+
+If you are installing from a non-root shell, use `sudo bash` instead.
 
 The installer will:
 
@@ -23,7 +25,7 @@ No manual config editing is required before first use.
 To install a specific release instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --version 0.1.0
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --version 0.1.0
 ```
 
 ## Manual install
@@ -33,7 +35,7 @@ If you want to inspect the checkout first:
 ```bash
 git clone https://github.com/RoBro92/encodr.git
 cd encodr
-sudo ./install.sh
+./install.sh
 ```
 
 ## After install

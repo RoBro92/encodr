@@ -17,8 +17,10 @@ Encodr is a private, self-hosted media preparation service for Plex-style librar
 Recommended install command:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash
 ```
+
+If you are installing from a non-root shell, use `sudo bash` instead.
 
 The installer:
 
@@ -38,7 +40,7 @@ If you prefer to clone the repository first:
 ```bash
 git clone https://github.com/RoBro92/encodr.git
 cd encodr
-sudo ./install.sh
+./install.sh
 ```
 
 ## Updates
