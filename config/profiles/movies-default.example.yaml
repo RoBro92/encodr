@@ -1,0 +1,10 @@
+profile:
+  name: movies-default
+  description: Film-focused defaults with quality bias.
+  video:
+    non_4k:
+      preferred_codec: hevc
+      max_video_bitrate_mbps: 14
+  renaming:
+    template: "{{ title }} ({{ year }})"
+

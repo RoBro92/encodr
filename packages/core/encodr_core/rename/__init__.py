@@ -1,0 +1,2 @@
+"""Rename rule placeholders."""
+

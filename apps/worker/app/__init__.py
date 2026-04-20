@@ -1,0 +1,2 @@
+"""encodr worker application."""
+

@@ -1,0 +1,8 @@
+profile:
+  name: animation
+  description: Animation-specific profile placeholder for later tuning.
+  subtitles:
+    keep_hearing_impaired: true
+  audio:
+    max_tracks_to_keep: 2
+

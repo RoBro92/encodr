@@ -1,0 +1,9 @@
+profile:
+  name: remux-4k
+  description: Preserve 4K video and audio, strip only unwanted languages.
+  video:
+    four_k:
+      mode: strip_only
+      preserve_original_video: true
+      preserve_original_audio: true
+

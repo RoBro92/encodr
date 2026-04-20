@@ -1,0 +1,2 @@
+"""encodr API application."""
+

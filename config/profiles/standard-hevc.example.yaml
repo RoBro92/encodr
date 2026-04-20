@@ -1,0 +1,8 @@
+profile:
+  name: standard-hevc
+  description: Prefer HEVC output for non-4K library optimisation.
+  video:
+    non_4k:
+      preferred_codec: hevc
+      allow_transcode: true
+

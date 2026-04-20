@@ -1,0 +1,32 @@
+workers:
+  default_queue: local
+  local:
+    id: worker-local
+    enabled: true
+    type: local
+    host: lxc-main
+    queue: local
+    scratch_dir: /scratch/encodr
+    media_mounts:
+      - /mnt/media
+    capabilities:
+      ffmpeg: true
+      ffprobe: true
+      intel_qsv: true
+      nvenc: false
+      vaapi: true
+
+  remote:
+    - id: worker-amd-future
+      enabled: false
+      type: remote
+      queue: remote-amd
+      endpoint: https://worker-amd.internal.example
+      auth_mode: mTLS
+      capabilities:
+        ffmpeg: true
+        ffprobe: true
+        intel_qsv: false
+        amd_amf: true
+      notes: Future placeholder for remote worker support.
+

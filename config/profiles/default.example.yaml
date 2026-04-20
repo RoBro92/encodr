@@ -1,0 +1,10 @@
+profile:
+  name: default
+  description: General-purpose baseline profile.
+  video:
+    non_4k:
+      allow_transcode: true
+  audio:
+    preserve_best_surround: true
+    preserve_atmos_capable: true
+
