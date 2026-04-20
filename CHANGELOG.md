@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased / Internal `0.1.6`
+## Unreleased / Internal `0.1.7`
 
 Initial internal release line covering:
 
@@ -15,6 +15,8 @@ Initial internal release line covering:
 - central versioning, update-check plumbing, and version visibility in API/UI/CLI
 - root/operator CLI commands for doctor, update, reset-admin, and mount guidance
 - fresh-LXC install/bootstrap script and first-user setup path
+- dockerised doctor/runtime verification for installed and local Docker usage
+- fresh-install cleanup now removes Encodr Docker containers, networks, local images, and volumes
 
 Known important limitations:
 

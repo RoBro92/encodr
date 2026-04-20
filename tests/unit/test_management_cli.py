@@ -36,6 +36,7 @@ def test_command_doctor_reports_runtime_and_storage_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(encodr_cli, "should_use_dockerised_doctor", lambda _root: False)
     monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
     monkeypatch.setattr(encodr_cli, "create_session_factory", lambda _bundle: object())
     monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
@@ -78,6 +79,7 @@ def test_command_doctor_reports_runtime_and_storage_status(
     output = capsys.readouterr().out
     assert result == 0
     assert f"Version: {CURRENT_VERSION}" in output
+    assert "Doctor mode: host-direct" in output
     assert "API health: healthy" in output
 
 
@@ -85,6 +87,7 @@ def test_command_status_reports_media_mount_problem_clearly(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
+    monkeypatch.setattr(encodr_cli, "should_use_dockerised_doctor", lambda _root: False)
     monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
     monkeypatch.setattr(encodr_cli, "create_session_factory", lambda _bundle: object())
     monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
@@ -137,6 +140,69 @@ def test_command_status_reports_media_mount_problem_clearly(
     assert "Storage: failed - Storage is not configured yet." in output
     assert "Media mount not found at /media." in output
     assert "Mount your library at /media inside the LXC" in output
+
+
+def test_command_doctor_prefers_dockerised_runtime_context(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
+    monkeypatch.setattr(encodr_cli, "should_use_dockerised_doctor", lambda _root: True)
+    monkeypatch.setattr(
+        encodr_cli,
+        "maybe_collect_dockerised_doctor_payload",
+        lambda _root: {
+            "runtime": {
+                "version": CURRENT_VERSION,
+                "status": "healthy",
+                "summary": "Runtime health is healthy.",
+                "db_reachable": True,
+                "schema_reachable": True,
+                "first_user_setup_required": True,
+            },
+            "storage": {
+                "status": "healthy",
+                "summary": "Configured storage paths are healthy.",
+                "scratch": {
+                    "role": "scratch",
+                    "display_name": "Scratch workspace",
+                    "status": "healthy",
+                    "path": "/scratch/encodr",
+                    "message": "The path is available.",
+                    "recommended_action": None,
+                },
+                "data_dir": {
+                    "role": "data",
+                    "display_name": "Application data",
+                    "status": "healthy",
+                    "path": "/data",
+                    "message": "The path is available.",
+                    "recommended_action": None,
+                },
+                "media_mounts": [{
+                    "role": "media_mount",
+                    "display_name": "Media library",
+                    "status": "healthy",
+                    "path": "/media",
+                    "message": "The media library path is available.",
+                    "recommended_action": None,
+                }],
+            },
+        },
+    )
+
+    def fail_if_called(_bundle):
+        raise AssertionError("Host database session factory should not be used when dockerised doctor is available.")
+
+    monkeypatch.setattr(encodr_cli, "create_session_factory", fail_if_called)
+
+    result = encodr_cli.command_doctor(argparse.Namespace(project_root="."))
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "Doctor mode: docker-compose/api-container" in output
+    assert "Database reachable: yes" in output
 
 
 def test_command_reset_admin_creates_first_admin(
@@ -224,9 +290,46 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
     assert 'ENCODR_INSTALL_LIB_ONLY:-0' in install_script
     assert "Stopping existing Docker services" in install_script
+    assert "Removing leftover Encodr Docker resources" in install_script
     assert "run_compose_in_install_root()" in install_script
+    assert "detect_compose_project_name()" in install_script
+    assert "purge_remaining_compose_resources()" in install_script
     assert 'cd "${INSTALL_ROOT}"' in install_script
+    assert "down --remove-orphans --volumes --rmi local" in install_script
+    assert "docker ps -aq --filter \"label=com.docker.compose.project=${project_name}\"" in install_script
+    assert "docker network ls -q --filter \"label=com.docker.compose.project=${project_name}\"" in install_script
+    assert "docker volume ls -q --filter \"label=com.docker.compose.project=${project_name}\"" in install_script
+    assert "Encodr Docker containers, networks, local images, and Compose volumes" in install_script
     assert "--project-directory" not in install_script
+
+
+def test_bootstrap_script_creates_runtime_data_and_scratch_subdir(repo_root: Path) -> None:
+    bootstrap_script = (repo_root / "infra" / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
+
+    assert '$ROOT_DIR/.runtime/data' in bootstrap_script
+    assert '$ROOT_DIR/scratch/encodr' in bootstrap_script
+
+
+def test_docker_compose_mounts_runtime_data_into_api_and_worker(repo_root: Path) -> None:
+    compose_file = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
+
+    assert "- ./.runtime/data:/data" in compose_file
+    assert "- ./postgres-data:/var/lib/postgresql/data" in compose_file
+    assert "- ./redis-data:/data" in compose_file
+
+
+def test_local_checkout_uses_compose_override_for_dev_data_volumes(repo_root: Path) -> None:
+    command = encodr_cli.compose_command(repo_root, "ps")
+
+    assert command[:6] == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        str(repo_root / "infra" / "compose" / "local.override.yml"),
+    ]
+    assert command[-1] == "ps"
 
 
 def test_encodr_wrapper_prefers_managed_cli_venv(repo_root: Path) -> None:

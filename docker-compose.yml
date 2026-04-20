@@ -14,6 +14,7 @@ services:
     volumes:
       - ./config:/config:ro
       - ./scratch:/scratch
+      - ./.runtime/data:/data
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
       postgres:
@@ -40,6 +41,7 @@ services:
     volumes:
       - ./config:/config:ro
       - ./scratch:/scratch
+      - ./.runtime/data:/data
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
       api:

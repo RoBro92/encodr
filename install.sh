@@ -350,10 +350,71 @@ show_fresh_install_plan() {
   printf '  - %s/scratch/\n' "${INSTALL_ROOT}"
   printf '  - %s/postgres-data/\n' "${INSTALL_ROOT}"
   printf '  - %s/redis-data/\n' "${INSTALL_ROOT}"
+  printf '  - Encodr Docker containers, networks, local images, and Compose volumes\n'
   printf '  - %s application files\n' "${INSTALL_ROOT}"
 }
 
+detect_compose_project_name() {
+  local env_file="${INSTALL_ROOT}/.env"
+  [[ -f "${env_file}" ]] || {
+    printf '%s\n' "${REPO_NAME}"
+    return 0
+  }
+
+  python3 - "${env_file}" "${REPO_NAME}" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+default_name = sys.argv[2]
+
+for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    if line.startswith("export "):
+        line = line[7:].strip()
+    if "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    if key.strip() != "PROJECT_NAME":
+        continue
+    value = value.strip().strip("\"'")
+    print(value or default_name)
+    raise SystemExit(0)
+
+print(default_name)
+PY
+}
+
+purge_remaining_compose_resources() {
+  local project_name="$1"
+  local container_ids=""
+  local network_ids=""
+  local volume_ids=""
+
+  container_ids="$(docker ps -aq --filter "label=com.docker.compose.project=${project_name}" || true)"
+  if [[ -n "${container_ids}" ]]; then
+    info "Removing remaining Encodr containers"
+    docker rm -f ${container_ids} >/dev/null 2>&1 || true
+  fi
+
+  network_ids="$(docker network ls -q --filter "label=com.docker.compose.project=${project_name}" || true)"
+  if [[ -n "${network_ids}" ]]; then
+    info "Removing remaining Encodr networks"
+    docker network rm ${network_ids} >/dev/null 2>&1 || true
+  fi
+
+  volume_ids="$(docker volume ls -q --filter "label=com.docker.compose.project=${project_name}" || true)"
+  if [[ -n "${volume_ids}" ]]; then
+    info "Removing remaining Encodr volumes"
+    docker volume rm -f ${volume_ids} >/dev/null 2>&1 || true
+  fi
+}
+
 stop_existing_stack_for_fresh_install() {
+  local project_name=""
+
   if [[ ! -f "${INSTALL_ROOT}/docker-compose.yml" ]]; then
     info "No existing Docker Compose project file was found to stop."
     return 0
@@ -369,11 +430,19 @@ stop_existing_stack_for_fresh_install() {
     return 0
   fi
 
+  project_name="$(detect_compose_project_name)"
+
   section "Stopping existing Encodr stack"
   run_with_progress \
     "Stopping existing Docker services" \
-    run_compose_in_install_root down --remove-orphans || \
+    run_compose_in_install_root down --remove-orphans --volumes --rmi local || \
     fail "Unable to stop the existing Encodr Docker stack before the fresh reinstall."
+
+  section "Purging existing Encodr Docker resources"
+  run_with_progress \
+    "Removing leftover Encodr Docker resources" \
+    purge_remaining_compose_resources "${project_name}" || \
+    fail "Unable to remove leftover Encodr Docker resources before the fresh reinstall."
 }
 
 confirm_fresh_install() {

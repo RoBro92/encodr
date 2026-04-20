@@ -15,7 +15,7 @@ copy_if_missing() {
   echo "Created: ${target_file#$ROOT_DIR/}"
 }
 
-mkdir -p "$ROOT_DIR/.runtime" "$ROOT_DIR/scratch"
+mkdir -p "$ROOT_DIR/.runtime" "$ROOT_DIR/.runtime/data" "$ROOT_DIR/scratch/encodr"
 
 copy_if_missing "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"
 copy_if_missing "$ROOT_DIR/config/app.example.yaml" "$ROOT_DIR/config/app.yaml"

@@ -162,7 +162,7 @@ def command_health(args: argparse.Namespace) -> int:
     bootstrap_repo(project_root)
     bundle = load_bundle(project_root)
     compose_result = subprocess.run(
-        ["docker", "compose", "ps"],
+        compose_command(project_root, "ps"),
         cwd=project_root,
         env=compose_env(project_root),
         capture_output=True,
@@ -214,19 +214,29 @@ def command_dev_ui(args: argparse.Namespace) -> int:
 
 
 def command_doctor(args: argparse.Namespace) -> int:
-    bundle = load_bundle(args.project_root)
-    session_factory = create_session_factory(bundle)
-    system_service_class = get_system_service_class()
-    system = system_service_class(
-        config_bundle=bundle,
-        session_factory=session_factory,
-        app_version=read_version(Path(args.project_root)),
-    )
-    runtime = system.runtime_status()
-    storage = system.storage_status()
+    project_root = Path(args.project_root).resolve()
+    bundle = load_bundle(project_root)
     api_health = check_api_health(bundle)
+    doctor_mode = "host-direct"
+
+    dockerised_payload = maybe_collect_dockerised_doctor_payload(project_root)
+    if dockerised_payload is not None:
+        runtime = dockerised_payload["runtime"]
+        storage = dockerised_payload["storage"]
+        doctor_mode = "docker-compose/api-container"
+    else:
+        session_factory = create_session_factory(bundle)
+        system_service_class = get_system_service_class()
+        system = system_service_class(
+            config_bundle=bundle,
+            session_factory=session_factory,
+            app_version=read_version(project_root),
+        )
+        runtime = system.runtime_status()
+        storage = system.storage_status()
 
     print(f"Version: {runtime['version']}")
+    print(f"Doctor mode: {doctor_mode}")
     print(f"Runtime: {runtime['status']} - {runtime['summary']}")
     print(f"API health: {api_health['status']} - {api_health['summary']}")
     print(f"Database reachable: {'yes' if runtime['db_reachable'] else 'no'}")
@@ -282,7 +292,12 @@ def command_update(args: argparse.Namespace) -> int:
             return 0
 
     apply_archive_update(project_root=project_root, download_url=status.download_url)
-    subprocess.run(["docker", "compose", "up", "-d", "--build"], cwd=project_root, check=True)
+    subprocess.run(
+        compose_command(project_root, "up", "-d", "--build"),
+        cwd=project_root,
+        env=compose_env(project_root),
+        check=True,
+    )
     return command_doctor(args)
 
 
@@ -398,7 +413,7 @@ def compose_env(project_root: Path) -> dict[str, str]:
 def run_compose(args: argparse.Namespace, compose_args: list[str]) -> int:
     project_root = Path(args.project_root).resolve()
     result = subprocess.run(
-        ["docker", "compose", *compose_args],
+        compose_command(project_root, *compose_args),
         cwd=project_root,
         env=compose_env(project_root),
         check=False,
@@ -425,6 +440,96 @@ def create_session_factory(bundle: ConfigBundle) -> sessionmaker:
     return sessionmaker(engine, future=True, expire_on_commit=False)
 
 
+def maybe_collect_dockerised_doctor_payload(project_root: Path) -> dict[str, object] | None:
+    if not should_use_dockerised_doctor(project_root):
+        return None
+
+    diagnostics = docker_compose_exec_api_python(
+        project_root,
+        """
+import json
+from pathlib import Path
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from encodr_core.config import load_config_bundle
+from encodr_shared import read_version
+from app.services.system import SystemService
+
+project_root = Path('/app')
+bundle = load_config_bundle(project_root=project_root)
+engine = create_engine(bundle.app.database.dsn, future=True)
+session_factory = sessionmaker(engine, future=True, expire_on_commit=False)
+system = SystemService(
+    config_bundle=bundle,
+    session_factory=session_factory,
+    app_version=read_version(project_root),
+)
+print(json.dumps(
+    {
+        "runtime": system.runtime_status(),
+        "storage": system.storage_status(),
+    },
+    default=str,
+))
+""".strip(),
+    )
+
+    if diagnostics is None:
+        return None
+
+    try:
+        payload = json.loads(diagnostics)
+    except json.JSONDecodeError:
+        return None
+
+    runtime = payload.get("runtime")
+    storage = payload.get("storage")
+    if not isinstance(runtime, dict) or not isinstance(storage, dict):
+        return None
+    return {"runtime": runtime, "storage": storage}
+
+
+def should_use_dockerised_doctor(project_root: Path) -> bool:
+    if not (project_root / "docker-compose.yml").exists():
+        return False
+
+    compose_version = subprocess.run(
+        compose_command(project_root, "version"),
+        cwd=project_root,
+        env=compose_env(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if compose_version.returncode != 0:
+        return False
+
+    api_exec = subprocess.run(
+        compose_command(project_root, "exec", "-T", "api", "true"),
+        cwd=project_root,
+        env=compose_env(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    return api_exec.returncode == 0
+
+
+def docker_compose_exec_api_python(project_root: Path, script: str) -> str | None:
+    result = subprocess.run(
+        compose_command(project_root, "exec", "-T", "api", "python", "-c", script),
+        cwd=project_root,
+        env=compose_env(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return None
+    return result.stdout
+
+
 def check_api_health(bundle: ConfigBundle) -> dict[str, str]:
     url = f"http://127.0.0.1:{bundle.app.api.port}{bundle.app.api.base_path}/health"
     try:
@@ -433,6 +538,15 @@ def check_api_health(bundle: ConfigBundle) -> dict[str, str]:
         return {"status": "healthy", "summary": f"API responded with {payload.get('status', 'ok')}."}
     except (URLError, OSError, json.JSONDecodeError) as error:
         return {"status": "failed", "summary": str(error)}
+
+
+def compose_command(project_root: Path, *compose_args: str) -> list[str]:
+    command = ["docker", "compose"]
+    local_override = project_root / "infra" / "compose" / "local.override.yml"
+    if (project_root / ".git").exists() and local_override.exists():
+        command.extend(["-f", "docker-compose.yml", "-f", str(local_override)])
+    command.extend(compose_args)
+    return command
 
 
 def get_password_hash_service_class():
