@@ -4,10 +4,14 @@ build-backend = "hatchling.build"
 
 [project]
 name = "encodr-shared"
-version = "0.1.2"
+dynamic = ["version"]
 description = "Shared types for encodr"
 requires-python = ">=3.12"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
 packages = ["encodr_shared"]
+
+[tool.hatch.version]
+path = "../../VERSION"
+pattern = "^(?P<version>.+)$"

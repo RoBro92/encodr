@@ -7,12 +7,14 @@ import pytest
 from encodr_core.config import load_config_bundle
 from encodr_db.models import AuditEventType, AuditOutcome
 from encodr_db.repositories import AuditEventRepository, WorkerRepository
+from encodr_shared.versioning import read_version
 from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
 from tests.helpers.filesystem import create_filesystem_layout
 
 pytestmark = [pytest.mark.integration, pytest.mark.security]
+CURRENT_VERSION = read_version(Path(__file__))
 
 
 def test_worker_registration_succeeds_with_valid_bootstrap_secret(
@@ -195,7 +197,7 @@ def registration_payload(secret: str) -> dict:
         "host_summary": {
             "hostname": "worker-amd",
             "platform": "Linux",
-            "agent_version": "0.1.0",
+            "agent_version": CURRENT_VERSION,
             "python_version": "3.12",
         },
         "runtime_summary": {

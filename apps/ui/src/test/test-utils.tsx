@@ -6,6 +6,8 @@ import App from "../App";
 import { AppProviders } from "../app/AppProviders";
 import type { StoredSession } from "../lib/auth/storage";
 
+const CURRENT_VERSION = __ENCODR_VERSION__;
+
 export function renderApp({
   route = "/",
   initialSession = null,
@@ -50,7 +52,7 @@ export function mockFetchRoutes(routes: MockRoute[]) {
           bootstrap_allowed: false,
           first_user_setup_required: false,
           user_count: 1,
-          version: "0.1.2",
+          version: CURRENT_VERSION,
         }),
         {
           status: 200,
@@ -64,7 +66,7 @@ export function mockFetchRoutes(routes: MockRoute[]) {
     if (!route && method === "GET" && url.includes("/api/system/update")) {
       return new Response(
         JSON.stringify({
-          current_version: "0.1.2",
+          current_version: CURRENT_VERSION,
           latest_version: null,
           update_available: false,
           channel: "internal",

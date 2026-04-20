@@ -7,9 +7,17 @@ import pytest
 from encodr_shared.update import UpdateCheckSettings, UpdateChecker
 from encodr_shared.versioning import find_project_root, is_version_newer, parse_version, read_version
 
+CURRENT_VERSION = read_version(Path(__file__))
+
+
+def next_patch_version(version: str) -> str:
+    parts = list(parse_version(version))
+    parts[-1] += 1
+    return ".".join(str(part) for part in parts)
+
 
 def test_read_version_uses_root_version_file(repo_root: Path) -> None:
-    assert read_version(repo_root) == "0.1.0"
+    assert read_version(repo_root) == CURRENT_VERSION
     assert find_project_root(repo_root / "apps" / "api") == repo_root
 
 
@@ -31,7 +39,7 @@ def test_is_version_newer_handles_numeric_and_non_numeric_versions() -> None:
 
 def test_update_checker_reports_no_update() -> None:
     checker = UpdateChecker(
-        current_version="0.1.0",
+        current_version=CURRENT_VERSION,
         settings=UpdateCheckSettings(
             enabled=True,
             metadata_url="https://updates.example.invalid/encodr.json",
@@ -39,7 +47,7 @@ def test_update_checker_reports_no_update() -> None:
             timeout_seconds=2,
         ),
         fetcher=lambda _url, _timeout: {
-            "latest_version": "0.1.0",
+            "latest_version": CURRENT_VERSION,
             "channel": "internal",
         },
     )
@@ -47,13 +55,14 @@ def test_update_checker_reports_no_update() -> None:
     result = checker.check_now()
 
     assert result.status == "ok"
-    assert result.latest_version == "0.1.0"
+    assert result.latest_version == CURRENT_VERSION
     assert result.update_available is False
 
 
 def test_update_checker_reports_available_update() -> None:
+    latest_version = next_patch_version(CURRENT_VERSION)
     checker = UpdateChecker(
-        current_version="0.1.0",
+        current_version=CURRENT_VERSION,
         settings=UpdateCheckSettings(
             enabled=True,
             metadata_url="https://updates.example.invalid/encodr.json",
@@ -61,24 +70,24 @@ def test_update_checker_reports_available_update() -> None:
             timeout_seconds=2,
         ),
         fetcher=lambda _url, _timeout: {
-            "latest_version": "0.1.1",
+            "latest_version": latest_version,
             "channel": "internal",
-            "download_url": "https://downloads.example.invalid/encodr-0.1.1.tar.gz",
-            "release_notes_url": "https://downloads.example.invalid/encodr-0.1.1-notes",
+            "download_url": f"https://downloads.example.invalid/encodr-{latest_version}.tar.gz",
+            "release_notes_url": f"https://downloads.example.invalid/encodr-{latest_version}-notes",
         },
     )
 
     result = checker.check_now()
 
     assert result.status == "ok"
-    assert result.latest_version == "0.1.1"
+    assert result.latest_version == latest_version
     assert result.update_available is True
-    assert result.download_url == "https://downloads.example.invalid/encodr-0.1.1.tar.gz"
+    assert result.download_url == f"https://downloads.example.invalid/encodr-{latest_version}.tar.gz"
 
 
 def test_update_checker_reports_upstream_error() -> None:
     checker = UpdateChecker(
-        current_version="0.1.0",
+        current_version=CURRENT_VERSION,
         settings=UpdateCheckSettings(
             enabled=True,
             metadata_url="https://updates.example.invalid/encodr.json",

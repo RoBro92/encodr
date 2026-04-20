@@ -4,6 +4,19 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { makeSession, mockFetchRoutes, renderApp, resetBrowserState } from "../test/test-utils";
 
+const CURRENT_VERSION = __ENCODR_VERSION__;
+
+function nextPatchVersion(version: string): string {
+  const parts = version.split(".");
+  const patch = Number.parseInt(parts.at(-1) ?? "0", 10);
+  if (Number.isNaN(patch)) {
+    return `${version}-next`;
+  }
+  return [...parts.slice(0, -1), String(patch + 1)].join(".");
+}
+
+const AVAILABLE_UPDATE_VERSION = nextPatchVersion(CURRENT_VERSION);
+
 describe("Encodr UI shell", () => {
   beforeEach(() => {
     resetBrowserState();
@@ -17,7 +30,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/" });
 
     expect(await screen.findByRole("heading", { name: /sign in to the operator console/i })).toBeInTheDocument();
-    expect(screen.getByText(/encodr v0\.1\.2/i)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`encodr v${CURRENT_VERSION}`, "i"))).toBeInTheDocument();
   });
 
   it("shows the first-user setup flow when bootstrap is still allowed", async () => {
@@ -29,7 +42,7 @@ describe("Encodr UI shell", () => {
           bootstrap_allowed: true,
           first_user_setup_required: true,
           user_count: 0,
-          version: "0.1.2",
+          version: CURRENT_VERSION,
         },
       },
       {
@@ -127,7 +140,7 @@ describe("Encodr UI shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
 
     expect(await screen.findByText(/operator console/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/encodr v0\.1\.2/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(new RegExp(`encodr v${CURRENT_VERSION}`, "i")).length).toBeGreaterThan(0);
     expect(JSON.parse(window.localStorage.getItem("encodr.session") ?? "{}").tokens.access_token).toBe("new-access");
   });
 
@@ -141,15 +154,15 @@ describe("Encodr UI shell", () => {
         method: "GET",
         path: "/api/system/update",
         body: {
-          current_version: "0.1.2",
-          latest_version: "0.1.3",
+          current_version: CURRENT_VERSION,
+          latest_version: AVAILABLE_UPDATE_VERSION,
           update_available: true,
           channel: "internal",
           status: "ok",
           checked_at: "2026-04-20T12:30:00Z",
           error: null,
-          download_url: "https://example.invalid/encodr-0.1.3.tar.gz",
-          release_notes_url: "https://example.invalid/encodr-0.1.3-notes",
+          download_url: `https://example.invalid/encodr-${AVAILABLE_UPDATE_VERSION}.tar.gz`,
+          release_notes_url: `https://example.invalid/encodr-${AVAILABLE_UPDATE_VERSION}-notes`,
         },
       },
     ]);
@@ -157,7 +170,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/", initialSession: makeSession() });
 
     expect(await screen.findByText(/update available/i)).toBeInTheDocument();
-    expect(screen.getByText(/encodr 0\.1\.3 is available/i)).toBeInTheDocument();
+    expect(screen.getByText(new RegExp(`encodr ${AVAILABLE_UPDATE_VERSION} is available`, "i"))).toBeInTheDocument();
   });
 
   it("renders the dashboard with analytics and operational sections from API data", async () => {
@@ -720,7 +733,7 @@ function runtimeStatus({
   return {
     status,
     summary: status === "healthy" ? "Runtime health is healthy." : "Runtime health completed with warnings.",
-    version: "0.1.2",
+    version: CURRENT_VERSION,
     environment: "testing",
     db_reachable: true,
     schema_reachable: true,
@@ -952,7 +965,7 @@ function remoteWorkerSummary() {
     host_summary: {
       hostname: "worker-amd",
       platform: "Linux",
-      agent_version: "0.1.2",
+      agent_version: CURRENT_VERSION,
       python_version: "3.12",
     },
     pending_assignment_count: 0,

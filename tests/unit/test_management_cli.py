@@ -11,8 +11,11 @@ import pytest
 import encodr_cli
 from encodr_db.models import AuditEventType, UserRole
 from encodr_db.repositories import AuditEventRepository, UserRepository
+from encodr_shared.versioning import read_version
 from tests.helpers.api import load_api_security_module
 from tests.helpers.db import create_migrated_session_factory
+
+CURRENT_VERSION = read_version(Path(__file__))
 
 
 def test_command_version_prints_release_summary(
@@ -25,7 +28,7 @@ def test_command_version_prints_release_summary(
 
     output = capsys.readouterr().out
     assert result == 0
-    assert "Encodr 0.1.2" in output
+    assert f"Encodr {CURRENT_VERSION}" in output
     assert "API base path: /api" in output
 
 
@@ -43,7 +46,7 @@ def test_command_doctor_reports_runtime_and_storage_status(
 
         def runtime_status(self) -> dict[str, object]:
             return {
-                "version": "0.1.2",
+                "version": CURRENT_VERSION,
                 "status": "healthy",
                 "summary": "Runtime health is healthy.",
                 "db_reachable": True,
@@ -74,7 +77,7 @@ def test_command_doctor_reports_runtime_and_storage_status(
 
     output = capsys.readouterr().out
     assert result == 0
-    assert "Version: 0.1.2" in output
+    assert f"Version: {CURRENT_VERSION}" in output
     assert "API health: healthy" in output
 
 
@@ -92,7 +95,7 @@ def test_command_status_reports_media_mount_problem_clearly(
 
         def runtime_status(self) -> dict[str, object]:
             return {
-                "version": "0.1.2",
+                "version": CURRENT_VERSION,
                 "status": "degraded",
                 "summary": "Runtime health completed with warnings.",
                 "db_reachable": True,
@@ -272,7 +275,7 @@ def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> 
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in install_doc
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair" in install_doc
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh" in install_doc
-    assert "--version 0.1.2" in install_doc
+    assert "--version <tag>" in install_doc
     assert "latest tagged release by default" in install_doc
 
 

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "encodr-core"
-version = "0.1.2"
+dynamic = ["version"]
 description = "Shared core logic for encodr"
 requires-python = ">=3.12"
 dependencies = [
@@ -19,3 +19,7 @@ dev = [
 
 [tool.hatch.build.targets.wheel]
 packages = ["encodr_core"]
+
+[tool.hatch.version]
+path = "../../VERSION"
+pattern = "^(?P<version>.+)$"

@@ -24,7 +24,7 @@ No manual config editing is required before first use.
 To install a specific release instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --version 0.1.2
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --version <tag>
 ```
 
 ## Manual install
