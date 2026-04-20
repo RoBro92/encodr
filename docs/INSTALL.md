@@ -5,10 +5,8 @@
 For a Debian LXC or Linux VM, run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash
 ```
-
-If you are already logged in as `root`, replace `sudo bash` with `bash`.
 
 The installer will:
 
@@ -25,7 +23,7 @@ No manual config editing is required before first use.
 To install a specific release instead:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --version 0.1.0
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --version 0.1.0
 ```
 
 ## Manual install
@@ -35,7 +33,7 @@ If you want to inspect the checkout first:
 ```bash
 git clone https://github.com/RoBro92/encodr.git
 cd encodr
-sudo ./install.sh
+./install.sh
 ```
 
 ## After install
@@ -54,13 +52,13 @@ If an existing install is found, the installer will stop and ask what to do. It 
 For a non-interactive repair run:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --repair
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair
 ```
 
 For a destructive fresh reinstall:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --fresh --force-fresh
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh
 ```
 
 Fresh reinstall removes the Encodr install tree, generated config, runtime state, and local database volumes before reinstalling.

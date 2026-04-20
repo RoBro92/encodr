@@ -534,6 +534,6 @@ main() {
   show_urls
 }
 
-if [[ "${BASH_SOURCE[0]-$0}" == "$0" ]]; then
+if [[ "${ENCODR_INSTALL_LIB_ONLY:-0}" != "1" ]]; then
   main "$@"
 fi

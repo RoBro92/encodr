@@ -215,7 +215,7 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "encodr mount-setup --validate-only" in install_script
     assert "tmp_dir: unbound variable" not in install_script
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
-    assert "${BASH_SOURCE[0]-$0}" in install_script
+    assert 'ENCODR_INSTALL_LIB_ONLY:-0' in install_script
 
 
 def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
@@ -233,19 +233,18 @@ def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
 def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
 
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash" in readme
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --repair" in readme
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --fresh --force-fresh" in readme
-    assert "sudo bash" in readme
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in readme
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair" in readme
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh" in readme
     assert "encodr update" in readme
 
 
 def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> None:
     install_doc = (repo_root / "docs" / "INSTALL.md").read_text(encoding="utf-8")
 
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash" in install_doc
-    assert "--repair" in install_doc
-    assert "--fresh --force-fresh" in install_doc
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in install_doc
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair" in install_doc
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh" in install_doc
     assert "--version 0.1.0" in install_doc
 
 
@@ -449,6 +448,7 @@ def fake_bundle(*, database_url: str = "sqlite+pysqlite:///:memory:", media_moun
 def run_install_shell(repo_root: Path, shell_body: str, *, input_text: str = "") -> subprocess.CompletedProcess[str]:
     env = os.environ.copy()
     env.setdefault("ENCODR_INSTALL_INTERACTIVE", "0")
+    env["ENCODR_INSTALL_LIB_ONLY"] = "1"
     command = f"source '{repo_root / 'install.sh'}'; {shell_body}"
     return subprocess.run(
         ["bash", "-lc", command],
