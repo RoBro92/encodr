@@ -30,6 +30,7 @@ SCRIPT_ROOT=""
 REMOTE_BOOTSTRAP=0
 INSTALL_REF_OVERRIDE=""
 INSTALL_MODE_OVERRIDE=""
+INSTALL_ACTION="install"
 INSTALL_TMP_DIR=""
 
 cleanup() {
@@ -45,14 +46,15 @@ print_help() {
 Encodr installer
 
 Usage:
-  install.sh [--version REF] [--install-root PATH] [--repair|--reinstall|--force]
+  install.sh [--version REF] [--install-root PATH] [--repair|--fresh|--force-fresh|--abort-if-exists]
 
 Options:
   --version REF       Install a specific git tag or branch instead of the default ${DEFAULT_INSTALL_REF}
   --install-root PATH Install into a custom directory instead of ${DEFAULT_INSTALL_ROOT}
-  --repair            Re-run install steps against an existing Encodr install in place
-  --reinstall         Refresh application files in place while preserving runtime state
-  --force             Continue without treating an existing install as a warning condition
+  --repair            Repair an existing Encodr installation in place
+  --fresh             Perform a fresh reinstall if an existing install is found
+  --force-fresh       Confirm that a fresh reinstall should erase Encodr runtime state
+  --abort-if-exists   Stop immediately if an existing install is found
   --help              Show this help message
 EOF
 }
@@ -79,6 +81,8 @@ fail() {
 }
 
 parse_args() {
+  local fresh_requested=0
+  local fresh_confirmed=0
   while [[ $# -gt 0 ]]; do
     case "$1" in
       --version)
@@ -95,8 +99,17 @@ parse_args() {
         INSTALL_MODE_OVERRIDE="repair"
         shift
         ;;
-      --reinstall|--force)
-        INSTALL_MODE_OVERRIDE="reinstall"
+      --fresh)
+        fresh_requested=1
+        INSTALL_MODE_OVERRIDE="fresh"
+        shift
+        ;;
+      --force-fresh)
+        fresh_confirmed=1
+        shift
+        ;;
+      --abort-if-exists)
+        INSTALL_MODE_OVERRIDE="abort"
         shift
         ;;
       --help|-h)
@@ -108,6 +121,14 @@ parse_args() {
         ;;
     esac
   done
+
+  if [[ "${fresh_confirmed}" -eq 1 && "${fresh_requested}" -eq 0 ]]; then
+    fail "--force-fresh must be used together with --fresh."
+  fi
+
+  if [[ "${fresh_confirmed}" -eq 1 ]]; then
+    INSTALL_MODE_OVERRIDE="fresh:confirmed"
+  fi
 }
 
 require_root() {
@@ -183,6 +204,18 @@ ensure_docker() {
   ensure_compose
 }
 
+is_interactive_install() {
+  if [[ "${ENCODR_INSTALL_INTERACTIVE:-}" == "1" ]]; then
+    return 0
+  fi
+  [[ -t 0 ]]
+}
+
+abort_install() {
+  warn "$1"
+  exit 0
+}
+
 existing_install_found() {
   [[ -d "${INSTALL_ROOT}" ]] || return 1
   [[ -f "${INSTALL_ROOT}/.env" ]] && return 0
@@ -195,16 +228,104 @@ existing_install_found() {
 }
 
 resolve_install_mode() {
-  if existing_install_found; then
-    section "Existing installation detected"
-    warn "An existing Encodr installation was found at ${INSTALL_ROOT}."
-    if [[ "${INSTALL_MODE_OVERRIDE:-}" == "repair" ]]; then
-      info "Continuing with a repair install in place."
-    else
-      info "Continuing will attempt a repair/reinstall in place."
-    fi
-    success "Runtime data, generated config, and secrets will be preserved where possible"
+  if ! existing_install_found; then
+    INSTALL_ACTION="install"
+    return
   fi
+
+  section "Existing installation detected"
+  warn "An existing Encodr installation was found at ${INSTALL_ROOT}."
+
+  case "${INSTALL_MODE_OVERRIDE:-}" in
+    repair)
+      INSTALL_ACTION="repair"
+      info "Repair will preserve runtime data, generated config, secrets, and databases where possible."
+      return
+      ;;
+    fresh:confirmed)
+      INSTALL_ACTION="fresh"
+      warn "Fresh install is destructive and will remove Encodr application files and runtime data."
+      return
+      ;;
+    fresh)
+      if is_interactive_install; then
+        confirm_fresh_install
+        return
+      fi
+      fail "Fresh install is destructive. Re-run with --fresh --force-fresh."
+      ;;
+    abort)
+      abort_install "Existing installation detected. No changes were made."
+      ;;
+    "")
+      if is_interactive_install; then
+        prompt_existing_install_action
+        return
+      fi
+      fail "Existing installation detected. Re-run with one of: --repair, --fresh --force-fresh, --abort-if-exists."
+      ;;
+    *)
+      fail "Unsupported install mode: ${INSTALL_MODE_OVERRIDE}."
+      ;;
+  esac
+}
+
+show_fresh_install_plan() {
+  warn "Fresh install will remove:"
+  printf '  - %s/.env\n' "${INSTALL_ROOT}"
+  printf '  - %s/config/\n' "${INSTALL_ROOT}"
+  printf '  - %s/.runtime/\n' "${INSTALL_ROOT}"
+  printf '  - %s/scratch/\n' "${INSTALL_ROOT}"
+  printf '  - %s/postgres-data/\n' "${INSTALL_ROOT}"
+  printf '  - %s/redis-data/\n' "${INSTALL_ROOT}"
+  printf '  - %s application files\n' "${INSTALL_ROOT}"
+}
+
+confirm_fresh_install() {
+  show_fresh_install_plan
+  printf 'Type %s to confirm a destructive fresh install: ' "DELETE"
+  local confirmation=""
+  IFS= read -r confirmation || true
+  if [[ "${confirmation}" != "DELETE" ]]; then
+    abort_install "Fresh install cancelled. No changes were made."
+  fi
+  INSTALL_ACTION="fresh"
+}
+
+prompt_existing_install_action() {
+  printf 'Choose what to do:\n'
+  printf '  [1] Repair existing installation\n'
+  printf '  [2] Fresh install (destructive)\n'
+  printf '  [3] Abort\n'
+  printf 'Selection [3]: '
+  local selection=""
+  IFS= read -r selection || true
+  case "${selection}" in
+    1)
+      INSTALL_ACTION="repair"
+      info "Repair will preserve runtime data, generated config, secrets, and databases where possible."
+      ;;
+    2)
+      confirm_fresh_install
+      ;;
+    ""|3)
+      abort_install "Installer aborted. No changes were made."
+      ;;
+    *)
+      abort_install "Installer aborted. No changes were made."
+      ;;
+  esac
+}
+
+perform_fresh_install_reset() {
+  section "Removing existing installation"
+  if [[ "${REMOTE_BOOTSTRAP}" -ne 1 ]]; then
+    fail "Fresh install is not supported from a live checkout. Remove the checkout manually and run the installer again."
+  fi
+
+  show_fresh_install_plan
+  rm -rf "${INSTALL_ROOT}" || fail "Unable to remove the existing Encodr installation."
+  success "Existing installation removed"
 }
 
 download_release_tree() {
@@ -250,6 +371,9 @@ download_release_tree() {
 ensure_release_tree() {
   if [[ "${REMOTE_BOOTSTRAP}" -eq 1 ]]; then
     resolve_install_mode
+    if [[ "${INSTALL_ACTION}" == "fresh" ]]; then
+      perform_fresh_install_reset
+    fi
     download_release_tree
   else
     section "Using local checkout"
@@ -286,10 +410,45 @@ PY
 }
 
 load_env() {
-  set -a
-  # shellcheck disable=SC1091
-  source "${INSTALL_ROOT}/.env"
-  set +a
+  local env_file="${INSTALL_ROOT}/.env"
+  [[ -f "${env_file}" ]] || fail "Expected environment file at ${env_file}."
+
+  local raw_line=""
+  local line=""
+  local key=""
+  local value=""
+  while IFS= read -r raw_line || [[ -n "${raw_line}" ]]; do
+    line="${raw_line%$'\r'}"
+    line="${line#"${line%%[![:space:]]*}"}"
+    line="${line%"${line##*[![:space:]]}"}"
+
+    [[ -z "${line}" ]] && continue
+    [[ "${line:0:1}" == "#" ]] && continue
+
+    if [[ "${line}" == export\ * ]]; then
+      line="${line#export }"
+    fi
+
+    [[ "${line}" == *=* ]] || fail "Invalid dotenv line in ${env_file}: ${raw_line}"
+
+    key="${line%%=*}"
+    value="${line#*=}"
+
+    key="${key#"${key%%[![:space:]]*}"}"
+    key="${key%"${key##*[![:space:]]}"}"
+    value="${value#"${value%%[![:space:]]*}"}"
+    value="${value%"${value##*[![:space:]]}"}"
+
+    [[ "${key}" =~ ^[A-Za-z_][A-Za-z0-9_]*$ ]] || fail "Invalid dotenv key in ${env_file}: ${key}"
+
+    if [[ "${value}" == \"*\" && "${value}" == *\" ]]; then
+      value="${value:1:${#value}-2}"
+    elif [[ "${value}" == \'*\' && "${value}" == *\' ]]; then
+      value="${value:1:${#value}-2}"
+    fi
+
+    export "${key}=${value}"
+  done < "${env_file}"
 }
 
 wait_for_health() {
@@ -370,4 +529,6 @@ main() {
   show_urls
 }
 
-main "$@"
+if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+  main "$@"
+fi

@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import argparse
+import os
 from pathlib import Path
+import subprocess
 from types import SimpleNamespace
 
 import pytest
@@ -201,7 +203,9 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "Docker Compose is not available" in install_script
     assert "API health check did not succeed" in install_script
     assert "An existing Encodr installation was found at ${INSTALL_ROOT}." in install_script
-    assert "Continuing will attempt a repair/reinstall in place." in install_script
+    assert "Choose what to do:" in install_script
+    assert "Selection [3]:" in install_script
+    assert "Existing installation detected. Re-run with one of: --repair, --fresh --force-fresh, --abort-if-exists." in install_script
     assert "INSTALL_TMP_DIR" in install_script
     assert "trap cleanup EXIT" in install_script
     assert "mkdir -p \"${STANDARD_MEDIA_ROOT}\"" not in install_script
@@ -218,8 +222,9 @@ def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
 
     assert "--version REF" in install_script
     assert "--repair" in install_script
-    assert "--reinstall" in install_script
-    assert "--force" in install_script
+    assert "--fresh" in install_script
+    assert "--force-fresh" in install_script
+    assert "--abort-if-exists" in install_script
     assert "instead of the default ${DEFAULT_INSTALL_REF}" in install_script
     assert "Unknown installer option" in install_script
 
@@ -227,7 +232,9 @@ def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
 def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
 
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in readme
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash" in readme
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --repair" in readme
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --fresh --force-fresh" in readme
     assert "sudo bash" in readme
     assert "encodr update" in readme
 
@@ -235,9 +242,140 @@ def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
 def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> None:
     install_doc = (repo_root / "docs" / "INSTALL.md").read_text(encoding="utf-8")
 
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in install_doc
-    assert "sudo bash" in install_doc
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash" in install_doc
+    assert "--repair" in install_doc
+    assert "--fresh --force-fresh" in install_doc
     assert "--version 0.1.0" in install_doc
+
+
+def test_install_script_loads_dotenv_values_with_spaces_safely(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "ENCODR_WORKER_AGENT_DISPLAY_NAME=Remote Worker\nAPI_PORT=8000\n# Comment\n",
+        encoding="utf-8",
+    )
+
+    result = run_install_shell(
+        repo_root,
+        f"INSTALL_ROOT='{tmp_path}'; load_env; printf '%s|%s\\n' \"$ENCODR_WORKER_AGENT_DISPLAY_NAME\" \"$API_PORT\"",
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip() == "Remote Worker|8000"
+    assert "command not found" not in result.stderr
+
+
+def test_existing_install_non_interactive_requires_explicit_flag(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    (tmp_path / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        f"ENCODR_INSTALL_INTERACTIVE=0 INSTALL_ROOT='{tmp_path}' REMOTE_BOOTSTRAP=1 resolve_install_mode",
+    )
+
+    assert result.returncode == 1
+    assert "Existing installation detected. Re-run with one of: --repair, --fresh --force-fresh, --abort-if-exists." in result.stderr
+
+
+def test_existing_install_repair_mode_is_selected_explicitly(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    (tmp_path / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        f"ENCODR_INSTALL_INTERACTIVE=0 INSTALL_ROOT='{tmp_path}' REMOTE_BOOTSTRAP=1 INSTALL_MODE_OVERRIDE=repair resolve_install_mode; printf '%s\\n' \"$INSTALL_ACTION\"",
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip().endswith("repair")
+
+
+def test_existing_install_fresh_mode_requires_force_in_non_interactive_mode(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    (tmp_path / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        f"ENCODR_INSTALL_INTERACTIVE=0 INSTALL_ROOT='{tmp_path}' REMOTE_BOOTSTRAP=1 INSTALL_MODE_OVERRIDE=fresh resolve_install_mode",
+    )
+
+    assert result.returncode == 1
+    assert "Fresh install is destructive. Re-run with --fresh --force-fresh." in result.stderr
+
+
+def test_existing_install_fresh_mode_works_with_force_flag(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    (tmp_path / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        f"ENCODR_INSTALL_INTERACTIVE=0 INSTALL_ROOT='{tmp_path}' REMOTE_BOOTSTRAP=1 INSTALL_MODE_OVERRIDE='fresh:confirmed' resolve_install_mode; printf '%s\\n' \"$INSTALL_ACTION\"",
+    )
+
+    assert result.returncode == 0
+    assert result.stdout.strip().endswith("fresh")
+
+
+def test_existing_install_interactive_default_aborts_cleanly(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    (tmp_path / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        f"ENCODR_INSTALL_INTERACTIVE=1 INSTALL_ROOT='{tmp_path}' REMOTE_BOOTSTRAP=1 resolve_install_mode",
+        input_text="\n",
+    )
+
+    assert result.returncode == 0
+    assert "Installer aborted. No changes were made." in result.stdout
+
+
+def test_existing_install_interactive_fresh_requires_delete_confirmation(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    (tmp_path / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        f"ENCODR_INSTALL_INTERACTIVE=1 INSTALL_ROOT='{tmp_path}' REMOTE_BOOTSTRAP=1 resolve_install_mode",
+        input_text="2\nno\n",
+    )
+
+    assert result.returncode == 0
+    assert "Fresh install cancelled. No changes were made." in result.stdout
+
+
+def test_fresh_install_reset_removes_existing_runtime_state(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    install_root = tmp_path / "encodr"
+    (install_root / "config").mkdir(parents=True, exist_ok=True)
+    (install_root / "scratch").mkdir(parents=True, exist_ok=True)
+    (install_root / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        f"INSTALL_ROOT='{install_root}' REMOTE_BOOTSTRAP=1 perform_fresh_install_reset",
+    )
+
+    assert result.returncode == 0
+    assert not install_root.exists()
 
 
 def test_gitignore_excludes_local_ui_workspace(repo_root: Path) -> None:
@@ -272,4 +410,18 @@ def fake_bundle(*, database_url: str = "sqlite+pysqlite:///:memory:", media_moun
                 media_mounts=[Path(media_mount)],
             ),
         ),
+    )
+
+
+def run_install_shell(repo_root: Path, shell_body: str, *, input_text: str = "") -> subprocess.CompletedProcess[str]:
+    env = os.environ.copy()
+    env.setdefault("ENCODR_INSTALL_INTERACTIVE", "0")
+    command = f"source '{repo_root / 'install.sh'}'; {shell_body}"
+    return subprocess.run(
+        ["bash", "-lc", command],
+        input=input_text,
+        text=True,
+        capture_output=True,
+        env=env,
+        cwd=repo_root,
     )
