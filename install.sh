@@ -80,6 +80,48 @@ fail() {
   exit 1
 }
 
+run_with_progress() {
+  local description="$1"
+  shift
+
+  local log_file=""
+  log_file="$(mktemp "${TMPDIR:-/tmp}/encodr-install.XXXXXX.log")" || \
+    fail "Unable to create a temporary log file for ${description}."
+
+  info "${description}"
+  if [[ -t 1 ]]; then
+    local spinner='|/-\'
+    local index=0
+    "$@" >"${log_file}" 2>&1 &
+    local command_pid=$!
+    while kill -0 "${command_pid}" 2>/dev/null; do
+      printf '\r%s[%c]%s %s' "${BLUE}" "${spinner:index++%${#spinner}:1}" "${RESET}" "${description}"
+      sleep 0.1
+    done
+
+    local exit_code=0
+    wait "${command_pid}" || exit_code=$?
+    printf '\r\033[K'
+    if [[ "${exit_code}" -ne 0 ]]; then
+      warn "${description} failed. Showing recent output:"
+      tail -n 40 "${log_file}" >&2 || true
+      rm -f "${log_file}"
+      return "${exit_code}"
+    fi
+  else
+    if ! "$@" >"${log_file}" 2>&1; then
+      warn "${description} failed. Showing recent output:"
+      tail -n 40 "${log_file}" >&2 || true
+      rm -f "${log_file}"
+      return 1
+    fi
+  fi
+
+  rm -f "${log_file}"
+  success "${description} completed"
+  return 0
+}
+
 parse_args() {
   local fresh_requested=0
   local fresh_confirmed=0
@@ -159,9 +201,10 @@ resolve_script_root() {
 }
 
 install_base_packages() {
-  info "Installing base system packages"
-  apt-get update >/dev/null || fail "Unable to refresh package metadata."
-  apt-get install -y ca-certificates curl git jq gnupg lsb-release python3 iproute2 tar >/dev/null || \
+  run_with_progress "Refreshing package metadata" apt-get update || fail "Unable to refresh package metadata."
+  run_with_progress \
+    "Installing base system packages" \
+    apt-get install -y ca-certificates curl git jq gnupg lsb-release python3 iproute2 tar || \
     fail "Unable to install the required base packages."
 }
 
@@ -179,8 +222,11 @@ install_docker() {
 deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/debian ${codename} stable
 EOF
 
-  apt-get update >/dev/null || fail "Unable to refresh package metadata for Docker."
-  apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin >/dev/null || \
+  run_with_progress "Refreshing Docker package metadata" apt-get update || \
+    fail "Unable to refresh package metadata for Docker."
+  run_with_progress \
+    "Installing Docker Engine and Compose plugin" \
+    apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin || \
     fail "Docker Engine or the Compose plugin could not be installed."
 }
 
@@ -532,8 +578,8 @@ main() {
   load_env
 
   section "Starting the stack"
-  info "Launching Docker services"
-  docker compose up -d --build >/dev/null || fail "Docker Compose could not start the Encodr stack."
+  run_with_progress "Launching Docker services" docker compose up -d --build || \
+    fail "Docker Compose could not start the Encodr stack."
 
   section "Waiting for health"
   wait_for_health

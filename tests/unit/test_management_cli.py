@@ -195,7 +195,8 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
 
     assert "./infra/scripts/bootstrap.sh" in install_script
-    assert "docker compose up -d --build >/dev/null || fail" in install_script
+    assert 'run_with_progress "Launching Docker services" docker compose up -d --build' in install_script
+    assert "run_with_progress()" in install_script
     assert "./encodr doctor" in install_script
     assert "DEFAULT_INSTALL_REF=\"main\"" in install_script
     assert "docker info >/dev/null 2>&1" in install_script
