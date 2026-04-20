@@ -59,9 +59,9 @@ Use this file as the working delivery checklist. Each milestone is intended to l
 
 ## Milestone 8: API endpoints
 
-- [ ] PR 8.1 Add job and file read endpoints
-- [ ] PR 8.2 Add queue control and manual review endpoints
-- [ ] PR 8.3 Add policy and worker configuration read endpoints
+- [x] PR 8.1 Add authenticated file and job read endpoints
+- [x] PR 8.2 Add conservative probe, plan, job-create, retry, and worker run-once endpoints
+- [x] PR 8.3 Add sanitised worker, system, and effective-config visibility endpoints
 
 ## Milestone 9: initial UI shell and dashboard
 

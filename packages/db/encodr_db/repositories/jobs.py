@@ -62,6 +62,17 @@ class JobRepository:
         )
         return self.session.scalar(query)
 
+    def get_by_id(self, job_id: str) -> Job | None:
+        query = (
+            select(Job)
+            .where(Job.id == job_id)
+            .options(
+                joinedload(Job.tracked_file),
+                joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
+            )
+        )
+        return self.session.scalar(query)
+
     def mark_running(self, job: Job, *, worker_name: str) -> Job:
         job.status = JobStatus.RUNNING
         job.worker_name = worker_name
@@ -109,11 +120,20 @@ class JobRepository:
         self,
         *,
         status: JobStatus | None = None,
+        tracked_file_id: str | None = None,
+        worker_name: str | None = None,
         limit: int | None = None,
+        offset: int | None = None,
     ) -> list[Job]:
         query: Select[tuple[Job]] = select(Job).order_by(desc(Job.created_at))
         if status is not None:
             query = query.where(Job.status == status)
+        if tracked_file_id is not None:
+            query = query.where(Job.tracked_file_id == tracked_file_id)
+        if worker_name is not None:
+            query = query.where(Job.worker_name == worker_name)
+        if offset is not None:
+            query = query.offset(offset)
         if limit is not None:
             query = query.limit(limit)
         return list(self.session.scalars(query))

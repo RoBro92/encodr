@@ -6,7 +6,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 from types import ModuleType
-from typing import Iterator
+from typing import Any, Iterator
 
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import sessionmaker
@@ -51,18 +51,22 @@ def create_test_api_context(
     session_factory: sessionmaker,
     auth_secret: str = "test-auth-secret-with-sufficient-length",
     bundle: ConfigBundle | None = None,
+    worker_execution_service: Any | None = None,
 ) -> ApiTestContext:
     if bundle is None:
         bundle = load_config_bundle(project_root=repo_root)
 
-    previous_secret = sys.modules.get("os")
     import os
 
     old_secret = os.environ.get("ENCODR_AUTH_SECRET")
     os.environ["ENCODR_AUTH_SECRET"] = auth_secret
     try:
         with import_api_module("app.main") as app_main:
-            app = app_main.create_app(config_bundle=bundle, session_factory=session_factory)
+            app = app_main.create_app(
+                config_bundle=bundle,
+                session_factory=session_factory,
+                worker_execution_service=worker_execution_service,
+            )
             client = TestClient(app)
     finally:
         if old_secret is None:

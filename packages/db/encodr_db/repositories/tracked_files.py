@@ -56,13 +56,20 @@ class TrackedFileRepository:
         query = select(TrackedFile).where(TrackedFile.source_path == Path(source_path).as_posix())
         return self.session.scalar(query)
 
+    def get_by_id(self, tracked_file_id: str) -> TrackedFile | None:
+        return self.session.get(TrackedFile, tracked_file_id)
+
     def list_files(
         self,
         *,
         lifecycle_state: FileLifecycleState | None = None,
         compliance_state: ComplianceState | None = None,
         protected_only: bool | None = None,
+        path_prefix: str | None = None,
+        path_search: str | None = None,
+        is_4k: bool | None = None,
         limit: int | None = None,
+        offset: int | None = None,
     ) -> list[TrackedFile]:
         query: Select[tuple[TrackedFile]] = select(TrackedFile).order_by(desc(TrackedFile.updated_at))
         if lifecycle_state is not None:
@@ -73,6 +80,14 @@ class TrackedFileRepository:
             query = query.where(TrackedFile.is_protected.is_(True))
         if protected_only is False:
             query = query.where(TrackedFile.is_protected.is_(False))
+        if path_prefix:
+            query = query.where(TrackedFile.source_path.startswith(path_prefix))
+        if path_search:
+            query = query.where(TrackedFile.source_path.ilike(f"%{path_search}%"))
+        if is_4k is not None:
+            query = query.where(TrackedFile.is_4k.is_(is_4k))
+        if offset is not None:
+            query = query.offset(offset)
         if limit is not None:
             query = query.limit(limit)
         return list(self.session.scalars(query))

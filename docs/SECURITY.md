@@ -7,6 +7,7 @@
 ## Required controls
 
 - Authentication required for all non-health endpoints
+- Operational API endpoints are currently admin-only to keep mutation scope narrow
 - Passwords stored as strong hashes, not reversible secrets
 - `argon2id` password hashing for local credentials
 - Short-lived JWT access tokens plus revocable refresh tokens
@@ -42,6 +43,12 @@
 - Security-sensitive behaviour is covered by integration and end-to-end tests rather than unit tests alone.
 - The current baseline checks bootstrap restrictions, protected-route enforcement, inactive-user denial, refresh rotation, logout revocation, audit event persistence, and non-test auth-secret sanity.
 - Worker-flow tests also guard against unsafe success states by asserting that files are not marked complete before verification and placement succeed.
+- API integration tests also verify sanitised config visibility and rejection of unauthenticated access to file, job, worker, and system endpoints.
+
+## Operational API visibility
+
+- `GET /config/effective` exposes a sanitised config summary only. It does not return auth secrets, password hashes, refresh token hashes, or database credentials.
+- Probe, plan, job-creation, retry, and worker run-once endpoints require authentication and explicit request bodies. There is no open registration or unauthenticated operational control path.
 
 ## File-system and process controls
 

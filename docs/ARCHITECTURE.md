@@ -26,7 +26,7 @@ The repository is organised as a small monorepo:
 
 ## Service boundaries
 
-- API owns authentication, user/session handling, audit logging for security-relevant actions, job visibility, dashboard aggregation, configuration views, and administrative actions.
+- API owns authentication, user/session handling, audit logging for security-relevant actions, operational file and job visibility, probe or plan task entry points, local worker run-once control, configuration views, and administrative actions.
 - Worker owns ffprobe, ffmpeg invocation, output verification, and safe replacement logic.
 - Core package owns configuration loading, ffprobe parsing, internal media models, policy parsing, planning, naming, and verification rules.
 - DB package owns persistent state and repository access patterns.
@@ -84,3 +84,9 @@ The repository is organised as a small monorepo:
 - `tests/integration` uses the real FastAPI app, Alembic migrations, repositories, auth flow, and worker wiring, while mocking external media binaries where needed.
 - `tests/e2e` provides controlled vertical-slice checks across auth, persisted jobs, worker execution, verification, and safe placement.
 - `smoke` and `security` markers provide small, targeted gates for runtime boot checks and auth or audit regressions.
+
+## Current API surface
+
+- The initial operational API exposes authenticated read access for tracked files, jobs, latest probe or plan snapshots, local worker status, storage status, runtime status, and sanitised effective config.
+- Conservative write endpoints allow probing a file, planning a file, creating a job, retrying an eligible job by creating a new record, and triggering one local worker pass.
+- The API and worker now share the same local run-once runtime path through the DB runtime layer.

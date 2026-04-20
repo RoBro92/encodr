@@ -7,8 +7,10 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.security import PasswordHashService, TokenService
-from encodr_db.models import User
+from encodr_core.config import ConfigBundle
+from encodr_db.models import User, UserRole
 from encodr_db.repositories import UserRepository
+from encodr_db.runtime import LocalWorkerLoop
 
 bearer_scheme = HTTPBearer(auto_error=False)
 
@@ -33,6 +35,14 @@ def get_password_hasher(request: Request) -> PasswordHashService:
 
 def get_token_service(request: Request) -> TokenService:
     return request.app.state.token_service
+
+
+def get_config_bundle(request: Request) -> ConfigBundle:
+    return request.app.state.config_bundle
+
+
+def get_local_worker_loop(request: Request) -> LocalWorkerLoop:
+    return request.app.state.local_worker_loop
 
 
 def require_current_user(
@@ -64,3 +74,12 @@ def require_current_user(
             headers={"WWW-Authenticate": "Bearer"},
         )
     return user
+
+
+def require_admin_user(current_user: User = Depends(require_current_user)) -> User:
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access is required.",
+        )
+    return current_user

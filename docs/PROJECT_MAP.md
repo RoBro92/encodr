@@ -34,7 +34,7 @@
 
 ## `apps/`
 
-- `api/`: FastAPI service entry point, auth routes, dependencies, schemas, and service-layer wiring
+- `api/`: FastAPI service entry point, auth routes, operational file or job routes, system or config visibility routes, dependencies, schemas, and service-layer wiring
 - `worker/`: local worker entry point and execution module placeholders
 - `ui/`: Vite + React starter UI
 - `worker-agent/`: future remote worker control-plane process
@@ -50,6 +50,7 @@
 - `db/encodr_db/models/`: SQLAlchemy models for tracked files, snapshots, jobs, users, refresh tokens, and audit events
 - `db/encodr_db/repositories/`: repository helpers for file, snapshot, job, auth, and audit persistence
 - `db/encodr_db/migrations/`: Alembic environment and revision history
+- `db/encodr_db/runtime/`: shared local worker loop and execution bridge used by the worker process and API run-once endpoint
 - `shared/`: small enums and type helpers
 
 ## `infra/`

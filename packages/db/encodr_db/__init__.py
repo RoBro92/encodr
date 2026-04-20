@@ -23,6 +23,7 @@ from encodr_db.repositories import (
     TrackedFileRepository,
     UserRepository,
 )
+from encodr_db.runtime import LocalWorkerLoop, WorkerExecutionService, WorkerRunSummary, WorkerStatusSnapshot, WorkerStatusTracker
 
 __all__ = [
     "AuditEvent",
@@ -46,4 +47,9 @@ __all__ = [
     "User",
     "UserRepository",
     "UserRole",
+    "LocalWorkerLoop",
+    "WorkerExecutionService",
+    "WorkerRunSummary",
+    "WorkerStatusSnapshot",
+    "WorkerStatusTracker",
 ]
