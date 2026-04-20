@@ -13,6 +13,7 @@ COPY packages/core /app/packages/core
 COPY packages/db /app/packages/db
 COPY packages/shared /app/packages/shared
 COPY apps/worker /app/apps/worker
+COPY VERSION /app/VERSION
 
 RUN pip install --no-cache-dir "psycopg[binary]>=3.1,<4.0" \
     && pip install --no-cache-dir \
