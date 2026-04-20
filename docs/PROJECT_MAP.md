@@ -60,9 +60,11 @@
 ## `tests/`
 
 - `fixtures/`: sample metadata and future anonymised media fixtures
+- `helpers/`: reusable API, auth, DB, filesystem, and job-setup helpers
 - `unit/`: deterministic unit tests
 - `integration/`: service and persistence integration tests
-- `e2e/`: full workflow and UI tests
+- `e2e/`: controlled vertical-slice workflow tests
+- `conftest.py` and `pytest.ini`: shared pytest path setup, marker registration, and collection defaults
 
 ## Current naming note
 

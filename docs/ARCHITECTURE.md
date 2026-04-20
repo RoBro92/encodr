@@ -77,3 +77,10 @@ The repository is organised as a small monorepo:
 - richer manual review workflows
 - UI-backed policy editing layered on top of YAML-backed config
 - stronger storage awareness and scheduling decisions
+
+## Testing baseline
+
+- `tests/unit` covers deterministic domain logic in isolation.
+- `tests/integration` uses the real FastAPI app, Alembic migrations, repositories, auth flow, and worker wiring, while mocking external media binaries where needed.
+- `tests/e2e` provides controlled vertical-slice checks across auth, persisted jobs, worker execution, verification, and safe placement.
+- `smoke` and `security` markers provide small, targeted gates for runtime boot checks and auth or audit regressions.

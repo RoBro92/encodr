@@ -18,12 +18,14 @@ def json_type():
 
 
 def upgrade() -> None:
+    is_sqlite = op.get_context().dialect.name == "sqlite"
     with op.batch_alter_table("jobs") as batch_op:
         batch_op.add_column(sa.Column("output_path", sa.Text(), nullable=True))
         batch_op.add_column(sa.Column("execution_command", json_type(), nullable=True))
         batch_op.add_column(sa.Column("execution_stdout", sa.Text(), nullable=True))
         batch_op.add_column(sa.Column("execution_stderr", sa.Text(), nullable=True))
-        batch_op.drop_constraint("ck_jobs_job_status", type_="check")
+        if not is_sqlite:
+            batch_op.drop_constraint("ck_jobs_job_status", type_="check")
         batch_op.alter_column("status", existing_type=sa.String(length=13), type_=sa.String(length=32))
 
     op.execute("UPDATE jobs SET status = 'completed' WHERE status = 'succeeded'")
@@ -49,8 +51,10 @@ def upgrade() -> None:
 
 
 def downgrade() -> None:
+    is_sqlite = op.get_context().dialect.name == "sqlite"
     with op.batch_alter_table("jobs") as batch_op:
-        batch_op.drop_constraint("ck_jobs_job_status", type_="check")
+        if not is_sqlite:
+            batch_op.drop_constraint("ck_jobs_job_status", type_="check")
         batch_op.alter_column("status", existing_type=sa.String(length=32), type_=sa.String(length=32))
 
     op.execute("UPDATE jobs SET status = 'succeeded' WHERE status = 'completed'")

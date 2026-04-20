@@ -37,6 +37,12 @@
 - Append-only audit events record bootstrap admin creation, bootstrap blocking, login success or failure, logout, and token refresh
 - Events retain the acting username or user id where available, plus source IP, user agent, outcome, and structured details
 
+## Validation baseline
+
+- Security-sensitive behaviour is covered by integration and end-to-end tests rather than unit tests alone.
+- The current baseline checks bootstrap restrictions, protected-route enforcement, inactive-user denial, refresh rotation, logout revocation, audit event persistence, and non-test auth-secret sanity.
+- Worker-flow tests also guard against unsafe success states by asserting that files are not marked complete before verification and placement succeed.
+
 ## File-system and process controls
 
 - mount only the required media paths

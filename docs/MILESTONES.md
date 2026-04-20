@@ -51,6 +51,12 @@ Use this file as the working delivery checklist. Each milestone is intended to l
 - [x] PR 7.2 Add JWT or session token handling with refresh flow
 - [x] PR 7.3 Add audit logging for sensitive actions
 
+## Milestone 7.5: testing and validation baseline
+
+- [x] PR 7.5.1 Add layered pytest markers, shared helpers, and test DB bootstrapping
+- [x] PR 7.5.2 Add integration coverage for auth, migrations, and worker execution flow
+- [x] PR 7.5.3 Add end-to-end smoke coverage and selective test commands
+
 ## Milestone 8: API endpoints
 
 - [ ] PR 8.1 Add job and file read endpoints

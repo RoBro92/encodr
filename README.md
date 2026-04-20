@@ -8,13 +8,14 @@ The project is intentionally narrow in scope. It is not a downloader, a Plex man
 
 This repository currently contains:
 
-- a monorepo scaffold for the API, worker, UI, and shared packages
-- starter documentation for architecture, policy behaviour, deployment, and milestones
-- example YAML configuration files and policy profiles
-- skeletal Docker Compose and Dockerfiles
-- minimal runnable placeholders for the API, UI, and worker processes
+- a working configuration bootstrap layer with validated YAML policy and profile loading
+- ffprobe ingestion, normalised media models, and deterministic planning
+- Postgres-oriented persistence with Alembic migrations and repository helpers
+- a local worker flow for execute, verify, and safe replacement
+- a local auth baseline with bootstrap admin creation, JWT access tokens, refresh tokens, and audit events
+- layered tests covering unit, integration, end-to-end, smoke, and security cases
 
-No real media planning or execution logic has been implemented yet.
+The broader job, file, and operational API surface is still intentionally narrow at this stage.
 
 ## Planned stack
 
@@ -40,3 +41,10 @@ No real media planning or execution logic has been implemented yet.
 - Milestones: [docs/MILESTONES.md](docs/MILESTONES.md)
 - Repo map: [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md)
 
+## Testing
+
+- `make test-unit`
+- `make test-integration`
+- `make test-e2e`
+- `make test-security`
+- `make test-all`

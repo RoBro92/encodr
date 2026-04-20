@@ -12,4 +12,5 @@ def enum_type(enum_class: type[Enum], name: str) -> SqlEnum:
         native_enum=False,
         validate_strings=True,
         create_constraint=True,
+        values_callable=lambda enum_members: [member.value for member in enum_members],
     )

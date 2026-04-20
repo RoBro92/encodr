@@ -1,31 +1,16 @@
 from __future__ import annotations
 
-import sys
 from pathlib import Path
 
-from fastapi.testclient import TestClient
-from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.pool import StaticPool
 
-API_APP_ROOT = Path(__file__).resolve().parents[2] / "apps" / "api"
-if str(API_APP_ROOT) not in sys.path:
-    sys.path.insert(0, str(API_APP_ROOT))
-
-from app.core.security import PasswordHashService
-from app.main import create_app
-from encodr_core.config import load_config_bundle
-from encodr_db import Base
 from encodr_db.models import AuditEventType, AuditOutcome, UserRole
-from encodr_db.repositories import AuditEventRepository, RefreshTokenRepository, UserRepository
+from encodr_db.repositories import AuditEventRepository, UserRepository
+from tests.helpers.api import create_test_api_context, load_api_security_module
+from tests.helpers.auth import bootstrap_admin, login_user
+from tests.helpers.db import create_schema_session_factory
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
-
-for module_name in [name for name in sys.modules if name == "app" or name.startswith("app.")]:
-    sys.modules.pop(module_name, None)
-
-if str(API_APP_ROOT) in sys.path:
-    sys.path.remove(str(API_APP_ROOT))
 
 
 def test_bootstrap_admin_works_only_when_no_users_exist(monkeypatch) -> None:
@@ -64,7 +49,7 @@ def test_bootstrap_admin_is_blocked_after_first_user_exists(monkeypatch) -> None
 
 
 def test_password_hashing_and_verification() -> None:
-    service = PasswordHashService("argon2id")
+    service = load_api_security_module().PasswordHashService("argon2id")
     password_hash = service.hash_password("super-secure-password")
 
     assert password_hash != "super-secure-password"
@@ -76,10 +61,7 @@ def test_successful_login_returns_valid_auth_material(monkeypatch) -> None:
     client, _ = build_test_client(monkeypatch)
     bootstrap_admin(client)
 
-    response = client.post(
-        "/api/auth/login",
-        json={"username": "admin", "password": "super-secure-password"},
-    )
+    response = client.post("/api/auth/login", json={"username": "admin", "password": "super-secure-password"})
 
     assert response.status_code == 200
     payload = response.json()
@@ -122,7 +104,7 @@ def test_protected_endpoint_accepts_authenticated_access(monkeypatch) -> None:
 
     response = client.get(
         "/api/health/authenticated",
-        headers={"Authorization": f"Bearer {auth['access_token']}"},
+        headers=auth.headers,
     )
 
     assert response.status_code == 200
@@ -135,11 +117,11 @@ def test_logout_invalidates_refresh_flow(monkeypatch) -> None:
 
     logout_response = client.post(
         "/api/auth/logout",
-        headers={"Authorization": f"Bearer {auth['access_token']}"},
+        headers=auth.headers,
     )
     refresh_response = client.post(
         "/api/auth/refresh",
-        json={"refresh_token": auth["refresh_token"]},
+        json={"refresh_token": auth.refresh_token},
     )
 
     assert logout_response.status_code == 200
@@ -152,16 +134,16 @@ def test_refresh_works_and_rotates_refresh_token(monkeypatch) -> None:
 
     response = client.post(
         "/api/auth/refresh",
-        json={"refresh_token": auth["refresh_token"]},
+        json={"refresh_token": auth.refresh_token},
     )
     second_refresh = client.post(
         "/api/auth/refresh",
-        json={"refresh_token": auth["refresh_token"]},
+        json={"refresh_token": auth.refresh_token},
     )
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["refresh_token"] != auth["refresh_token"]
+    assert payload["refresh_token"] != auth.refresh_token
     assert second_refresh.status_code == 401
 
 
@@ -171,7 +153,7 @@ def test_auth_me_returns_current_user_details(monkeypatch) -> None:
 
     response = client.get(
         "/api/auth/me",
-        headers={"Authorization": f"Bearer {auth['access_token']}"},
+        headers=auth.headers,
     )
 
     assert response.status_code == 200
@@ -182,7 +164,7 @@ def test_auth_me_returns_current_user_details(monkeypatch) -> None:
 
 def test_inactive_users_cannot_authenticate(monkeypatch) -> None:
     client, session_factory = build_test_client(monkeypatch)
-    hasher = PasswordHashService("argon2id")
+    hasher = load_api_security_module().PasswordHashService("argon2id")
 
     with session_factory() as session:
         UserRepository(session).create_user(
@@ -206,10 +188,10 @@ def test_audit_events_are_persisted_for_success_and_failure_cases(monkeypatch) -
     bootstrap_admin(client)
     auth = login_admin(client)
     client.post("/api/auth/login", json={"username": "admin", "password": "wrong-password"})
-    client.post("/api/auth/refresh", json={"refresh_token": auth["refresh_token"]})
+    client.post("/api/auth/refresh", json={"refresh_token": auth.refresh_token})
     client.post(
         "/api/auth/logout",
-        headers={"Authorization": f"Bearer {auth['access_token']}"},
+        headers=auth.headers,
     )
 
     with session_factory() as session:
@@ -222,41 +204,19 @@ def test_audit_events_are_persisted_for_success_and_failure_cases(monkeypatch) -
         assert (AuditEventType.LOGOUT, AuditOutcome.SUCCESS) in event_pairs
 
 
-def build_test_client(monkeypatch) -> tuple[TestClient, sessionmaker]:
+def build_test_client(monkeypatch) -> tuple[object, sessionmaker]:
     monkeypatch.setenv("ENCODR_AUTH_SECRET", "test-auth-secret-with-sufficient-length")
-    bundle = load_config_bundle(project_root=REPO_ROOT)
-    engine = create_engine(
-        "sqlite+pysqlite:///:memory:",
-        future=True,
-        connect_args={"check_same_thread": False},
-        poolclass=StaticPool,
+    _, session_factory = create_schema_session_factory()
+    context = create_test_api_context(
+        repo_root=REPO_ROOT,
+        session_factory=session_factory,
     )
-    Base.metadata.create_all(engine)
-    session_factory = sessionmaker(engine, future=True, expire_on_commit=False)
-    app = create_app(config_bundle=bundle, session_factory=session_factory)
-    client = TestClient(app)
-    return client, session_factory
+    return context.client, session_factory
 
 
-def bootstrap_admin(client: TestClient) -> None:
-    response = client.post(
-        "/api/auth/bootstrap-admin",
-        json={"username": "admin", "password": "super-secure-password"},
-    )
-    assert response.status_code == 201
-
-
-def login_admin(client: TestClient) -> dict[str, str]:
-    bootstrap_response = client.post(
-        "/api/auth/bootstrap-admin",
-        json={"username": "admin", "password": "super-secure-password"},
-    )
-    if bootstrap_response.status_code not in {201, 403}:
-        raise AssertionError(bootstrap_response.text)
-
-    response = client.post(
-        "/api/auth/login",
-        json={"username": "admin", "password": "super-secure-password"},
-    )
-    assert response.status_code == 200
-    return response.json()
+def login_admin(client):
+    try:
+        bootstrap_admin(client)
+    except AssertionError:
+        pass
+    return login_user(client)
