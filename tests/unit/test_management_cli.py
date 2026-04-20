@@ -225,6 +225,8 @@ def test_install_script_uses_latest_tagged_release_by_default(repo_root: Path) -
     assert 'ref="$(resolve_latest_release_tag)"' in install_script
     assert 'release_metadata_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"' in install_script
     assert 'selected_url="https://github.com/${REPO_OWNER}/${REPO_NAME}/archive/refs/tags/${ref}.tar.gz"' in install_script
+    assert 'python3 -c ' in install_script
+    assert "json.load(sys.stdin)" in install_script
     assert "Unable to download the Encodr tagged release" in install_script
     assert "archive/refs/heads" not in install_script
 

@@ -435,7 +435,7 @@ resolve_latest_release_tag() {
   local latest_tag=""
 
   latest_tag="$(
-    curl -fsSL "${release_metadata_url}" | python3 - <<'PY'
+    curl -fsSL "${release_metadata_url}" | python3 -c '
 import json
 import sys
 
@@ -444,7 +444,7 @@ tag_name = str(payload.get("tag_name") or "").strip()
 if not tag_name:
     raise SystemExit(1)
 print(tag_name)
-PY
+'
   )" || fail "Unable to resolve the latest Encodr tagged release."
 
   printf '%s\n' "${latest_tag}"
