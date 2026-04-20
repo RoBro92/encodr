@@ -139,7 +139,12 @@ require_root() {
 
 resolve_script_root() {
   local source_dir
-  source_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")" 2>/dev/null && pwd || true)"
+  local script_source="${BASH_SOURCE[0]-}"
+  if [[ -n "${script_source}" ]]; then
+    source_dir="$(cd "$(dirname "${script_source}")" 2>/dev/null && pwd || true)"
+  else
+    source_dir=""
+  fi
 
   if [[ -n "${source_dir}" && -f "${source_dir}/docker-compose.yml" && -f "${source_dir}/.env.example" ]]; then
     SCRIPT_ROOT="${source_dir}"
@@ -529,6 +534,6 @@ main() {
   show_urls
 }
 
-if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
+if [[ "${BASH_SOURCE[0]-$0}" == "$0" ]]; then
   main "$@"
 fi

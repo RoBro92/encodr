@@ -215,6 +215,7 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "encodr mount-setup --validate-only" in install_script
     assert "tmp_dir: unbound variable" not in install_script
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
+    assert "${BASH_SOURCE[0]-$0}" in install_script
 
 
 def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
@@ -246,6 +247,38 @@ def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> 
     assert "--repair" in install_doc
     assert "--fresh --force-fresh" in install_doc
     assert "--version 0.1.0" in install_doc
+
+
+def test_install_script_help_works_when_piped_into_bash(repo_root: Path) -> None:
+    result = subprocess.run(
+        ["bash", "-lc", f"cat '{repo_root / 'install.sh'}' | bash -s -- --help"],
+        text=True,
+        capture_output=True,
+        cwd=repo_root,
+    )
+
+    assert result.returncode == 0
+    assert "Encodr installer" in result.stdout
+    assert "Usage:" in result.stdout
+    assert "BASH_SOURCE[0]: unbound variable" not in result.stderr
+
+
+def test_install_script_uses_remote_mode_when_script_path_is_unavailable(
+    repo_root: Path,
+) -> None:
+    result = subprocess.run(
+        [
+            "bash",
+            "-lc",
+            f"cat '{repo_root / 'install.sh'}' | ENCODR_INSTALL_ROOT='/tmp/encodr-test-root' bash -s -- --help",
+        ],
+        text=True,
+        capture_output=True,
+        cwd=repo_root,
+    )
+
+    assert result.returncode == 0
+    assert "Encodr installer" in result.stdout
 
 
 def test_install_script_loads_dotenv_values_with_spaces_safely(
