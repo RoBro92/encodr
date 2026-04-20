@@ -90,7 +90,7 @@ export function LoginPage() {
         <h1>{bootstrapRequired ? "Set up the first admin user" : "Sign in to the operator console"}</h1>
         <p className="section-copy">
           {bootstrapRequired
-            ? "No users exist yet. Create the first admin account to finish initial setup."
+            ? "No users exist yet. Create the first admin account to finish setup. You can mount your media library later if it is not ready yet."
             : "Encodr controls file probing, planning, job execution, and safe replacement. Authentication is required for every operational action."}
         </p>
         <p className="login-version">Encodr v{displayedVersion}</p>

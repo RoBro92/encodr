@@ -1,16 +1,28 @@
 # Storage Setup
 
-## Recommended model
+Encodr expects your media library at:
 
-For Proxmox and Debian LXC, the preferred storage model is:
+```text
+/media
+```
+
+This is the standard in-container media root used by the app, the installer guidance, the worker, and the storage health UI.
+
+## Recommended Proxmox LXC model
+
+Recommended order:
 
 1. mount the NFS or SMB share on the Proxmox host
-2. bind-mount that host path into the LXC
-3. bind the LXC-visible path into Docker inside the LXC
+2. pass it into the LXC as a mount point
+3. let Docker inside the LXC expose that same path to Encodr at `/media`
 
-This keeps network filesystem concerns on the host and makes the container-side runtime simpler and easier to diagnose.
+This keeps network storage on the host side and makes container diagnostics simpler.
 
-## Operator helper
+## Linux VM or direct host model
+
+If you are running Encodr directly in a Linux VM or on a Linux host, mount the share with `/etc/fstab` so it is available at `/media`, then start the stack.
+
+## Validation
 
 Use:
 
@@ -18,25 +30,35 @@ Use:
 encodr mount-setup --validate-only
 ```
 
-Optional guidance mode:
+Encodr will report whether `/media`:
+
+- exists
+- is readable
+- is writable
+- looks empty when you expected a library mount
+
+The System page in the web UI also shows the same storage diagnostics.
+
+Typical messages are:
+
+- `Media mount not found at /media`
+- `Media path exists but is not readable`
+- `Media path exists but is not writable`
+- `Storage is not configured yet`
+
+## Guidance output
+
+You can ask Encodr for host-side guidance:
 
 ```bash
-encodr mount-setup --type nfs --host-source 10.0.0.10:/media
+encodr mount-setup --type nfs --host-source 10.0.0.10:/share
+encodr mount-setup --type smb --host-source //server/share
 ```
 
-The command can:
-- validate the container-visible path
-- report readability and writability
-- create the target directory if asked
-- print a suggested `/etc/fstab` line
-- print a suggested Proxmox `mp0` style mount-point snippet
+This prints suggested host-side mount snippets and the recommended LXC-visible target path.
 
-## Path expectations
+## Notes
 
-- media shares should be mounted separately from scratch
-- scratch should live on fast local storage where possible
-- mounted media paths must be readable and writable from the LXC if Encodr is expected to replace files
-
-## Fallback
-
-In-container NFS or SMB mounts are possible, but they are a secondary option and come with more operational caveats. The host-bind-mount model remains the recommended approach.
+- scratch space should stay on fast local storage, not on the media share
+- Encodr can start before storage is mounted, but jobs should wait until `/media` is healthy
+- if you want verified files to be written back into the library, `/media` must be writable

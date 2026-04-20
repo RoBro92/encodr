@@ -28,6 +28,8 @@ from encodr_shared.update import UpdateChecker
 
 
 class SystemService:
+    STANDARD_MEDIA_ROOT = "/media"
+
     def __init__(
         self,
         *,
@@ -68,33 +70,75 @@ class SystemService:
                 free_space_bytes = None
                 free_space_ratio = None
 
+        display_name = {
+            "scratch": "Scratch workspace",
+            "data": "Application data",
+            "media_mount": "Media library",
+        }.get(role, role.replace("_", " ").title())
+
+        recommended_action: str | None = None
+
         if not exists:
             status = HealthStatus.FAILED
-            message = "Path does not exist."
+            issue_code = "path_missing"
+            if role == "media_mount":
+                message = f"Media mount not found at {resolved.as_posix()}."
+                recommended_action = (
+                    f"Mount your library at {self.STANDARD_MEDIA_ROOT} inside the LXC, "
+                    "then refresh the System page."
+                )
+            else:
+                message = "The path does not exist."
+                recommended_action = "Create the directory or correct the configured path."
         elif not is_directory:
             status = HealthStatus.FAILED
-            message = "Path exists but is not a directory."
+            issue_code = "not_directory"
+            message = "The path exists but is not a directory."
+            recommended_action = "Point Encodr at a directory instead of a file."
         elif not readable:
             status = HealthStatus.FAILED
-            message = "Path is not readable."
+            issue_code = "not_readable"
+            if role == "media_mount":
+                message = "Media path exists but is not readable."
+                recommended_action = "Check the mount permissions from the LXC and Docker containers."
+            else:
+                message = "The path exists, but Encodr cannot read it."
+                recommended_action = "Check the directory permissions for the Encodr runtime."
         elif writable_required and not writable:
             status = HealthStatus.DEGRADED
-            message = "Path is readable but not writable."
+            issue_code = "not_writable"
+            if role == "media_mount":
+                message = "Media path exists but is not writable."
+                recommended_action = "Grant write access if you want Encodr to replace files in place."
+            else:
+                message = "The path is readable, but Encodr cannot write to it."
+                recommended_action = "Grant write access to the Encodr runtime user."
         elif free_space_ratio is not None and free_space_ratio < 0.05:
             status = HealthStatus.FAILED
-            message = "Very low free space is available."
+            issue_code = "low_space_critical"
+            message = "Very little free space is available."
+            recommended_action = "Free space before running more jobs."
         elif free_space_ratio is not None and free_space_ratio < 0.1:
             status = HealthStatus.DEGRADED
+            issue_code = "low_space_warning"
             message = "Free space is getting low."
+            recommended_action = "Plan for additional free space soon."
         else:
             status = HealthStatus.HEALTHY
-            message = "Path is available."
+            issue_code = "ok"
+            if role == "media_mount":
+                message = "The media library path is available."
+            else:
+                message = "The path is available."
 
         return {
             "role": role,
+            "display_name": display_name,
             "path": resolved.as_posix(),
             "status": status,
+            "issue_code": issue_code,
             "message": message,
+            "recommended_action": recommended_action,
             "exists": exists,
             "is_directory": is_directory,
             "readable": readable,
@@ -215,7 +259,14 @@ class SystemService:
 
         items = [scratch, data_dir, *media_mounts]
         warnings = [item["message"] for item in items if item["status"] != HealthStatus.HEALTHY]
-        if any(item["status"] == HealthStatus.FAILED for item in items):
+        media_missing = any(
+            item["role"] == "media_mount" and item["issue_code"] == "path_missing"
+            for item in items
+        )
+        if media_missing:
+            status = HealthStatus.FAILED
+            summary = "Storage is not configured yet."
+        elif any(item["status"] == HealthStatus.FAILED for item in items):
             status = HealthStatus.FAILED
             summary = "One or more configured paths are unavailable."
         elif any(item["status"] == HealthStatus.DEGRADED for item in items):
@@ -228,6 +279,7 @@ class SystemService:
         return {
             "status": status,
             "summary": summary,
+            "standard_media_root": self.STANDARD_MEDIA_ROOT,
             "scratch": scratch,
             "data_dir": data_dir,
             "media_mounts": media_mounts,
@@ -273,6 +325,7 @@ class SystemService:
             "schema_reachable": schema_reachable,
             "auth_enabled": self.config_bundle.app.auth.enabled,
             "api_base_path": self.config_bundle.app.api.base_path,
+            "standard_media_root": self.STANDARD_MEDIA_ROOT,
             "scratch_dir": self.config_bundle.app.scratch_dir.as_posix(),
             "data_dir": self.config_bundle.app.data_dir.as_posix(),
             "media_mounts": [path.as_posix() for path in self.config_bundle.workers.local.media_mounts],

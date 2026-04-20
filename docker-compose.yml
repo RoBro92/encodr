@@ -1,5 +1,3 @@
-version: "3.9"
-
 services:
   api:
     build:
@@ -12,6 +10,7 @@ services:
     volumes:
       - ./config:/config:ro
       - ./scratch:/scratch
+      - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
       - postgres
       - redis
@@ -25,6 +24,7 @@ services:
     volumes:
       - ./config:/config:ro
       - ./scratch:/scratch
+      - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
       - postgres
       - redis
@@ -66,4 +66,3 @@ services:
       - "${REDIS_PORT:-6379}:6379"
     volumes:
       - ./redis-data:/data
-

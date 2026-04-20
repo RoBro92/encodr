@@ -169,15 +169,25 @@ export function SystemPage() {
               <StatusBadge value={storage.status} />
               <span>{storage.summary}</span>
             </div>
+            <p className="muted-copy">
+              Encodr expects your media library at <strong>{storage.standard_media_root}</strong>.
+              If you are using Proxmox, mount the share on the host first and then pass it into the LXC before Docker starts.
+            </p>
             <div className="status-grid">
               {[storage.scratch, storage.data_dir, ...storage.media_mounts].map((pathStatus) => (
                 <article key={pathStatus.role + pathStatus.path} className="status-card">
                   <div className="badge-row">
                     <StatusBadge value={pathStatus.status} />
-                    <strong>{pathStatus.role.replace("_", " ")}</strong>
+                    <strong>{pathStatus.display_name}</strong>
                   </div>
                   <p className="muted-copy">{pathStatus.path}</p>
                   <p className="muted-copy">{pathStatus.message}</p>
+                  {pathStatus.recommended_action ? (
+                    <div className="info-strip" role="note">
+                      <strong>Recommended action</strong>
+                      <span>{pathStatus.recommended_action}</span>
+                    </div>
+                  ) : null}
                   <div className="metric-grid">
                     <HealthMetric label="Readable" value={formatRelativeBoolean(pathStatus.readable)} />
                     <HealthMetric label="Writable" value={formatRelativeBoolean(pathStatus.writable)} />

@@ -405,10 +405,11 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/system", initialSession: makeSession() });
 
     const storageWarnings = await screen.findAllByText(
-      /storage is reachable but needs attention|one or more configured paths are unavailable/i,
+      /storage is not configured yet|encodr expects your media library at/i,
     );
     expect(storageWarnings.length).toBeGreaterThan(0);
-    expect(screen.getByText(/storage needs attention/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/storage is not configured yet/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/grant write access if you want encodr to replace files in place/i).length).toBeGreaterThan(0);
     await userEvent.click(screen.getByRole("button", { name: /run self-test/i }));
 
     await waitFor(() => {
@@ -725,6 +726,7 @@ function runtimeStatus({
     schema_reachable: true,
     auth_enabled: true,
     api_base_path: "/api",
+    standard_media_root: "/media",
     scratch_dir: "/tmp/scratch",
     data_dir: "/tmp/data",
     media_mounts: ["/media"],
@@ -763,12 +765,16 @@ function storageStatus({
 } = {}) {
   return {
     status,
-    summary: status === "healthy" ? "Configured storage paths are healthy." : "One or more configured paths are unavailable.",
+    summary: status === "healthy" ? "Configured storage paths are healthy." : "Storage is not configured yet.",
+    standard_media_root: "/media",
     scratch: {
       role: "scratch",
+      display_name: "Scratch workspace",
       path: "/tmp/scratch",
       status: scratchStatus,
-      message: scratchStatus === "healthy" ? "Path is available." : "Path does not exist.",
+      issue_code: scratchStatus === "healthy" ? "ok" : "path_missing",
+      message: scratchStatus === "healthy" ? "The path is available." : "The path does not exist.",
+      recommended_action: scratchStatus === "healthy" ? null : "Create the directory or correct the configured path.",
       exists: scratchStatus === "healthy",
       is_directory: scratchStatus === "healthy",
       readable: scratchStatus === "healthy",
@@ -779,9 +785,12 @@ function storageStatus({
     },
     data_dir: {
       role: "data",
+      display_name: "Application data",
       path: "/tmp/data",
       status: "healthy",
-      message: "Path is available.",
+      issue_code: "ok",
+      message: "The path is available.",
+      recommended_action: null,
       exists: true,
       is_directory: true,
       readable: true,
@@ -792,9 +801,12 @@ function storageStatus({
     },
     media_mounts: [{
       role: "media_mount",
+      display_name: "Media library",
       path: "/media",
       status: status === "healthy" ? "healthy" : "degraded",
-      message: status === "healthy" ? "Path is available." : "Path is readable but not writable.",
+      issue_code: status === "healthy" ? "ok" : "not_writable",
+      message: status === "healthy" ? "The media library path is available." : "The media library path is readable, but Encodr cannot write back to it.",
+      recommended_action: status === "healthy" ? null : "Grant write access if you want Encodr to replace files in place.",
       exists: true,
       is_directory: true,
       readable: true,
@@ -803,7 +815,7 @@ function storageStatus({
       free_space_bytes: 1_000_000_000,
       free_space_ratio: 0.5,
     }],
-    warnings: status === "healthy" ? [] : ["Path does not exist."],
+    warnings: status === "healthy" ? [] : ["The media library path is readable, but Encodr cannot write back to it."],
   };
 }
 

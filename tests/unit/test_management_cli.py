@@ -52,15 +52,18 @@ def test_command_doctor_reports_runtime_and_storage_status(
         def storage_status(self) -> dict[str, object]:
             healthy_path = {
                 "role": "scratch",
+                "display_name": "Scratch workspace",
                 "status": "healthy",
                 "path": "/srv/encodr/scratch",
+                "message": "The path is available.",
+                "recommended_action": None,
             }
             return {
                 "status": "healthy",
                 "summary": "Configured storage paths are healthy.",
                 "scratch": healthy_path,
-                "data_dir": {**healthy_path, "role": "data", "path": "/srv/encodr/data"},
-                "media_mounts": [{**healthy_path, "role": "media_mount", "path": "/mnt/media"}],
+                "data_dir": {**healthy_path, "role": "data", "display_name": "Application data", "path": "/srv/encodr/data"},
+                "media_mounts": [{**healthy_path, "role": "media_mount", "display_name": "Media library", "path": "/media"}],
             }
 
     monkeypatch.setattr(encodr_cli, "get_system_service_class", lambda: FakeSystemService)
@@ -71,6 +74,64 @@ def test_command_doctor_reports_runtime_and_storage_status(
     assert result == 0
     assert "Version: 0.1.0" in output
     assert "API health: healthy" in output
+
+
+def test_command_status_reports_media_mount_problem_clearly(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(encodr_cli, "create_session_factory", lambda _bundle: object())
+    monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
+
+    class FakeSystemService:
+        def __init__(self, **_kwargs) -> None:
+            pass
+
+        def runtime_status(self) -> dict[str, object]:
+            return {
+                "version": "0.1.0",
+                "status": "degraded",
+                "summary": "Runtime health completed with warnings.",
+                "db_reachable": True,
+                "schema_reachable": True,
+                "first_user_setup_required": False,
+            }
+
+        def storage_status(self) -> dict[str, object]:
+            healthy_path = {
+                "role": "scratch",
+                "display_name": "Scratch workspace",
+                "status": "healthy",
+                "path": "/srv/encodr/scratch",
+                "message": "The path is available.",
+                "recommended_action": None,
+            }
+            return {
+                "status": "failed",
+                "summary": "Storage is not configured yet.",
+                "scratch": healthy_path,
+                "data_dir": {**healthy_path, "role": "data", "display_name": "Application data", "path": "/srv/encodr/data"},
+                "media_mounts": [{
+                    **healthy_path,
+                    "role": "media_mount",
+                    "display_name": "Media library",
+                    "status": "failed",
+                    "path": "/media",
+                    "message": "Media mount not found at /media.",
+                    "recommended_action": "Mount your library at /media inside the LXC, then refresh the System page.",
+                }],
+            }
+
+    monkeypatch.setattr(encodr_cli, "get_system_service_class", lambda: FakeSystemService)
+
+    result = encodr_cli.command_doctor(argparse.Namespace(project_root="."))
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert "Storage: failed - Storage is not configured yet." in output
+    assert "Media mount not found at /media." in output
+    assert "Mount your library at /media inside the LXC" in output
 
 
 def test_command_reset_admin_creates_first_admin(
@@ -132,11 +193,44 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
 
     assert "./infra/scripts/bootstrap.sh" in install_script
-    assert "docker compose up -d --build" in install_script
+    assert "docker compose up -d --build >/dev/null || fail" in install_script
     assert "./encodr doctor" in install_script
+    assert "DEFAULT_INSTALL_REF=\"main\"" in install_script
+    assert "docker info >/dev/null 2>&1" in install_script
+    assert "Docker daemon is not available" in install_script
+    assert "Docker Compose is not available" in install_script
+    assert "API health check did not succeed" in install_script
 
 
-def fake_bundle(*, database_url: str = "sqlite+pysqlite:///:memory:", media_mount: str = "/mnt/media"):
+def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
+    install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
+
+    assert "--version REF" in install_script
+    assert "instead of the default ${DEFAULT_INSTALL_REF}" in install_script
+    assert "Unknown installer option" in install_script
+
+
+def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
+    readme = (repo_root / "README.md").read_text(encoding="utf-8")
+
+    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash" in readme
+    assert "--version 0.1.0" in readme
+    assert "encodr update" in readme
+
+
+def test_gitignore_excludes_local_ui_workspace(repo_root: Path) -> None:
+    gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
+
+    assert "dev-local/" in gitignore
+
+
+def test_workers_example_uses_media_root(repo_root: Path) -> None:
+    workers_example = (repo_root / "config" / "workers.example.yaml").read_text(encoding="utf-8")
+
+    assert "- /media" in workers_example
+
+
+def fake_bundle(*, database_url: str = "sqlite+pysqlite:///:memory:", media_mount: str = "/media"):
     return SimpleNamespace(
         app=SimpleNamespace(
             environment=SimpleNamespace(value="development"),

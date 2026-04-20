@@ -27,8 +27,8 @@ cat <<'EOF'
 Bootstrap complete.
 
 Next steps:
-1. Review `.env` and set `ENCODR_AUTH_SECRET` and `ENCODR_WORKER_REGISTRATION_SECRET`.
-2. Review `config/app.yaml`, `config/policy.yaml`, and `config/workers.yaml`.
-3. Start dependencies with `make dev-up`.
-4. Run the API, worker, and UI locally as needed with `make api`, `make worker`, and `make ui`.
+1. Start the stack with `make dev-up` or `sudo ./install.sh`.
+2. Open the UI and create the first admin user if prompted.
+3. Mount your media library at `/media` when you are ready to work with real files.
+4. Check access with `./encodr mount-setup --validate-only`.
 EOF

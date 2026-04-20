@@ -94,9 +94,10 @@ export function AppShell() {
         ) : null}
         {runtimeQuery.data?.storage_setup_incomplete ? (
           <div className="info-strip" role="note">
-            <strong>Storage needs attention.</strong>
+            <strong>Storage is not configured yet.</strong>
             <span>
-              One or more configured paths are degraded or missing. Review the System page or run{" "}
+              Encodr expects your media library at{" "}
+              <code>{runtimeQuery.data.standard_media_root}</code>. Open the System page or run{" "}
               <code>encodr mount-setup --validate-only</code>.
             </span>
           </div>

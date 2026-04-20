@@ -213,9 +213,12 @@ export type WorkerStatus = {
 
 export type PathStatus = {
   role: string;
+  display_name: string;
   path: string;
   status: string;
+  issue_code: string;
   message: string;
+  recommended_action: string | null;
   exists: boolean;
   is_directory: boolean;
   readable: boolean;
@@ -228,6 +231,7 @@ export type PathStatus = {
 export type StorageStatus = {
   status: string;
   summary: string;
+  standard_media_root: string;
   scratch: PathStatus;
   data_dir: PathStatus;
   media_mounts: PathStatus[];
@@ -243,6 +247,7 @@ export type RuntimeStatus = {
   schema_reachable: boolean;
   auth_enabled: boolean;
   api_base_path: string;
+  standard_media_root: string;
   scratch_dir: string;
   data_dir: string;
   media_mounts: string[];

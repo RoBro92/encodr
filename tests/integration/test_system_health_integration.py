@@ -59,8 +59,11 @@ def test_storage_endpoint_returns_path_health_structure_and_degraded_status(
     assert response.status_code == 200
     payload = response.json()
     assert payload["status"] == "failed"
+    assert payload["standard_media_root"] == "/media"
     assert any(item["status"] == "failed" for item in payload["media_mounts"])
-    assert any("does not exist" in warning.lower() for warning in payload["warnings"])
+    assert any(item["issue_code"] == "path_missing" for item in payload["media_mounts"])
+    assert payload["summary"] == "Storage is not configured yet."
+    assert any("media mount not found at" in warning.lower() for warning in payload["warnings"])
 
 
 def test_runtime_endpoint_returns_health_summary_and_queue_state(
@@ -79,6 +82,7 @@ def test_runtime_endpoint_returns_health_summary_and_queue_state(
     assert payload["db_reachable"] is True
     assert payload["schema_reachable"] is True
     assert payload["auth_enabled"] is True
+    assert payload["standard_media_root"] == "/media"
     assert payload["local_worker_enabled"] is True
     assert payload["user_count"] == 1
     assert payload["queue_health"]["pending_count"] == 1

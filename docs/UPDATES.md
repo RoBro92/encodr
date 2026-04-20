@@ -1,50 +1,38 @@
 # Updates
 
-## Current model
+Encodr uses a conservative command-line update flow.
 
-Encodr uses a simple update-check and archive-install model suitable for internal use.
+The recommended install path uses the installer from `main`, while updates after install should use the local CLI.
 
-- the current version comes from the root `VERSION` file
-- the API and UI expose the running version
-- update checks read version metadata from a configured source
-- the UI shows update availability, but does not install updates
-- the root CLI can check and apply an update archive
-
-## Metadata expectations
-
-The configured update metadata source should provide a JSON object containing at least:
-
-- `latest_version`
-- optional `channel`
-- optional `download_url`
-- optional `release_notes_url`
-
-## CLI flow
+## Check for updates
 
 ```bash
-encodr update-check
 encodr update
+```
+
+This checks the configured metadata source and tells you whether a newer release is available.
+
+## Apply an update
+
+```bash
 encodr update --apply
 ```
 
-`encodr update --apply`:
-- checks metadata
-- downloads the release archive
-- syncs the release tree into the install root
-- preserves local `.env`, runtime state, and live config files
-- rebuilds/restarts the Compose stack
-- runs `encodr doctor`
+When an update is available, Encodr will:
 
-## Safety notes
+- download the release archive
+- update the install tree
+- preserve local runtime files such as `.env`, `.runtime`, and live config
+- rebuild and restart the Docker stack
+- run health checks afterwards
 
+## UI behaviour
+
+The web UI can show that an update is available, but it does not apply updates itself. Updates remain a command-line operator action.
+
+## Notes
+
+- automatic rollback is not implemented
 - update checks can be disabled
-- no secrets are returned through update endpoints
-- the web UI is read-only for updates
-- automatic rollback is not implemented yet
-- operators should review `CHANGELOG.md` and run health checks after an update
-
-## Out of scope
-
-- package-repository distribution
-- automatic merge-to-main or tagging
-- in-app self-updating from the browser
+- update checks depend on a trusted version metadata source
+- after updating, run `encodr doctor` if you want an extra manual check

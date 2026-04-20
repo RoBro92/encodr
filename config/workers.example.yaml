@@ -8,7 +8,7 @@ workers:
     queue: local
     scratch_dir: /scratch/encodr
     media_mounts:
-      - /mnt/media
+      - /media
     capabilities:
       ffmpeg: true
       ffprobe: true

@@ -212,6 +212,14 @@ export function DashboardPage() {
                 <StatusBadge value={runtime.db_reachable ? "ok" : "failed"} />
                 <span>Database reachable: {runtime.db_reachable ? "Yes" : "No"}</span>
               </div>
+              {runtime.storage_setup_incomplete ? (
+                <div className="info-strip" role="note">
+                  <strong>Storage still needs setup.</strong>
+                  <span>
+                    Encodr expects your media library at <code>{storage.standard_media_root}</code>. You can sign in and explore the app now, then mount storage when ready.
+                  </span>
+                </div>
+              ) : null}
               <p className="muted-copy">
                 Scratch path writable: <strong>{storage.scratch.writable ? "Yes" : "No"}</strong>
               </p>

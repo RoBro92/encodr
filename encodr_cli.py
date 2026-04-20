@@ -77,7 +77,7 @@ def build_parser() -> argparse.ArgumentParser:
     mount_parser.add_argument("--type", choices=["nfs", "smb"], default="nfs", help="Share type for guidance output.")
     mount_parser.add_argument("--host-source", help="Host-side network share source, for example 10.0.0.10:/share.")
     mount_parser.add_argument("--host-mount", default="/mnt/pve/encodr-media", help="Recommended host-side mount path.")
-    mount_parser.add_argument("--container-target", help="Container-visible mount path. Defaults to the first configured media mount.")
+    mount_parser.add_argument("--container-target", help="Container-visible mount path. Defaults to /media.")
     mount_parser.add_argument("--create-dirs", action="store_true", help="Create the target directory inside the LXC if missing.")
     mount_parser.add_argument("--validate-only", action="store_true", help="Only validate current mounted paths.")
     mount_parser.set_defaults(func=command_mount_setup)
@@ -115,7 +115,11 @@ def command_doctor(args: argparse.Namespace) -> int:
     print(f"First-user setup required: {'yes' if runtime['first_user_setup_required'] else 'no'}")
     print(f"Storage: {storage['status']} - {storage['summary']}")
     for item in [storage["scratch"], storage["data_dir"], *storage["media_mounts"]]:
-        print(f"  - {item['role']}: {item['status']} ({item['path']})")
+        print(f"  - {item.get('display_name', item['role'])}: {item['status']} ({item['path']})")
+        if item.get("message"):
+            print(f"      {item['message']}")
+        if item.get("recommended_action"):
+            print(f"      Next: {item['recommended_action']}")
 
     failed = any(
         [
@@ -212,7 +216,7 @@ def command_mount_setup(args: argparse.Namespace) -> int:
     container_target = args.container_target or (
         bundle.workers.local.media_mounts[0].as_posix()
         if bundle.workers.local.media_mounts
-        else "/mnt/media"
+        else "/media"
     )
     target_path = Path(container_target)
 
@@ -221,11 +225,21 @@ def command_mount_setup(args: argparse.Namespace) -> int:
 
     readable = target_path.exists() and os.access(target_path, os.R_OK)
     writable = target_path.exists() and os.access(target_path, os.W_OK)
+    entry_count = None
+    if target_path.exists() and target_path.is_dir():
+        try:
+            entry_count = sum(1 for _ in target_path.iterdir())
+        except OSError:
+            entry_count = None
 
     print("Recommended model: mount the share on the Proxmox host, bind-mount it into the LXC, then bind it into Docker inside the LXC.")
     print(f"Container target: {container_target}")
     print(f"Readable from LXC: {'yes' if readable else 'no'}")
     print(f"Writable from LXC: {'yes' if writable else 'no'}")
+    if entry_count is not None:
+        print(f"Visible entries: {entry_count}")
+        if entry_count == 0:
+            print("Warning: the media path is empty. If you expected a mounted library, check the host bind mount.")
 
     if not args.validate_only:
         host_mount = args.host_mount

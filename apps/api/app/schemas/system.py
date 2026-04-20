@@ -7,9 +7,12 @@ from app.schemas.worker import HealthStatus, QueueHealthSummaryResponse
 
 class PathStatusResponse(BaseModel):
     role: str
+    display_name: str
     path: str
     status: HealthStatus
+    issue_code: str
     message: str
+    recommended_action: str | None = None
     exists: bool
     is_directory: bool
     readable: bool
@@ -22,6 +25,7 @@ class PathStatusResponse(BaseModel):
 class StorageStatusResponse(BaseModel):
     status: HealthStatus
     summary: str
+    standard_media_root: str
     scratch: PathStatusResponse
     data_dir: PathStatusResponse
     media_mounts: list[PathStatusResponse]
@@ -37,6 +41,7 @@ class RuntimeStatusResponse(BaseModel):
     schema_reachable: bool
     auth_enabled: bool
     api_base_path: str
+    standard_media_root: str
     scratch_dir: str
     data_dir: str
     media_mounts: list[str]

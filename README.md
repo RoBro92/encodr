@@ -1,214 +1,149 @@
 # Encodr
 
-Encodr is a private, self-hosted media ingestion preparation service for Plex-style libraries. It probes media with `ffprobe`, evaluates deterministic YAML policy, plans a conservative action, and then either skips, remuxes, transcodes, or routes the file into manual review before safe verified placement.
+Encodr is a private, self-hosted media preparation service for Plex-style libraries. It inspects files with `ffprobe`, applies deterministic policy, and then safely skips, remuxes, transcodes, or sends a file to manual review before placing the verified result back into your library.
 
-Encodr is intentionally narrow in scope. It is not a downloader, a Plex manager, or a broad workflow platform. The emphasis is on trust, reviewability, and safe handling of files on disk.
+It is designed for people who want a conservative, auditable workflow rather than a broad automation platform.
 
-## Release status
+## What Encodr does
 
-- Current release line: `0.1.0`
-- Maturity: internal `v0.x`
-- Implemented: local auth, probe, planning, DB history, local worker execution, verification/replacement, operational API, UI shell, analytics, manual review/protected flows, and remote-worker registration/heartbeat groundwork
-- Release hardening included: central versioning, update-check plumbing, root CLI management commands, fresh-LXC installer, first-user setup flow, and storage-mount validation guidance
-- Not implemented: remote worker execution, advanced scheduling/orchestration, config editing UI, SSO, BI/report-builder features, automatic rollback for updates
+- scans and inspects media files before ingestion
+- applies policy-driven decisions from YAML managed by the app install
+- treats 4K content conservatively by default
+- keeps English audio and subtitles, including forced English subtitles
+- preserves surround and Atmos-capable audio where possible
+- verifies staged outputs before they are treated as successful
+- keeps a history of probe, plan, job, review, audit, and analytics data
+- provides a web UI for jobs, files, reports, manual review, worker status, and storage health
 
-## Current capabilities
+## Recommended install
 
-- typed YAML configuration bootstrap with profile overlays and validation
-- ffprobe ingestion into stable internal media models
-- deterministic policy evaluation for `skip`, `remux`, `transcode`, and `manual_review`
-- DB-backed tracked-file, probe, plan, job, review, audit, analytics, and worker state
-- local worker execution with verification and safe replacement flow
-- bootstrap-admin auth flow, JWT access tokens, refresh tokens, and audit logging
-- authenticated operational API for files, jobs, review, analytics, config visibility, health, and workers
-- authenticated UI for dashboard, files, jobs, manual review, reports, system health, config summary, and worker inventory
-- remote worker registration and heartbeat groundwork with capability reporting
-
-## Architecture overview
-
-- `apps/api`: FastAPI control plane and authenticated operational API
-- `apps/worker`: local execution worker for probe, plan, execute, verify, and replace
-- `apps/ui`: React + Vite operator console
-- `apps/worker-agent`: remote worker groundwork for register/heartbeat only
-- `packages/core`: deterministic config, probe, planning, execution, verification, and replacement logic
-- `packages/db`: SQLAlchemy models, Alembic migrations, repositories, and local worker runtime helpers
-- `packages/shared`: small shared enums and types
-
-## Prerequisites
-
-- Python 3.11+ for local development in this repository
-- Node.js 20+ and npm for the UI
-- PostgreSQL 16+ for a closer-to-real local stack, though tests also use SQLite where appropriate
-- Redis 7+ for the intended runtime stack
-- `ffmpeg` and `ffprobe` available where the local worker runs
-
-## First-run setup
-
-1. Bootstrap local working files:
-
-   ```bash
-   make bootstrap
-   ```
-
-2. Review and update `.env`:
-   - set `ENCODR_AUTH_SECRET`
-   - set `ENCODR_WORKER_REGISTRATION_SECRET`
-   - confirm `ENCODR_APP_CONFIG_FILE`, `ENCODR_POLICY_CONFIG_FILE`, and `ENCODR_WORKERS_CONFIG_FILE`
-
-3. Review and adjust:
-   - `config/app.yaml`
-   - `config/policy.yaml`
-   - `config/workers.yaml`
-
-4. Start local dependencies if you want the Compose stack:
-
-   ```bash
-   make dev-up
-   ```
-
-5. If no users exist yet, either:
-   - open the UI and follow the first-user setup form on the sign-in page, or
-   - call `POST /api/auth/bootstrap-admin`, or
-   - run `./encodr reset-admin --username admin`
-
-## Fresh Debian LXC install
-
-For a conservative fresh install inside a Debian LXC:
+Run this inside your Debian LXC or Linux VM:
 
 ```bash
-sudo ./install.sh
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash
 ```
 
-The installer:
-- installs base packages plus Docker and Compose if missing
-- bootstraps `.env` and `config/*.yaml`
-- generates strong local secrets when placeholders are still present
-- brings up the stack
-- waits for API health
-- prints detected IP addresses, URLs, and next steps
+The installer will:
 
-After install, use:
+- install system dependencies, Docker, and Docker Compose if needed
+- install Encodr into `/opt/encodr`
+- generate local secrets and default config automatically
+- start the stack
+- verify health
+- print the local URL, detected IP addresses, and next steps
+
+You do not need to edit config files before first use.
+
+## Manual install
+
+If you prefer to inspect the files first:
+
+1. clone the repository
+2. run `sudo ./install.sh`
+3. open the web UI and create the first admin user
+
+See [docs/INSTALL.md](docs/INSTALL.md) for the full manual path.
+
+If you specifically want a version-pinned install, use the same installer with an explicit version override:
 
 ```bash
-encodr doctor
+curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | sudo bash -s -- --version 0.1.0
+```
+
+## First run
+
+On first launch:
+
+1. open the web UI
+2. create the first admin user when prompted
+3. confirm storage access on the System page
+4. probe a file, plan it, create a job, and run the worker once
+
+If your media storage is not mounted yet, Encodr will still start and let you sign in, but it will clearly warn that storage is not ready.
+
+## Where the web UI will be
+
+By default:
+
+- UI: `http://<your-lxc-ip>:5173`
+- API health: `http://<your-lxc-ip>:8000/api/health`
+
+The installer prints the detected IP address and URLs when setup finishes.
+
+## Storage and mounts
+
+Encodr expects your media library at:
+
+```text
+/media
+```
+
+Recommended setup:
+
+1. mount your NFS or SMB share on the Proxmox host
+2. pass it into the LXC as a mount point
+3. let Docker inside the LXC expose that same path to Encodr
+
+Fallback Linux VM or bare Linux setup is also supported with a normal `/etc/fstab` mount at `/media`.
+
+Use:
+
+```bash
 encodr mount-setup --validate-only
-encodr version
 ```
 
-## Local development
+to confirm that Encodr can read and write the mounted path.
 
-Run the main processes in separate terminals:
+See [docs/STORAGE_SETUP.md](docs/STORAGE_SETUP.md) for the recommended mount models.
 
-```bash
-make ui-install
-make api
-make worker
-make ui
-```
+## Updating
 
-The API defaults to `http://localhost:8000/api` and the UI to `http://localhost:5173`.
-
-## Operator CLI
-
-The installed machine can use the root/operator CLI:
+The supported update command is:
 
 ```bash
-encodr version
-encodr doctor
-encodr update-check
 encodr update
-encodr reset-admin --username admin
-encodr mount-setup --validate-only
 ```
 
-`encodr update` uses release metadata plus a downloaded archive. It does not push git branches or merge to `main`.
-
-## Auth bootstrap flow
-
-Bootstrap admin creation is only available while no users exist.
-
-Example:
+To apply an available update:
 
 ```bash
-curl -X POST http://localhost:8000/api/auth/bootstrap-admin \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "username": "admin",
-    "password": "change-me-now"
-  }'
+encodr update --apply
 ```
 
-Then sign in through the UI or the API:
+After an update, Encodr re-checks health automatically. The web UI can show when a newer release is available, but updates are still applied from the command line.
+
+See [docs/UPDATES.md](docs/UPDATES.md).
+
+## Basic usage flow
+
+1. sign in
+2. confirm storage health
+3. probe a file by source path
+4. review the plan and any warnings
+5. create a job
+6. run the worker
+7. inspect verification, replacement, analytics, and manual review results in the UI
+
+## Troubleshooting
+
+Start with:
 
 ```bash
-curl -X POST http://localhost:8000/api/auth/login \
-  -H 'Content-Type: application/json' \
-  -d '{
-    "username": "admin",
-    "password": "change-me-now"
-  }'
+encodr doctor
+encodr status
 ```
 
-## Operator flow
+Then check:
 
-The current operator-ready path is:
+- the System page in the web UI
+- whether `/media` is mounted and writable
+- whether `ffmpeg` and `ffprobe` are visible to the worker
+- whether the first admin user has been created
 
-1. log in
-2. probe a file
-3. plan a file
-4. inspect reasons, warnings, and protected/manual-review state
-5. create a job when safe
-6. run the local worker once
-7. inspect verification/replacement outcome
-8. use Manual Review for ambiguous or protected items
+Useful references:
 
-Remote workers can register and heartbeat, but they do not execute jobs yet.
-
-## Testing
-
-Layered test commands:
-
-```bash
-make test-unit
-make test-integration
-make test-e2e
-make test-security
-make test-all
-make check
-```
-
-Frontend-specific commands:
-
-```bash
-make ui-test
-make ui-build
-```
-
-Release-maintainer helpers:
-
-```bash
-make version
-make release-check
-```
-
-## Known limitations
-
-- remote worker execution is not implemented
-- advanced scheduling, balancing, and cluster orchestration are not implemented
-- config editing through the UI is not implemented
-- analytics are operational and useful, but not BI-grade
-- naming policy exists, but advanced rich rename generation is still limited
-
-See:
-- [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
-- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
-- [CHANGELOG.md](CHANGELOG.md)
-
-## Documentation map
-
-- [docs/MEDIA_POLICY.md](docs/MEDIA_POLICY.md)
-- [docs/SECURITY.md](docs/SECURITY.md)
-- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
 - [docs/INSTALL.md](docs/INSTALL.md)
 - [docs/STORAGE_SETUP.md](docs/STORAGE_SETUP.md)
 - [docs/UPDATES.md](docs/UPDATES.md)
+- [docs/SECURITY.md](docs/SECURITY.md)
+- [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
