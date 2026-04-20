@@ -1,0 +1,2 @@
+"""Output verification placeholder."""
+
