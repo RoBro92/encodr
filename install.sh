@@ -210,10 +210,34 @@ ensure_docker() {
 }
 
 is_interactive_install() {
-  if [[ "${ENCODR_INSTALL_INTERACTIVE:-}" == "1" ]]; then
+  if [[ "${ENCODR_INSTALL_INTERACTIVE:-auto}" == "1" ]]; then
     return 0
   fi
-  [[ -t 0 ]]
+  if [[ "${ENCODR_INSTALL_INTERACTIVE:-auto}" == "0" ]]; then
+    return 1
+  fi
+  [[ -r /dev/tty && -w /dev/tty ]]
+}
+
+prompt_input() {
+  local prompt="$1"
+  local response=""
+
+  if [[ "${ENCODR_INSTALL_INTERACTIVE:-auto}" == "1" ]]; then
+    printf '%s' "${prompt}" >&2
+    IFS= read -r response || true
+    printf '%s' "${response}"
+    return 0
+  fi
+
+  if [[ -r /dev/tty && -w /dev/tty ]]; then
+    printf '%s' "${prompt}" > /dev/tty
+    IFS= read -r response < /dev/tty || true
+    printf '%s' "${response}"
+    return 0
+  fi
+
+  return 1
 }
 
 abort_install() {
@@ -288,9 +312,9 @@ show_fresh_install_plan() {
 
 confirm_fresh_install() {
   show_fresh_install_plan
-  printf 'Type %s to confirm a destructive fresh install: ' "DELETE"
   local confirmation=""
-  IFS= read -r confirmation || true
+  confirmation="$(prompt_input "Type DELETE to confirm a destructive fresh install: ")" || \
+    fail "Interactive confirmation is unavailable. Re-run with --fresh --force-fresh."
   if [[ "${confirmation}" != "DELETE" ]]; then
     abort_install "Fresh install cancelled. No changes were made."
   fi
@@ -298,13 +322,10 @@ confirm_fresh_install() {
 }
 
 prompt_existing_install_action() {
-  printf 'Choose what to do:\n'
-  printf '  [1] Repair existing installation\n'
-  printf '  [2] Fresh install (destructive)\n'
-  printf '  [3] Abort\n'
-  printf 'Selection [3]: '
   local selection=""
-  IFS= read -r selection || true
+  selection="$(
+    prompt_input $'Choose what to do:\n  [1] Repair existing installation\n  [2] Fresh install (destructive)\n  [3] Abort\nSelection [3]: '
+  )" || fail "Interactive selection is unavailable. Re-run with --repair, --fresh --force-fresh, or --abort-if-exists."
   case "${selection}" in
     1)
       INSTALL_ACTION="repair"
