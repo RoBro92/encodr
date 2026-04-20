@@ -1,5 +1,6 @@
 services:
   api:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: infra/docker/api.Dockerfile
@@ -13,7 +14,7 @@ services:
       - "${API_PORT:-8000}:8000"
     volumes:
       - ./config:/config:ro
-      - ./scratch:/scratch
+      - ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp
       - ./.runtime/data:/data
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
@@ -29,6 +30,7 @@ services:
       start_period: 15s
 
   worker:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: infra/docker/worker.Dockerfile
@@ -40,7 +42,7 @@ services:
       ENCODR_WORKERS_CONFIG_FILE: /config/workers.yaml
     volumes:
       - ./config:/config:ro
-      - ./scratch:/scratch
+      - ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp
       - ./.runtime/data:/data
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
@@ -48,6 +50,7 @@ services:
         condition: service_healthy
 
   worker-agent:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: infra/docker/worker-agent.Dockerfile
@@ -67,6 +70,7 @@ services:
     command: ["python", "-m", "app.main", "loop", "999999"]
 
   ui:
+    restart: unless-stopped
     build:
       context: .
       dockerfile: infra/docker/ui.Dockerfile
@@ -81,6 +85,7 @@ services:
         condition: service_healthy
 
   postgres:
+    restart: unless-stopped
     image: postgres:16-alpine
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-encodr}
@@ -97,6 +102,7 @@ services:
       retries: 12
 
   redis:
+    restart: unless-stopped
     image: redis:7-alpine
     ports:
       - "${REDIS_PORT:-6379}:6379"

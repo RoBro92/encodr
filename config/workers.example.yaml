@@ -6,7 +6,7 @@ workers:
     type: local
     host: lxc-main
     queue: local
-    scratch_dir: /scratch/encodr
+    scratch_dir: /temp/encodr
     media_mounts:
       - /media
     capabilities:

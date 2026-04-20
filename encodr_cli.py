@@ -127,7 +127,7 @@ def command_version(args: argparse.Namespace) -> int:
 def command_start(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bootstrap_repo(project_root)
-    ensure_local_media_mount(project_root)
+    ensure_local_storage_mounts(project_root)
     print("Starting Encodr locally with Docker Compose...")
     return run_compose(args, ["up", "-d", "--build"])
 
@@ -140,7 +140,7 @@ def command_stop(args: argparse.Namespace) -> int:
 def command_restart(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bootstrap_repo(project_root)
-    ensure_local_media_mount(project_root)
+    ensure_local_storage_mounts(project_root)
     print("Restarting the local Encodr stack...")
     return run_compose(args, ["restart"])
 
@@ -195,7 +195,7 @@ def command_health(args: argparse.Namespace) -> int:
 def command_rebuild(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bootstrap_repo(project_root)
-    ensure_local_media_mount(project_root)
+    ensure_local_storage_mounts(project_root)
     print("Rebuilding and recreating the local Encodr stack...")
     return run_compose(args, ["up", "-d", "--build", "--force-recreate"])
 
@@ -398,15 +398,19 @@ def bootstrap_repo(project_root: Path) -> None:
     subprocess.run(["bash", "./infra/scripts/bootstrap.sh"], cwd=project_root, check=True)
 
 
-def ensure_local_media_mount(project_root: Path) -> Path:
+def ensure_local_storage_mounts(project_root: Path) -> tuple[Path, Path]:
     media_root = project_root / ".runtime" / "media"
+    temp_root = project_root / ".runtime" / "temp"
     media_root.mkdir(parents=True, exist_ok=True)
-    return media_root
+    temp_root.mkdir(parents=True, exist_ok=True)
+    return media_root, temp_root
 
 
 def compose_env(project_root: Path) -> dict[str, str]:
     env = os.environ.copy()
-    env.setdefault("ENCODR_MEDIA_HOST_PATH", str(ensure_local_media_mount(project_root)))
+    media_root, temp_root = ensure_local_storage_mounts(project_root)
+    env.setdefault("ENCODR_MEDIA_HOST_PATH", str(media_root))
+    env.setdefault("ENCODR_TEMP_HOST_PATH", str(temp_root))
     return env
 
 

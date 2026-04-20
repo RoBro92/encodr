@@ -15,8 +15,11 @@ class PathStatusResponse(BaseModel):
     recommended_action: str | None = None
     exists: bool
     is_directory: bool
+    is_mount: bool
     readable: bool
     writable: bool
+    same_filesystem_as_root: bool | None = None
+    entry_count: int | None = None
     total_space_bytes: int | None = None
     free_space_bytes: int | None = None
     free_space_ratio: float | None = None

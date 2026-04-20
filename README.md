@@ -71,11 +71,15 @@ encodr update --apply
 ## Storage
 
 Encodr uses `/media` as the standard media path.
+Encodr uses `/temp/encodr` inside the stack as the standard transcode scratch path.
 
 Recommended storage setup:
 
 - Proxmox host mount -> LXC bind mount -> Docker `/media`
+- LXC-local or host-mounted fast scratch disk -> LXC `/temp` -> Docker `/temp`
 - or Linux VM mount via `/etc/fstab` to `/media`
+
+The installer and bootstrap flow create `/media` and `/temp` automatically if they are missing. Encodr will still warn in the UI and system health views if those paths look empty or appear to share the container root filesystem instead of a real mount.
 
 Encodr can start before storage is ready, but `/media` should be mounted and healthy before you run real jobs.
 

@@ -53,11 +53,24 @@ class SystemService:
         is_directory = resolved.is_dir()
         readable = os.access(resolved, os.R_OK)
         writable = os.access(resolved, os.W_OK)
+        is_mount = resolved.is_mount() if exists and is_directory else False
+        root_device_id = os.stat("/").st_dev if Path("/").exists() else None
+        device_id = os.stat(resolved).st_dev if exists and is_directory else None
+        same_filesystem_as_root = (
+            bool(root_device_id is not None and device_id is not None and device_id == root_device_id)
+            if exists and is_directory
+            else None
+        )
+        entry_count: int | None = None
         total_space_bytes: int | None = None
         free_space_bytes: int | None = None
         free_space_ratio: float | None = None
 
         if exists and is_directory:
+            try:
+                entry_count = sum(1 for _ in resolved.iterdir())
+            except OSError:
+                entry_count = None
             try:
                 usage = shutil.disk_usage(resolved)
                 total_space_bytes = int(usage.total)
@@ -113,6 +126,21 @@ class SystemService:
             else:
                 message = "The path is readable, but Encodr cannot write to it."
                 recommended_action = "Grant write access to the Encodr runtime user."
+        elif role == "media_mount" and resolved.as_posix() == self.STANDARD_MEDIA_ROOT and entry_count == 0:
+            status = HealthStatus.DEGRADED
+            issue_code = "path_empty"
+            message = "Media path is empty. If you expected a mounted library, check the host or LXC bind mount."
+            recommended_action = "Confirm your library is mounted into /media, then refresh the System page."
+        elif role == "media_mount" and resolved.as_posix() == self.STANDARD_MEDIA_ROOT and same_filesystem_as_root:
+            status = HealthStatus.DEGRADED
+            issue_code = "shares_root_filesystem"
+            message = "Media path is available but appears to share the container root filesystem."
+            recommended_action = "If you expected a mounted library, check the host share mount and LXC bind mount."
+        elif role == "scratch" and resolved.as_posix().startswith("/temp") and same_filesystem_as_root:
+            status = HealthStatus.DEGRADED
+            issue_code = "shares_root_filesystem"
+            message = "Scratch path is available but does not appear to be on a dedicated /temp mount."
+            recommended_action = "If you expected a separate scratch disk, check the /temp mount inside the LXC."
         elif free_space_ratio is not None and free_space_ratio < 0.05:
             status = HealthStatus.FAILED
             issue_code = "low_space_critical"
@@ -141,8 +169,11 @@ class SystemService:
             "recommended_action": recommended_action,
             "exists": exists,
             "is_directory": is_directory,
+            "is_mount": is_mount,
             "readable": readable,
             "writable": writable,
+            "same_filesystem_as_root": same_filesystem_as_root,
+            "entry_count": entry_count,
             "total_space_bytes": total_space_bytes,
             "free_space_bytes": free_space_bytes,
             "free_space_ratio": free_space_ratio,

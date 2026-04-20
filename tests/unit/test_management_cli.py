@@ -168,7 +168,7 @@ def test_command_doctor_prefers_dockerised_runtime_context(
                     "role": "scratch",
                     "display_name": "Scratch workspace",
                     "status": "healthy",
-                    "path": "/scratch/encodr",
+                    "path": "/temp/encodr",
                     "message": "The path is available.",
                     "recommended_action": None,
                 },
@@ -265,6 +265,7 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
 
     assert "./infra/scripts/bootstrap.sh" in install_script
     assert "prepare_management_cli_runtime" in install_script
+    assert "install_startup_service" in install_script
     assert "python3 -m venv" in install_script
     assert "\"psycopg[binary]>=3.1,<4.0\"" in install_script
     assert 'run_with_progress "Launching Docker services" docker compose up -d --build' in install_script
@@ -284,8 +285,12 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "mkdir -p \"${STANDARD_MEDIA_ROOT}\"" not in install_script
     assert "Open Encodr in your browser." in install_script
     assert "Create your first admin user if prompted." in install_script
-    assert "Mount your media library at %s." in install_script
+    assert "Confirm your media library at %s and scratch storage at /temp." in install_script
     assert "encodr mount-setup --validate-only" in install_script
+    assert "/etc/systemd/system/encodr.service" in install_script
+    assert "ExecStart=/usr/bin/docker compose up -d" in install_script
+    assert "ExecStop=/usr/bin/docker compose down" in install_script
+    assert "systemctl enable encodr.service" in install_script
     assert "tmp_dir: unbound variable" not in install_script
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
     assert 'ENCODR_INSTALL_LIB_ONLY:-0' in install_script
@@ -303,19 +308,40 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "--project-directory" not in install_script
 
 
-def test_bootstrap_script_creates_runtime_data_and_scratch_subdir(repo_root: Path) -> None:
+def test_bootstrap_script_creates_runtime_data_and_temp_subdir(repo_root: Path) -> None:
     bootstrap_script = (repo_root / "infra" / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
 
     assert '$ROOT_DIR/.runtime/data' in bootstrap_script
-    assert '$ROOT_DIR/scratch/encodr' in bootstrap_script
+    assert 'mkdir -p /temp/encodr /media' in bootstrap_script
+    assert '$ROOT_DIR/.runtime/temp/encodr' in bootstrap_script
+    assert '$ROOT_DIR/.runtime/media' in bootstrap_script
 
 
-def test_docker_compose_mounts_runtime_data_into_api_and_worker(repo_root: Path) -> None:
+def test_docker_compose_mounts_temp_workspace_into_api_and_worker(repo_root: Path) -> None:
     compose_file = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
 
+    assert compose_file.count("restart: unless-stopped") == 6
     assert "- ./.runtime/data:/data" in compose_file
+    assert "- ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp" in compose_file
     assert "- ./postgres-data:/var/lib/postgresql/data" in compose_file
     assert "- ./redis-data:/data" in compose_file
+
+
+def test_compose_env_sets_local_media_and_temp_fallbacks(repo_root: Path) -> None:
+    env = encodr_cli.compose_env(repo_root)
+
+    assert env["ENCODR_MEDIA_HOST_PATH"] == str(repo_root / ".runtime" / "media")
+    assert env["ENCODR_TEMP_HOST_PATH"] == str(repo_root / ".runtime" / "temp")
+
+
+def test_example_configs_use_temp_for_transcode_scratch(repo_root: Path) -> None:
+    app_config = (repo_root / "config" / "app.example.yaml").read_text(encoding="utf-8")
+    worker_config = (repo_root / "config" / "workers.example.yaml").read_text(encoding="utf-8")
+    env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
+
+    assert "scratch_dir: /temp/encodr" in app_config
+    assert "scratch_dir: /temp/encodr" in worker_config
+    assert "ENCODR_TEMP_HOST_PATH=/temp" in env_example
 
 
 def test_local_checkout_uses_compose_override_for_dev_data_volumes(repo_root: Path) -> None:

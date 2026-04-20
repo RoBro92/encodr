@@ -221,8 +221,11 @@ export type PathStatus = {
   recommended_action: string | null;
   exists: boolean;
   is_directory: boolean;
+  is_mount: boolean;
   readable: boolean;
   writable: boolean;
+  same_filesystem_as_root: boolean | null;
+  entry_count: number | null;
   total_space_bytes: number | null;
   free_space_bytes: number | null;
   free_space_ratio: number | null;

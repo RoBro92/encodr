@@ -347,7 +347,7 @@ show_fresh_install_plan() {
   printf '  - %s/.env\n' "${INSTALL_ROOT}"
   printf '  - %s/config/\n' "${INSTALL_ROOT}"
   printf '  - %s/.runtime/\n' "${INSTALL_ROOT}"
-  printf '  - %s/scratch/\n' "${INSTALL_ROOT}"
+  printf '  - %s/temp/\n' "${INSTALL_ROOT}"
   printf '  - %s/postgres-data/\n' "${INSTALL_ROOT}"
   printf '  - %s/redis-data/\n' "${INSTALL_ROOT}"
   printf '  - Encodr Docker containers, networks, local images, and Compose volumes\n'
@@ -522,7 +522,7 @@ download_release_tree() {
     ! -name '.env' \
     ! -name '.runtime' \
     ! -name 'config' \
-    ! -name 'scratch' \
+    ! -name 'temp' \
     ! -name 'postgres-data' \
     ! -name 'redis-data' \
     -exec rm -rf {} +
@@ -613,6 +613,40 @@ prepare_management_cli_runtime() {
       -e "${INSTALL_ROOT}/packages/db" \
       -e "${INSTALL_ROOT}/apps/api" || \
     fail "Unable to install Encodr management command dependencies."
+}
+
+install_startup_service() {
+  local unit_path="/etc/systemd/system/encodr.service"
+
+  if ! command -v systemctl >/dev/null 2>&1; then
+    warn "systemctl is not available, so automatic stack restart on boot could not be configured."
+    return 0
+  fi
+
+  section "Configuring startup"
+  cat >"${unit_path}" <<EOF
+[Unit]
+Description=Encodr Docker Compose stack
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+WorkingDirectory=${INSTALL_ROOT}
+ExecStart=/usr/bin/docker compose up -d
+ExecStop=/usr/bin/docker compose down
+RemainAfterExit=yes
+TimeoutStartSec=0
+
+[Install]
+WantedBy=multi-user.target
+EOF
+
+  run_with_progress "Enabling the Encodr startup service" systemctl daemon-reload || \
+    fail "Unable to reload systemd after installing the Encodr startup service."
+  run_with_progress "Enabling Encodr to start automatically on boot" systemctl enable encodr.service || \
+    fail "Unable to enable the Encodr startup service."
 }
 
 normalise_host_config_paths_in_env() {
@@ -738,7 +772,7 @@ show_urls() {
   printf '\n%sNext steps%s\n' "${BOLD}" "${RESET}"
   printf '1. Open Encodr in your browser.\n'
   printf '2. Create your first admin user if prompted.\n'
-  printf '3. Mount your media library at %s.\n' "${STANDARD_MEDIA_ROOT}"
+  printf '3. Confirm your media library at %s and scratch storage at /temp.\n' "${STANDARD_MEDIA_ROOT}"
   printf '4. Run %s or %s.\n' "encodr doctor" "encodr status"
   printf '5. Run %s after your mount is ready.\n' "encodr mount-setup --validate-only"
 }
@@ -765,6 +799,7 @@ main() {
   mkdir -p /usr/local/bin
   ln -sf "${INSTALL_ROOT}/encodr" /usr/local/bin/encodr
   success "Installed the encodr management command"
+  install_startup_service
 
   load_env
 

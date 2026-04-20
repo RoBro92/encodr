@@ -18,6 +18,7 @@ The installer will:
 - verify health with `encodr doctor`
 - print the local URL, detected IP addresses, and next steps
 - install the latest tagged release by default
+- create `/media` and `/temp` if they do not already exist
 
 No manual config editing is required before first use.
 
@@ -45,6 +46,13 @@ cd encodr
 4. run `encodr mount-setup --validate-only`
 5. run `encodr doctor` or `encodr status`
 6. probe and plan a test file before touching a real library
+
+Encodr expects:
+
+- `/media` as the standard library mount
+- `/temp/encodr` as the transcode scratch workspace inside the containers
+
+If `/media` or `/temp` exist but do not look like the mounts you expected, the System page and `encodr doctor` will warn clearly.
 
 ## Re-running the installer
 

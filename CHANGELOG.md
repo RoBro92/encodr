@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased / Internal `0.1.7`
+## Unreleased / Internal `0.1.8`
 
 Initial internal release line covering:
 
@@ -17,6 +17,8 @@ Initial internal release line covering:
 - fresh-LXC install/bootstrap script and first-user setup path
 - dockerised doctor/runtime verification for installed and local Docker usage
 - fresh-install cleanup now removes Encodr Docker containers, networks, local images, and volumes
+- `/temp` mount support for transcode scratch storage
+- storage health now warns when `/media` or `/temp` do not look like real mounted storage
 
 Known important limitations:
 
