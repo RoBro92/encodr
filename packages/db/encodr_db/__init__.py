@@ -1,4 +1,7 @@
 from encodr_db.models import (
+    AuditEvent,
+    AuditEventType,
+    AuditOutcome,
     Base,
     ComplianceState,
     FileLifecycleState,
@@ -6,11 +9,26 @@ from encodr_db.models import (
     JobStatus,
     PlanSnapshot,
     ProbeSnapshot,
+    RefreshToken,
     TrackedFile,
+    User,
+    UserRole,
 )
-from encodr_db.repositories import JobRepository, PlanSnapshotRepository, ProbeSnapshotRepository, TrackedFileRepository
+from encodr_db.repositories import (
+    AuditEventRepository,
+    JobRepository,
+    PlanSnapshotRepository,
+    ProbeSnapshotRepository,
+    RefreshTokenRepository,
+    TrackedFileRepository,
+    UserRepository,
+)
 
 __all__ = [
+    "AuditEvent",
+    "AuditEventRepository",
+    "AuditEventType",
+    "AuditOutcome",
     "Base",
     "ComplianceState",
     "FileLifecycleState",
@@ -21,6 +39,11 @@ __all__ = [
     "PlanSnapshotRepository",
     "ProbeSnapshot",
     "ProbeSnapshotRepository",
+    "RefreshToken",
+    "RefreshTokenRepository",
     "TrackedFile",
     "TrackedFileRepository",
+    "User",
+    "UserRepository",
+    "UserRole",
 ]

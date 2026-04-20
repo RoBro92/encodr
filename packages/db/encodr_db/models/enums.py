@@ -40,3 +40,21 @@ class ReplacementStatus(StrEnum):
     SUCCEEDED = "succeeded"
     FAILED = "failed"
     NOT_REQUIRED = "not_required"
+
+
+class UserRole(StrEnum):
+    ADMIN = "admin"
+    OPERATOR = "operator"
+
+
+class AuditEventType(StrEnum):
+    BOOTSTRAP_ADMIN_CREATED = "bootstrap_admin_created"
+    BOOTSTRAP_ADMIN_BLOCKED = "bootstrap_admin_blocked"
+    LOGIN = "login"
+    LOGOUT = "logout"
+    TOKEN_REFRESH = "token_refresh"
+
+
+class AuditOutcome(StrEnum):
+    SUCCESS = "success"
+    FAILURE = "failure"

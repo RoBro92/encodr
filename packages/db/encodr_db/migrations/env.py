@@ -10,7 +10,7 @@ from sqlalchemy import engine_from_config, pool
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from encodr_db.models import Base  # noqa: E402
-from encodr_db.models import job, plan_snapshot, probe_snapshot, tracked_file  # noqa: F401,E402
+from encodr_db.models import audit_event, job, plan_snapshot, probe_snapshot, refresh_token, tracked_file, user  # noqa: F401,E402
 
 config = context.config
 
