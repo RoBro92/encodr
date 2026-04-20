@@ -122,6 +122,13 @@ run_with_progress() {
   return 0
 }
 
+run_compose_in_install_root() {
+  (
+    cd "${INSTALL_ROOT}" || exit 1
+    docker compose "$@"
+  )
+}
+
 parse_args() {
   local fresh_requested=0
   local fresh_confirmed=0
@@ -365,8 +372,7 @@ stop_existing_stack_for_fresh_install() {
   section "Stopping existing Encodr stack"
   run_with_progress \
     "Stopping existing Docker services" \
-    docker compose down --remove-orphans \
-    --project-directory "${INSTALL_ROOT}" || \
+    run_compose_in_install_root down --remove-orphans || \
     fail "Unable to stop the existing Encodr Docker stack before the fresh reinstall."
 }
 

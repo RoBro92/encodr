@@ -224,6 +224,9 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
     assert 'ENCODR_INSTALL_LIB_ONLY:-0' in install_script
     assert "Stopping existing Docker services" in install_script
+    assert "run_compose_in_install_root()" in install_script
+    assert 'cd "${INSTALL_ROOT}"' in install_script
+    assert "--project-directory" not in install_script
 
 
 def test_encodr_wrapper_prefers_managed_cli_venv(repo_root: Path) -> None:
