@@ -1,0 +1,177 @@
+from __future__ import annotations
+
+from datetime import datetime
+from pathlib import Path
+
+from sqlalchemy import Select, desc, select
+from sqlalchemy.orm import Session
+
+from encodr_core.execution import ExecutionResult
+from encodr_core.media.models import MediaFile
+from encodr_core.planning import ProcessingPlan
+from encodr_core.planning.enums import PlanAction
+from encodr_db.models import ComplianceState, FileLifecycleState, PlanSnapshot, ProbeSnapshot, TrackedFile
+
+
+class TrackedFileRepository:
+    def __init__(self, session: Session) -> None:
+        self.session = session
+
+    def upsert_by_path(
+        self,
+        source_path: Path | str,
+        *,
+        media_file: MediaFile | None = None,
+        last_observed_modified_time: datetime | None = None,
+        fingerprint_placeholder: str | None = None,
+    ) -> TrackedFile:
+        resolved_path = Path(source_path)
+        tracked_file = self.get_by_path(resolved_path)
+
+        if tracked_file is None:
+            tracked_file = TrackedFile(
+                source_path=resolved_path.as_posix(),
+                source_filename=resolved_path.name,
+                source_extension=resolved_path.suffix.lower().lstrip(".") or None,
+                source_directory=resolved_path.parent.as_posix(),
+                lifecycle_state=FileLifecycleState.DISCOVERED,
+                compliance_state=ComplianceState.UNKNOWN,
+            )
+            self.session.add(tracked_file)
+
+        tracked_file.source_filename = resolved_path.name
+        tracked_file.source_extension = resolved_path.suffix.lower().lstrip(".") or None
+        tracked_file.source_directory = resolved_path.parent.as_posix()
+        tracked_file.fingerprint_placeholder = fingerprint_placeholder
+        if last_observed_modified_time is not None:
+            tracked_file.last_observed_modified_time = last_observed_modified_time
+        if media_file is not None:
+            tracked_file.last_observed_size = media_file.container.size_bytes
+            tracked_file.is_4k = media_file.is_4k
+
+        self.session.flush()
+        return tracked_file
+
+    def get_by_path(self, source_path: Path | str) -> TrackedFile | None:
+        query = select(TrackedFile).where(TrackedFile.source_path == Path(source_path).as_posix())
+        return self.session.scalar(query)
+
+    def list_files(
+        self,
+        *,
+        lifecycle_state: FileLifecycleState | None = None,
+        compliance_state: ComplianceState | None = None,
+        protected_only: bool | None = None,
+        limit: int | None = None,
+    ) -> list[TrackedFile]:
+        query: Select[tuple[TrackedFile]] = select(TrackedFile).order_by(desc(TrackedFile.updated_at))
+        if lifecycle_state is not None:
+            query = query.where(TrackedFile.lifecycle_state == lifecycle_state)
+        if compliance_state is not None:
+            query = query.where(TrackedFile.compliance_state == compliance_state)
+        if protected_only is True:
+            query = query.where(TrackedFile.is_protected.is_(True))
+        if protected_only is False:
+            query = query.where(TrackedFile.is_protected.is_(False))
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))
+
+    def get_latest_probe_snapshot(self, tracked_file_id: str) -> ProbeSnapshot | None:
+        query = (
+            select(ProbeSnapshot)
+            .where(ProbeSnapshot.tracked_file_id == tracked_file_id)
+            .order_by(desc(ProbeSnapshot.created_at))
+            .limit(1)
+        )
+        return self.session.scalar(query)
+
+    def get_latest_plan_snapshot(self, tracked_file_id: str) -> PlanSnapshot | None:
+        query = (
+            select(PlanSnapshot)
+            .where(PlanSnapshot.tracked_file_id == tracked_file_id)
+            .order_by(desc(PlanSnapshot.created_at))
+            .limit(1)
+        )
+        return self.session.scalar(query)
+
+    def update_file_state_from_plan_result(
+        self,
+        tracked_file: TrackedFile,
+        plan: ProcessingPlan,
+    ) -> TrackedFile:
+        tracked_file.last_processed_policy_version = plan.policy_context.policy_version
+        tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
+        tracked_file.is_protected = plan.should_treat_as_protected
+        tracked_file.compliance_state = compliance_state_for_plan(plan)
+        tracked_file.lifecycle_state = lifecycle_state_for_plan(plan)
+        self.session.flush()
+        return tracked_file
+
+    def update_file_state_from_execution_result(
+        self,
+        tracked_file: TrackedFile,
+        plan: ProcessingPlan,
+        result: ExecutionResult,
+    ) -> TrackedFile:
+        tracked_file.last_processed_policy_version = plan.policy_context.policy_version
+        tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
+        tracked_file.is_protected = plan.should_treat_as_protected
+
+        if result.status == "completed":
+            tracked_file.lifecycle_state = FileLifecycleState.COMPLETED
+            tracked_file.compliance_state = ComplianceState.COMPLIANT
+        elif result.status == "skipped":
+            tracked_file.lifecycle_state = FileLifecycleState.COMPLETED
+            tracked_file.compliance_state = ComplianceState.COMPLIANT
+        elif result.status == "manual_review":
+            tracked_file.lifecycle_state = FileLifecycleState.MANUAL_REVIEW
+            tracked_file.compliance_state = ComplianceState.MANUAL_REVIEW
+        else:
+            tracked_file.lifecycle_state = FileLifecycleState.FAILED
+            tracked_file.compliance_state = (
+                ComplianceState.MANUAL_REVIEW
+                if plan.action == PlanAction.MANUAL_REVIEW
+                else ComplianceState.NON_COMPLIANT
+            )
+
+        self.session.flush()
+        return tracked_file
+
+    def already_processed_under_policy(
+        self,
+        source_path: Path | str,
+        policy_version: int,
+        *,
+        profile_name: str | None = None,
+    ) -> bool:
+        tracked_file = self.get_by_path(source_path)
+        if tracked_file is None:
+            return False
+        if tracked_file.last_processed_policy_version != policy_version:
+            return False
+        if profile_name is not None and tracked_file.last_processed_profile_name != profile_name:
+            return False
+
+        latest_plan = self.get_latest_plan_snapshot(tracked_file.id)
+        if latest_plan is None:
+            return False
+        if latest_plan.policy_version != policy_version:
+            return False
+        if profile_name is not None and latest_plan.profile_name != profile_name:
+            return False
+        return tracked_file.compliance_state != ComplianceState.UNKNOWN
+
+
+def lifecycle_state_for_plan(plan: ProcessingPlan) -> FileLifecycleState:
+    if plan.action == PlanAction.MANUAL_REVIEW:
+        return FileLifecycleState.MANUAL_REVIEW
+    return FileLifecycleState.PLANNED
+
+
+def compliance_state_for_plan(plan: ProcessingPlan) -> ComplianceState:
+    if plan.action == PlanAction.MANUAL_REVIEW:
+        return ComplianceState.MANUAL_REVIEW
+    if plan.is_already_compliant:
+        return ComplianceState.COMPLIANT
+    return ComplianceState.NON_COMPLIANT
