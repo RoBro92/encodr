@@ -209,16 +209,6 @@ ensure_docker() {
   ensure_compose
 }
 
-is_interactive_install() {
-  if [[ "${ENCODR_INSTALL_INTERACTIVE:-auto}" == "1" ]]; then
-    return 0
-  fi
-  if [[ "${ENCODR_INSTALL_INTERACTIVE:-auto}" == "0" ]]; then
-    return 1
-  fi
-  [[ -r /dev/tty && -w /dev/tty ]]
-}
-
 prompt_input() {
   local prompt="$1"
   local response=""
@@ -277,21 +267,21 @@ resolve_install_mode() {
       return
       ;;
     fresh)
-      if is_interactive_install; then
-        confirm_fresh_install
-        return
+      if [[ "${ENCODR_INSTALL_INTERACTIVE:-auto}" == "0" ]]; then
+        fail "Fresh install is destructive. Re-run with --fresh --force-fresh."
       fi
-      fail "Fresh install is destructive. Re-run with --fresh --force-fresh."
+      confirm_fresh_install
+      return
       ;;
     abort)
       abort_install "Existing installation detected. No changes were made."
       ;;
     "")
-      if is_interactive_install; then
-        prompt_existing_install_action
-        return
+      if [[ "${ENCODR_INSTALL_INTERACTIVE:-auto}" == "0" ]]; then
+        fail "Existing installation detected. Re-run with one of: --repair, --fresh --force-fresh, --abort-if-exists."
       fi
-      fail "Existing installation detected. Re-run with one of: --repair, --fresh --force-fresh, --abort-if-exists."
+      prompt_existing_install_action
+      return
       ;;
     *)
       fail "Unsupported install mode: ${INSTALL_MODE_OVERRIDE}."
