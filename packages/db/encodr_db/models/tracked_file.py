@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Index, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, ForeignKey, Index, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin
@@ -12,8 +12,10 @@ from encodr_db.models.types import enum_type
 
 if TYPE_CHECKING:
     from encodr_db.models.job import Job
+    from encodr_db.models.manual_review_decision import ManualReviewDecision
     from encodr_db.models.plan_snapshot import PlanSnapshot
     from encodr_db.models.probe_snapshot import ProbeSnapshot
+    from encodr_db.models.user import User
 
 
 class TrackedFile(Base, IdMixin, TimestampMixin):
@@ -42,6 +44,14 @@ class TrackedFile(Base, IdMixin, TimestampMixin):
         default=ComplianceState.UNKNOWN,
     )
     is_protected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    operator_protected: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    operator_protected_note: Mapped[str | None] = mapped_column(Text)
+    operator_protected_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    operator_protected_by_user_id: Mapped[str | None] = mapped_column(
+        ForeignKey("users.id", ondelete="SET NULL"),
+        nullable=True,
+        index=True,
+    )
     last_processed_policy_version: Mapped[int | None] = mapped_column()
     last_processed_profile_name: Mapped[str | None] = mapped_column(String(255))
 
@@ -60,3 +70,9 @@ class TrackedFile(Base, IdMixin, TimestampMixin):
         cascade="all, delete-orphan",
         order_by="Job.created_at",
     )
+    manual_review_decisions: Mapped[list["ManualReviewDecision"]] = relationship(
+        back_populates="tracked_file",
+        cascade="all, delete-orphan",
+        order_by="ManualReviewDecision.created_at",
+    )
+    operator_protected_by_user: Mapped["User | None"] = relationship()

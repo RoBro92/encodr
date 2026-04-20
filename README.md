@@ -1,58 +1,166 @@
-# encodr
+# Encodr
 
-`encodr` is a private, self-hosted media ingestion preparation service for Plex-style libraries. It analyses media with `ffprobe`, evaluates deterministic YAML policy, and then decides whether to skip, remux, or transcode before files are ingested into the library.
+Encodr is a private, self-hosted media ingestion preparation service for Plex-style libraries. It probes media with `ffprobe`, evaluates deterministic YAML policy, plans a conservative action, and then either skips, remuxes, transcodes, or routes the file into manual review before safe verified placement.
 
-The project is intentionally narrow in scope. It is not a downloader, a Plex manager, or a broad workflow automation platform. The goal is a reviewable and policy-driven preparation layer that favours trust, verification, and safe file handling.
+Encodr is intentionally narrow in scope. It is not a downloader, a Plex manager, or a broad workflow platform. The emphasis is on trust, reviewability, and safe handling of files on disk.
 
-## Current state
+## Release status
 
-This repository currently contains:
+- Current release line: `0.1.0`
+- Maturity: internal `v0.x`
+- Implemented: local auth, probe, planning, DB history, local worker execution, verification/replacement, operational API, UI shell, analytics, manual review/protected flows, and remote-worker registration/heartbeat groundwork
+- Not implemented: remote worker execution, advanced scheduling/orchestration, config editing UI, SSO, BI/report-builder features
 
-- a working configuration bootstrap layer with validated YAML policy and profile loading
-- ffprobe ingestion, normalised media models, and deterministic planning
-- Postgres-oriented persistence with Alembic migrations and repository helpers
-- a local worker flow for execute, verify, and safe replacement
-- a local auth baseline with bootstrap admin creation, JWT access tokens, refresh tokens, and audit events
-- layered tests covering unit, integration, end-to-end, smoke, and security cases
+## Current capabilities
 
-The broader job, file, and operational API surface is still intentionally narrow at this stage.
+- typed YAML configuration bootstrap with profile overlays and validation
+- ffprobe ingestion into stable internal media models
+- deterministic policy evaluation for `skip`, `remux`, `transcode`, and `manual_review`
+- DB-backed tracked-file, probe, plan, job, review, audit, analytics, and worker state
+- local worker execution with verification and safe replacement flow
+- bootstrap-admin auth flow, JWT access tokens, refresh tokens, and audit logging
+- authenticated operational API for files, jobs, review, analytics, config visibility, health, and workers
+- authenticated UI for dashboard, files, jobs, manual review, reports, system health, config summary, and worker inventory
+- remote worker registration and heartbeat groundwork with capability reporting
 
-The repository also now includes an initial authenticated operational UI shell for dashboard, files, jobs, system status, and read-only config visibility.
+## Architecture overview
 
-## Planned stack
+- `apps/api`: FastAPI control plane and authenticated operational API
+- `apps/worker`: local execution worker for probe, plan, execute, verify, and replace
+- `apps/ui`: React + Vite operator console
+- `apps/worker-agent`: remote worker groundwork for register/heartbeat only
+- `packages/core`: deterministic config, probe, planning, execution, verification, and replacement logic
+- `packages/db`: SQLAlchemy models, Alembic migrations, repositories, and local worker runtime helpers
+- `packages/shared`: small shared enums and types
 
-- Python backend with FastAPI
-- React + Vite frontend
-- Postgres for persistent state
-- Redis for queue and transient coordination
-- `ffprobe` and `ffmpeg` integration
-- policy-driven planning engine
-- local worker first, with later remote worker support
+## Prerequisites
 
-## Quick start
+- Python 3.11+ for local development in this repository
+- Node.js 20+ and npm for the UI
+- PostgreSQL 16+ for a closer-to-real local stack, though tests also use SQLite where appropriate
+- Redis 7+ for the intended runtime stack
+- `ffmpeg` and `ffprobe` available where the local worker runs
 
-1. Copy `.env.example` to `.env`.
-2. Copy the example config files from `config/` to working versions if needed.
-3. Review the documentation in `docs/`, starting with `PROJECT_OVERVIEW.md` and `MILESTONES.md`.
-4. Bring up the scaffolded services with `docker compose up --build` once container details are filled in.
+## First-run setup
 
-## Repository guide
+1. Bootstrap local working files:
 
-- Project overview: [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)
-- Architecture: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- Milestones: [docs/MILESTONES.md](docs/MILESTONES.md)
-- Repo map: [docs/PROJECT_MAP.md](docs/PROJECT_MAP.md)
+   ```bash
+   make bootstrap
+   ```
+
+2. Review and update `.env`:
+   - set `ENCODR_AUTH_SECRET`
+   - set `ENCODR_WORKER_REGISTRATION_SECRET`
+   - confirm `ENCODR_APP_CONFIG_FILE`, `ENCODR_POLICY_CONFIG_FILE`, and `ENCODR_WORKERS_CONFIG_FILE`
+
+3. Review and adjust:
+   - `config/app.yaml`
+   - `config/policy.yaml`
+   - `config/workers.yaml`
+
+4. Start local dependencies if you want the Compose stack:
+
+   ```bash
+   make dev-up
+   ```
+
+## Local development
+
+Run the main processes in separate terminals:
+
+```bash
+make ui-install
+make api
+make worker
+make ui
+```
+
+The API defaults to `http://localhost:8000/api` and the UI to `http://localhost:5173`.
+
+## Auth bootstrap flow
+
+Bootstrap admin creation is only available while no users exist.
+
+Example:
+
+```bash
+curl -X POST http://localhost:8000/api/auth/bootstrap-admin \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "admin",
+    "password": "change-me-now"
+  }'
+```
+
+Then sign in through the UI or the API:
+
+```bash
+curl -X POST http://localhost:8000/api/auth/login \
+  -H 'Content-Type: application/json' \
+  -d '{
+    "username": "admin",
+    "password": "change-me-now"
+  }'
+```
+
+## Operator flow
+
+The current operator-ready path is:
+
+1. log in
+2. probe a file
+3. plan a file
+4. inspect reasons, warnings, and protected/manual-review state
+5. create a job when safe
+6. run the local worker once
+7. inspect verification/replacement outcome
+8. use Manual Review for ambiguous or protected items
+
+Remote workers can register and heartbeat, but they do not execute jobs yet.
 
 ## Testing
 
-- `make test-unit`
-- `make test-integration`
-- `make test-e2e`
-- `make test-security`
-- `make test-all`
+Layered test commands:
 
-## UI development
+```bash
+make test-unit
+make test-integration
+make test-e2e
+make test-security
+make test-all
+make check
+```
 
-- `cd apps/ui && npm install`
-- `cd apps/ui && npm run dev`
-- `cd apps/ui && npm test`
+Frontend-specific commands:
+
+```bash
+make ui-test
+make ui-build
+```
+
+## Known limitations
+
+- remote worker execution is not implemented
+- advanced scheduling, balancing, and cluster orchestration are not implemented
+- config editing through the UI is not implemented
+- analytics are operational and useful, but not BI-grade
+- naming policy exists, but advanced rich rename generation is still limited
+
+See:
+- [docs/KNOWN_LIMITATIONS.md](docs/KNOWN_LIMITATIONS.md)
+- [docs/RELEASE_CHECKLIST.md](docs/RELEASE_CHECKLIST.md)
+- [CHANGELOG.md](CHANGELOG.md)
+
+## Documentation map
+
+- [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)
+- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
+- [docs/API_PLAN.md](docs/API_PLAN.md)
+- [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
+- [docs/SECURITY.md](docs/SECURITY.md)
+- [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
+- [docs/UI_PLAN.md](docs/UI_PLAN.md)
+- [docs/ANALYTICS_PLAN.md](docs/ANALYTICS_PLAN.md)
+- [docs/WORKER_PLAN.md](docs/WORKER_PLAN.md)
+- [docs/MILESTONES.md](docs/MILESTONES.md)

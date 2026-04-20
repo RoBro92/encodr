@@ -22,11 +22,10 @@ workers:
       type: remote
       queue: remote-amd
       endpoint: https://worker-amd.internal.example
-      auth_mode: mTLS
+      auth_mode: token
       capabilities:
         ffmpeg: true
         ffprobe: true
         intel_qsv: false
         amd_amf: true
-      notes: Future placeholder for remote worker support.
-
+      notes: Registration/heartbeat groundwork only. Remote job execution is not implemented yet.

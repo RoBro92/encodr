@@ -26,6 +26,15 @@ class PersistedJobContext:
     media_file: MediaFile
 
 
+@dataclass(frozen=True, slots=True)
+class PersistedPlanContext:
+    tracked_file_id: str
+    probe_snapshot_id: str
+    plan_snapshot_id: str
+    plan: ProcessingPlan
+    media_file: MediaFile
+
+
 def parse_fixture(name: str) -> MediaFile:
     return parse_ffprobe_json_output(
         (FIXTURES_DIR / name).read_text(encoding="utf-8"),
@@ -61,6 +70,32 @@ def create_job(
     job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
     session.flush()
     return PersistedJobContext(job=job, plan=plan, media_file=media_file)
+
+
+def create_planned_file(
+    session: Session,
+    bundle: ConfigBundle,
+    media_file: MediaFile,
+    *,
+    source_path: str,
+) -> PersistedPlanContext:
+    tracked_files = TrackedFileRepository(session)
+    probes = ProbeSnapshotRepository(session)
+    plans = PlanSnapshotRepository(session)
+
+    tracked_file = tracked_files.upsert_by_path(source_path, media_file=media_file)
+    probe_snapshot = probes.add_probe_snapshot(tracked_file, media_file)
+    plan = build_processing_plan(media_file, bundle, source_path=source_path)
+    plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+    tracked_files.update_file_state_from_plan_result(tracked_file, plan)
+    session.flush()
+    return PersistedPlanContext(
+        tracked_file_id=tracked_file.id,
+        probe_snapshot_id=probe_snapshot.id,
+        plan_snapshot_id=plan_snapshot.id,
+        plan=plan,
+        media_file=media_file,
+    )
 
 
 class FailIfCalledClient:

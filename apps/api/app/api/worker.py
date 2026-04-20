@@ -1,29 +1,124 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, HTTPException, Request
+from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_config_bundle, get_local_worker_loop, require_admin_user
-from app.schemas.worker import BinaryStatusResponse, WorkerRunOnceResponse, WorkerStatusResponse
+from app.core.dependencies import (
+    get_config_bundle,
+    get_local_worker_loop,
+    get_session,
+    get_session_factory,
+    get_worker_auth_runtime_settings,
+    get_worker_token_service,
+    require_admin_user,
+    require_authenticated_worker,
+)
+from app.schemas.worker import (
+    QueueHealthSummaryResponse,
+    WorkerHeartbeatRequest,
+    WorkerHeartbeatResponse,
+    WorkerInventoryDetailResponse,
+    WorkerInventoryListResponse,
+    WorkerInventorySummaryResponse,
+    WorkerRegistrationRequest,
+    WorkerRegistrationResponse,
+    WorkerRunOnceResponse,
+    WorkerSelfTestCheckResponse,
+    WorkerSelfTestResponse,
+    WorkerStateChangeResponse,
+    WorkerStatusResponse,
+)
+from app.services.audit import AuditService
+from app.services.errors import ApiServiceError
 from app.services.worker import WorkerService
 from encodr_core.config import ConfigBundle
-from encodr_db.models import User
+from encodr_db.models import User, Worker
 from encodr_db.runtime import LocalWorkerLoop
 
-router = APIRouter(
-    prefix="/worker",
-    tags=["worker"],
-    dependencies=[Depends(require_admin_user)],
-)
+worker_router = APIRouter(prefix="/worker", tags=["worker"])
+workers_router = APIRouter(prefix="/workers", tags=["workers"])
 
 
 def get_worker_service(
     config_bundle: ConfigBundle = Depends(get_config_bundle),
     local_worker_loop: LocalWorkerLoop = Depends(get_local_worker_loop),
+    session_factory=Depends(get_session_factory),
+    worker_token_service=Depends(get_worker_token_service),
+    worker_auth_runtime=Depends(get_worker_auth_runtime_settings),
 ) -> WorkerService:
-    return WorkerService(config_bundle=config_bundle, local_worker_loop=local_worker_loop)
+    return WorkerService(
+        config_bundle=config_bundle,
+        local_worker_loop=local_worker_loop,
+        session_factory=session_factory,
+        worker_token_service=worker_token_service,
+        worker_auth_runtime=worker_auth_runtime,
+        audit_service=AuditService(),
+    )
 
 
-@router.post("/run-once", response_model=WorkerRunOnceResponse)
+def _raise_service_error(error: ApiServiceError) -> None:
+    headers = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
+    raise HTTPException(status_code=error.status_code, detail=str(error), headers=headers) from error
+
+
+@worker_router.post("/register", response_model=WorkerRegistrationResponse, status_code=201)
+def register_worker(
+    payload: WorkerRegistrationRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+) -> WorkerRegistrationResponse:
+    try:
+        registration = service.register_worker(
+            session,
+            worker_key=payload.worker_key,
+            display_name=payload.display_name,
+            worker_type=payload.worker_type,
+            registration_secret=payload.registration_secret,
+            capability_summary=payload.capability_summary.model_dump(mode="json"),
+            host_summary=payload.host_summary.model_dump(mode="json"),
+            runtime_summary=payload.runtime_summary.model_dump(mode="json") if payload.runtime_summary is not None else None,
+            binary_summary=[item.model_dump(mode="json") for item in payload.binary_summary],
+            health_status=payload.health_status,
+            health_summary=payload.health_summary,
+            request=request,
+        )
+        session.commit()
+        return WorkerRegistrationResponse(**registration)
+    except ApiServiceError as error:
+        if error.status_code == 401:
+            session.commit()
+        else:
+            session.rollback()
+        _raise_service_error(error)
+
+
+@worker_router.post("/heartbeat", response_model=WorkerHeartbeatResponse)
+def heartbeat_worker(
+    payload: WorkerHeartbeatRequest,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_worker: Worker = Depends(require_authenticated_worker),
+) -> WorkerHeartbeatResponse:
+    try:
+        heartbeat = service.heartbeat(
+            session,
+            worker=current_worker,
+            capability_summary=payload.capability_summary.model_dump(mode="json") if payload.capability_summary is not None else None,
+            host_summary=payload.host_summary.model_dump(mode="json") if payload.host_summary is not None else None,
+            runtime_summary=payload.runtime_summary.model_dump(mode="json") if payload.runtime_summary is not None else None,
+            binary_summary=[item.model_dump(mode="json") for item in payload.binary_summary],
+            health_status=payload.health_status,
+            health_summary=payload.health_summary,
+        )
+        session.commit()
+        return WorkerHeartbeatResponse(**heartbeat)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@worker_router.post("/run-once", response_model=WorkerRunOnceResponse, dependencies=[Depends(require_admin_user)])
 def run_worker_once(
     worker_service: WorkerService = Depends(get_worker_service),
     current_user: User = Depends(require_admin_user),
@@ -40,30 +135,106 @@ def run_worker_once(
     )
 
 
-@router.get("/status", response_model=WorkerStatusResponse)
+@worker_router.get("/status", response_model=WorkerStatusResponse, dependencies=[Depends(require_admin_user)])
 def get_worker_status(
     worker_service: WorkerService = Depends(get_worker_service),
-    config_bundle: ConfigBundle = Depends(get_config_bundle),
-    local_worker_loop: LocalWorkerLoop = Depends(get_local_worker_loop),
     current_user: User = Depends(require_admin_user),
 ) -> WorkerStatusResponse:
     del current_user
-    ffmpeg = BinaryStatusResponse(**worker_service.binary_status(config_bundle.app.media.ffmpeg_path))
-    ffprobe = BinaryStatusResponse(**worker_service.binary_status(config_bundle.app.media.ffprobe_path))
-    snapshot = local_worker_loop.status_tracker.snapshot()
-    return WorkerStatusResponse(
-        worker_name=local_worker_loop.worker_name,
-        local_only=True,
-        default_queue=config_bundle.workers.default_queue,
-        ffmpeg=ffmpeg,
-        ffprobe=ffprobe,
-        local_worker_enabled=config_bundle.workers.local.enabled,
-        local_worker_queue=config_bundle.workers.local.queue,
-        last_run_started_at=snapshot.last_run_started_at,
-        last_run_completed_at=snapshot.last_run_completed_at,
-        last_processed_job_id=snapshot.last_processed_job_id,
-        last_result_status=snapshot.last_result_status,
-        last_failure_message=snapshot.last_failure_message,
-        processed_jobs=snapshot.processed_jobs,
-        capabilities=config_bundle.workers.local.capabilities.model_dump(mode="json"),
+    payload = worker_service.status_summary()
+    payload["queue_health"] = QueueHealthSummaryResponse(**payload["queue_health"])
+    return WorkerStatusResponse(**payload)
+
+
+@worker_router.post("/self-test", response_model=WorkerSelfTestResponse, dependencies=[Depends(require_admin_user)])
+def run_worker_self_test(
+    worker_service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerSelfTestResponse:
+    del current_user
+    payload = worker_service.self_test()
+    payload["checks"] = [
+        WorkerSelfTestCheckResponse(**check)
+        for check in payload["checks"]
+    ]
+    return WorkerSelfTestResponse(**payload)
+
+
+@workers_router.get("", response_model=WorkerInventoryListResponse, dependencies=[Depends(require_admin_user)])
+def list_workers(
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerInventoryListResponse:
+    del current_user
+    items = service.list_worker_inventory(session)
+    return WorkerInventoryListResponse(
+        items=[WorkerInventorySummaryResponse(**item) for item in items]
     )
+
+
+@workers_router.get("/{worker_id}", response_model=WorkerInventoryDetailResponse, dependencies=[Depends(require_admin_user)])
+def get_worker(
+    worker_id: str,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerInventoryDetailResponse:
+    del current_user
+    try:
+        item = service.get_worker_inventory_item(session, worker_id=worker_id)
+        return WorkerInventoryDetailResponse(**item)
+    except ApiServiceError as error:
+        _raise_service_error(error)
+
+
+@workers_router.post("/{worker_id}/enable", response_model=WorkerStateChangeResponse, dependencies=[Depends(require_admin_user)])
+def enable_worker(
+    worker_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerStateChangeResponse:
+    try:
+        worker = service.set_remote_worker_enabled(
+            session,
+            worker_id=worker_id,
+            enabled=True,
+            actor=current_user,
+            request=request,
+        )
+        session.commit()
+        return WorkerStateChangeResponse(
+            worker=WorkerInventoryDetailResponse(**worker),
+            status="enabled",
+        )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@workers_router.post("/{worker_id}/disable", response_model=WorkerStateChangeResponse, dependencies=[Depends(require_admin_user)])
+def disable_worker(
+    worker_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerStateChangeResponse:
+    try:
+        worker = service.set_remote_worker_enabled(
+            session,
+            worker_id=worker_id,
+            enabled=False,
+            actor=current_user,
+            request=request,
+        )
+        session.commit()
+        return WorkerStateChangeResponse(
+            worker=WorkerInventoryDetailResponse(**worker),
+            status="disabled",
+        )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)

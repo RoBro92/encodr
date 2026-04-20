@@ -2,14 +2,15 @@
 
 ## Purpose
 
-The API is the control plane for authentication, queue visibility, operational state, manual review actions, configuration inspection, and analytics access.
+The API is the authenticated operational control plane for Encodr.
 
-## Early endpoint groups
+## Implemented endpoint groups
 
 - `GET /health`
+- `POST /auth/bootstrap-admin`
 - `POST /auth/login`
-- `POST /auth/refresh`
 - `POST /auth/logout`
+- `POST /auth/refresh`
 - `GET /auth/me`
 - `GET /files`
 - `GET /files/{file_id}`
@@ -21,31 +22,55 @@ The API is the control plane for authentication, queue visibility, operational s
 - `GET /jobs/{job_id}`
 - `POST /jobs`
 - `POST /jobs/{job_id}/retry`
+- `GET /review/items`
+- `GET /review/items/{item_id}`
+- `POST /review/items/{item_id}/approve`
+- `POST /review/items/{item_id}/reject`
+- `POST /review/items/{item_id}/hold`
+- `POST /review/items/{item_id}/mark-protected`
+- `POST /review/items/{item_id}/clear-protected`
+- `POST /review/items/{item_id}/replan`
+- `POST /review/items/{item_id}/create-job`
 - `GET /worker/status`
+- `POST /worker/self-test`
 - `POST /worker/run-once`
+- `POST /worker/register`
+- `POST /worker/heartbeat`
+- `GET /workers`
+- `GET /workers/{worker_id}`
+- `POST /workers/{worker_id}/enable`
+- `POST /workers/{worker_id}/disable`
 - `GET /system/storage`
 - `GET /system/runtime`
 - `GET /config/effective`
+- `GET /analytics/overview`
+- `GET /analytics/storage`
+- `GET /analytics/outcomes`
+- `GET /analytics/media`
+- `GET /analytics/recent`
+- `GET /analytics/dashboard`
 
-## Current Milestone 8 scope
+## Current API posture
 
-- All operational endpoints are authenticated and currently admin-only.
-- Read endpoints expose tracked files, jobs, latest snapshots, worker status, storage status, runtime status, and sanitised effective config.
-- Write endpoints are limited to probing, planning, job creation, retrying eligible jobs, and triggering one local worker pass.
-- The API intentionally avoids broad CRUD or config mutation at this stage.
+- all operational endpoints are authenticated
+- operational routes are currently admin-only
+- health stays public
+- config visibility is sanitised
+- write operations are explicit and conservative
+- worker registration/heartbeat is separate from user auth
 
-## API principles
+## Groundwork only
 
-- return explicit decision explanations, not opaque statuses
-- avoid coupling list contracts directly to raw ffprobe JSON
-- keep write operations auditable
-- support pagination from the start where lists may grow
-- do not expose secrets, password hashes, refresh token hashes, or raw auth material
+- remote workers can register and heartbeat
+- worker inventory can show local and remote workers together
+- jobs can carry worker-association fields for future dispatch visibility
 
-## Milestone mapping
+Remote workers cannot claim or execute jobs yet.
 
-- Milestone 0: health endpoint only
-- Milestone 7: auth baseline
-- Milestone 8: operational endpoints
-- Milestone 10 and 11: analytics and health pages
-- Milestone 12: manual review actions
+## Principles
+
+- explicit, task-focused endpoints over broad CRUD
+- typed responses
+- auditable writes
+- safe defaults
+- no secret exposure

@@ -149,6 +149,12 @@ export function FilesPage() {
                   <Link className="table-link" to={APP_ROUTES.fileDetail(item.id)}>
                     <strong>{item.source_filename}</strong>
                     <span>{item.source_directory}</span>
+                    {item.requires_review ? (
+                      <span className="badge-row">
+                        <StatusBadge value={item.review_status ?? "open"} />
+                        <span>Open in Manual Review</span>
+                      </span>
+                    ) : null}
                   </Link>
                 ),
               },
@@ -202,6 +208,8 @@ export function FilesPage() {
                   { label: "Lifecycle state", value: <StatusBadge value={detail.lifecycle_state} /> },
                   { label: "Compliance state", value: <StatusBadge value={detail.compliance_state} /> },
                   { label: "Protected", value: formatRelativeBoolean(detail.is_protected) },
+                  { label: "Protected source", value: detail.protected_source ?? "None" },
+                  { label: "Manual review", value: detail.requires_review ? <Link to={APP_ROUTES.reviewDetail(detail.id)}><StatusBadge value={detail.review_status ?? "open"} /></Link> : "Not required" },
                   { label: "4K", value: formatRelativeBoolean(detail.is_4k) },
                   { label: "Last observed size", value: formatBytes(detail.last_observed_size) },
                   { label: "Updated", value: formatDateTime(detail.updated_at) },

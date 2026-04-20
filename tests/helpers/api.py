@@ -85,3 +85,8 @@ def load_api_security_module():
 def load_api_auth_module():
     with import_api_module("app.core.auth") as module:
         return module
+
+
+def load_api_worker_auth_module():
+    with import_api_module("app.core.worker_auth") as module:
+        return module

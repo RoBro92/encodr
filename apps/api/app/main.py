@@ -6,6 +6,8 @@ from sqlalchemy.orm import sessionmaker
 
 from app.api.routes import router
 from app.core import PasswordHashService, TokenService, load_auth_runtime_settings
+from app.core.security import WorkerTokenService
+from app.core.worker_auth import load_worker_auth_runtime_settings
 from encodr_core.config import ConfigBundle, load_config_bundle
 from encodr_core.probe import FFprobeClient
 from encodr_db.runtime import LocalWorkerLoop, WorkerExecutionService, WorkerStatusTracker
@@ -27,10 +29,13 @@ def create_app(
     )
 
     auth_runtime = load_auth_runtime_settings(bundle.app)
+    worker_auth_runtime = load_worker_auth_runtime_settings(bundle.app)
     app.state.config_bundle = bundle
     app.state.app_version = APP_VERSION
     app.state.password_hasher = PasswordHashService(bundle.app.auth.password_hash_scheme)
     app.state.token_service = TokenService(auth_runtime)
+    app.state.worker_token_service = WorkerTokenService()
+    app.state.worker_auth_runtime = worker_auth_runtime
 
     if session_factory is None:
         engine = create_engine(bundle.app.database.dsn, future=True)

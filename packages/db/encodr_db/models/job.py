@@ -3,16 +3,18 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin, json_type
-from encodr_db.models.enums import JobStatus, ReplacementStatus, VerificationStatus
+from encodr_db.models.enums import JobStatus, ReplacementStatus, VerificationStatus, WorkerType
 from encodr_db.models.types import enum_type
 
 if TYPE_CHECKING:
+    from encodr_db.models.manual_review_decision import ManualReviewDecision
     from encodr_db.models.plan_snapshot import PlanSnapshot
     from encodr_db.models.tracked_file import TrackedFile
+    from encodr_db.models.worker import Worker
 
 
 class Job(Base, IdMixin, TimestampMixin):
@@ -33,6 +35,18 @@ class Job(Base, IdMixin, TimestampMixin):
         nullable=False,
         index=True,
     )
+    assigned_worker_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workers.id", ondelete="SET NULL"),
+        index=True,
+    )
+    last_worker_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workers.id", ondelete="SET NULL"),
+        index=True,
+    )
+    requested_worker_type: Mapped[WorkerType | None] = mapped_column(
+        enum_type(WorkerType, "worker_type"),
+        index=True,
+    )
     worker_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[JobStatus] = mapped_column(
         enum_type(JobStatus, "job_status"),
@@ -44,6 +58,10 @@ class Job(Base, IdMixin, TimestampMixin):
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_message: Mapped[str | None] = mapped_column(Text)
+    failure_category: Mapped[str | None] = mapped_column(String(255), index=True)
+    input_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    output_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    space_saved_bytes: Mapped[int | None] = mapped_column(BigInteger)
     output_path: Mapped[str | None] = mapped_column(Text)
     execution_command: Mapped[list[str] | None] = mapped_column(json_type())
     execution_stdout: Mapped[str | None] = mapped_column(Text)
@@ -70,3 +88,12 @@ class Job(Base, IdMixin, TimestampMixin):
 
     tracked_file: Mapped["TrackedFile"] = relationship(back_populates="jobs")
     plan_snapshot: Mapped["PlanSnapshot"] = relationship(back_populates="jobs")
+    assigned_worker: Mapped["Worker | None"] = relationship(
+        back_populates="assigned_jobs",
+        foreign_keys=[assigned_worker_id],
+    )
+    last_worker: Mapped["Worker | None"] = relationship(
+        back_populates="processed_jobs",
+        foreign_keys=[last_worker_id],
+    )
+    manual_review_decisions: Mapped[list["ManualReviewDecision"]] = relationship(back_populates="job")

@@ -40,3 +40,19 @@ export function titleCase(value: string): string {
     .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
     .join(" ");
 }
+
+export function formatDurationSeconds(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) {
+    return "Not available";
+  }
+  if (value < 60) {
+    return `${value}s`;
+  }
+  if (value < 3600) {
+    return `${Math.floor(value / 60)}m`;
+  }
+  if (value < 86400) {
+    return `${Math.floor(value / 3600)}h`;
+  }
+  return `${Math.floor(value / 86400)}d`;
+}

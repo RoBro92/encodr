@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-echo "Lint placeholder"
-echo "Add Ruff, mypy, frontend linting, and test commands in later milestones."
-
+python3 -m compileall apps packages tests >/dev/null
+echo "Compile checks passed."
+echo "Ruff, mypy, and dedicated frontend linting are still out of scope for this release."

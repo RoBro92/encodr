@@ -28,6 +28,11 @@ export type FileSummary = {
   lifecycle_state: string;
   compliance_state: string;
   is_protected: boolean;
+  operator_protected: boolean;
+  protected_source: string | null;
+  operator_protected_note: string | null;
+  requires_review: boolean;
+  review_status: string | null;
   last_processed_policy_version: number | null;
   last_processed_profile_name: string | null;
   created_at: string;
@@ -109,8 +114,15 @@ export type JobSummary = {
   started_at: string | null;
   completed_at: string | null;
   failure_message: string | null;
+  failure_category: string | null;
   verification_status: string;
   replacement_status: string;
+  tracked_file_is_protected: boolean | null;
+  requires_review: boolean;
+  review_status: string | null;
+  input_size_bytes: number | null;
+  output_size_bytes: number | null;
+  space_saved_bytes: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -142,6 +154,22 @@ export type BinaryStatus = {
   discoverable: boolean;
   exists: boolean;
   executable: boolean;
+  status: string;
+  message: string;
+};
+
+export type QueueHealthSummary = {
+  status: string;
+  summary: string;
+  pending_count: number;
+  running_count: number;
+  failed_count: number;
+  manual_review_count: number;
+  completed_count: number;
+  oldest_pending_age_seconds: number | null;
+  last_completed_age_seconds: number | null;
+  recent_failed_count: number;
+  recent_manual_review_count: number;
 };
 
 export type WorkerRunOnceResponse = {
@@ -154,12 +182,16 @@ export type WorkerRunOnceResponse = {
 };
 
 export type WorkerStatus = {
+  status: string;
+  summary: string;
   worker_name: string;
+  mode: string;
   local_only: boolean;
+  enabled: boolean;
+  available: boolean;
   default_queue: string;
   ffmpeg: BinaryStatus;
   ffprobe: BinaryStatus;
-  local_worker_enabled: boolean;
   local_worker_queue: string;
   last_run_started_at: string | null;
   last_run_completed_at: string | null;
@@ -168,31 +200,198 @@ export type WorkerStatus = {
   last_failure_message: string | null;
   processed_jobs: number;
   capabilities: Record<string, boolean>;
+  queue_health: QueueHealthSummary;
+  self_test_available: boolean;
 };
 
 export type PathStatus = {
+  role: string;
   path: string;
+  status: string;
+  message: string;
   exists: boolean;
   is_directory: boolean;
   readable: boolean;
   writable: boolean;
+  total_space_bytes: number | null;
+  free_space_bytes: number | null;
+  free_space_ratio: number | null;
 };
 
 export type StorageStatus = {
+  status: string;
+  summary: string;
   scratch: PathStatus;
   data_dir: PathStatus;
   media_mounts: PathStatus[];
+  warnings: string[];
 };
 
 export type RuntimeStatus = {
+  status: string;
+  summary: string;
   version: string;
   environment: string;
   db_reachable: boolean;
+  schema_reachable: boolean;
   auth_enabled: boolean;
   api_base_path: string;
   scratch_dir: string;
   data_dir: string;
   media_mounts: string[];
+  local_worker_enabled: boolean;
+  user_count: number | null;
+  config_sources: Record<string, string>;
+  warnings: string[];
+  queue_health: QueueHealthSummary;
+};
+
+export type WorkerSelfTestCheck = {
+  code: string;
+  status: string;
+  message: string;
+};
+
+export type WorkerSelfTestResponse = {
+  status: string;
+  summary: string;
+  worker_name: string;
+  started_at: string;
+  completed_at: string;
+  checks: WorkerSelfTestCheck[];
+};
+
+export type WorkerCapabilitySummary = {
+  execution_modes: string[];
+  supported_video_codecs: string[];
+  supported_audio_codecs: string[];
+  hardware_hints: string[];
+  binary_support: Record<string, boolean>;
+  max_concurrent_jobs: number | null;
+  tags: string[];
+};
+
+export type WorkerHostSummary = {
+  hostname: string | null;
+  platform: string | null;
+  agent_version: string | null;
+  python_version: string | null;
+};
+
+export type WorkerRuntimeSummary = {
+  queue: string | null;
+  scratch_dir: string | null;
+  media_mounts: string[];
+  last_completed_job_id: string | null;
+};
+
+export type WorkerBinarySummary = {
+  name: string;
+  configured_path: string | null;
+  discoverable: boolean | null;
+  message: string | null;
+};
+
+export type WorkerInventorySummary = {
+  id: string;
+  worker_key: string;
+  display_name: string;
+  worker_type: string;
+  source: string;
+  enabled: boolean;
+  registration_status: string;
+  health_status: string;
+  health_summary: string | null;
+  last_seen_at: string | null;
+  last_heartbeat_at: string | null;
+  last_registration_at: string | null;
+  capability_summary: WorkerCapabilitySummary;
+  host_summary: WorkerHostSummary;
+  pending_assignment_count: number;
+  last_completed_job_id: string | null;
+};
+
+export type WorkerInventoryDetail = WorkerInventorySummary & {
+  runtime_summary: WorkerRuntimeSummary | null;
+  binary_summary: WorkerBinarySummary[];
+  assigned_job_ids: string[];
+  last_processed_job_id: string | null;
+  recent_failure_message: string | null;
+};
+
+export type WorkerInventoryListResponse = {
+  items: WorkerInventorySummary[];
+};
+
+export type WorkerStateChangeResponse = {
+  worker: WorkerInventoryDetail;
+  status: string;
+};
+
+export type ReviewReason = {
+  code: string;
+  message: string;
+  kind: string;
+};
+
+export type ProtectedStateSummary = {
+  is_protected: boolean;
+  planner_protected: boolean;
+  operator_protected: boolean;
+  source: string;
+  reason_codes: string[];
+  note: string | null;
+  updated_at: string | null;
+  updated_by_username: string | null;
+};
+
+export type ReviewDecisionSummary = {
+  id: string;
+  decision_type: string;
+  note: string | null;
+  created_at: string;
+  created_by_user_id: string;
+  created_by_username: string;
+};
+
+export type ReviewItemSummary = {
+  id: string;
+  source_path: string;
+  review_status: string;
+  requires_review: boolean;
+  confidence: string | null;
+  tracked_file: FileSummary;
+  latest_plan: PlanSnapshotSummary | null;
+  latest_job: JobSummary | null;
+  protected_state: ProtectedStateSummary;
+  reasons: ReviewReason[];
+  warnings: ReviewReason[];
+  latest_probe_at: string | null;
+  latest_plan_at: string | null;
+  latest_job_at: string | null;
+  latest_decision: ReviewDecisionSummary | null;
+};
+
+export type ReviewItemDetail = ReviewItemSummary & {
+  latest_probe_snapshot_id: string | null;
+  latest_plan_snapshot_id: string | null;
+  latest_job_id: string | null;
+};
+
+export type ReviewListResponse = {
+  items: ReviewItemSummary[];
+  limit: number | null;
+  offset: number;
+};
+
+export type ReviewDecisionPayload = {
+  note?: string;
+};
+
+export type ReviewDecisionResponse = {
+  review_item: ReviewItemDetail;
+  decision: ReviewDecisionSummary | null;
+  job: JobDetail | null;
 };
 
 export type AuthConfigSummary = {
@@ -291,4 +490,96 @@ export type ProbeOrPlanPayload = {
 export type CreateJobPayload = {
   tracked_file_id?: string;
   plan_snapshot_id?: string;
+};
+
+export type CountByValue = {
+  value: string;
+  count: number;
+};
+
+export type AnalyticsOverview = {
+  total_tracked_files: number;
+  files_by_lifecycle: CountByValue[];
+  files_by_compliance: CountByValue[];
+  total_jobs: number;
+  jobs_by_status: CountByValue[];
+  plans_by_action: CountByValue[];
+  verification_outcomes: CountByValue[];
+  replacement_outcomes: CountByValue[];
+  processed_under_current_policy_count: number;
+  protected_file_count: number;
+  four_k_file_count: number;
+};
+
+export type ActionStorageSummary = {
+  action: string;
+  job_count: number;
+  space_saved_bytes: number;
+  average_space_saved_bytes: number | null;
+};
+
+export type AnalyticsStorage = {
+  total_original_size_bytes: number;
+  total_output_size_bytes: number;
+  total_space_saved_bytes: number;
+  average_space_saved_bytes: number | null;
+  measurable_job_count: number;
+  measurable_completed_job_count: number;
+  savings_by_action: ActionStorageSummary[];
+};
+
+export type FailureCategory = {
+  category: string;
+  count: number;
+  sample_message: string | null;
+};
+
+export type RecentOutcome = {
+  job_id: string;
+  tracked_file_id: string;
+  file_name: string;
+  status: string;
+  action: string;
+  updated_at: string;
+  failure_category: string | null;
+  failure_message: string | null;
+};
+
+export type AnalyticsOutcomes = {
+  jobs_by_status: CountByValue[];
+  verification_outcomes: CountByValue[];
+  replacement_outcomes: CountByValue[];
+  top_failure_categories: FailureCategory[];
+  recent_outcomes: RecentOutcome[];
+};
+
+export type ResolutionActionBreakdown = {
+  resolution: string;
+  actions: CountByValue[];
+};
+
+export type AnalyticsMedia = {
+  latest_probe_count: number;
+  latest_plan_count: number;
+  latest_probe_english_audio_count: number;
+  latest_probe_forced_english_subtitle_count: number;
+  latest_plan_forced_subtitle_intent_count: number;
+  latest_plan_surround_preservation_intent_count: number;
+  latest_plan_atmos_preservation_intent_count: number;
+  action_breakdown_by_resolution: ResolutionActionBreakdown[];
+  container_distribution: CountByValue[];
+  video_codec_distribution: CountByValue[];
+};
+
+export type RecentAnalytics = {
+  recent_completed_jobs: RecentOutcome[];
+  recent_failed_jobs: RecentOutcome[];
+};
+
+export type AnalyticsDashboard = {
+  overview: AnalyticsOverview;
+  storage: AnalyticsStorage;
+  outcomes: AnalyticsOutcomes;
+  media: AnalyticsMedia;
+  recent: RecentAnalytics;
 };

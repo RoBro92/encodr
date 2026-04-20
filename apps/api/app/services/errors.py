@@ -9,6 +9,10 @@ class ApiValidationError(ApiServiceError):
     status_code = 400
 
 
+class ApiAuthenticationError(ApiServiceError):
+    status_code = 401
+
+
 class ApiNotFoundError(ApiServiceError):
     status_code = 404
 

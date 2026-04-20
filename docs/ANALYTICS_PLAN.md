@@ -1,34 +1,35 @@
 # Analytics Plan
 
-## Core measures
+## Current analytics baseline
 
-- processed file counts
-- skipped counts
-- remuxed counts
-- transcoded counts
-- total size saved
-- per-worker job counts and success rates
-- subtitle removal counts
-- audio removal counts
-- surround preservation counts
-- Atmos preservation counts
+- tracked-file counts by lifecycle/compliance/protected/4K state
+- job counts by status
+- plan counts by action
+- verification/replacement outcome counts
+- measured input/output size savings where available
+- recent activity summaries
+- plan-intent media summaries
+- latest-probe summaries for selected media characteristics
 
-## Reporting views
+## Purpose
 
-- recent processing summary
-- rolling daily and weekly trends
-- per-worker operational summary
-- policy impact summary by decision type
+Current analytics are operational. They support dashboards, reporting, troubleshooting, and capacity awareness. They are not BI-grade and do not attempt to be a general reporting platform.
 
-## Data expectations
+## Source of truth
 
-- capture metrics at plan and completion time
-- keep enough stream-level summary to explain counts without storing excessive raw output
-- tie analytics rows back to policy version where practical
+- persisted tracked-file/job/plan/probe history
+- measured job sizes where available
+- persisted verification/replacement outcomes
+- explicit distinction between probe-derived and plan-intent-derived metrics
 
-## Milestone timing
+## Current UI use
 
-- basic counters in Milestone 10
-- worker and storage operational views in Milestone 11
-- manual review impact reporting can follow later
+- dashboard cards and breakdowns
+- reports page summary sections
 
+## Future work
+
+- richer time-series trends
+- remote-worker analytics
+- review/hold trend reporting
+- export/report-builder features

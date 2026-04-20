@@ -12,6 +12,7 @@ from encodr_db.models.enums import UserRole
 
 if TYPE_CHECKING:
     from encodr_db.models.audit_event import AuditEvent
+    from encodr_db.models.manual_review_decision import ManualReviewDecision
     from encodr_db.models.refresh_token import RefreshToken
 
 
@@ -40,4 +41,8 @@ class User(Base, IdMixin, TimestampMixin):
     audit_events: Mapped[list["AuditEvent"]] = relationship(
         back_populates="user",
         order_by="AuditEvent.created_at",
+    )
+    manual_review_decisions: Mapped[list["ManualReviewDecision"]] = relationship(
+        back_populates="created_by_user",
+        order_by="ManualReviewDecision.created_at",
     )

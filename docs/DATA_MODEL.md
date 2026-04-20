@@ -1,54 +1,62 @@
 # Data Model
 
-## Core persistent entities
+## Durable entities
 
-- `tracked_files`: durable source-file identity, last-seen metadata, lifecycle state, compliance state, and last processed policy metadata
-- `probe_snapshots`: immutable normalised probe payload snapshots linked to a tracked file
-- `plan_snapshots`: immutable persisted processing plans linked to both tracked file and probe snapshot
-- `jobs`: queue-oriented job records linked to the tracked file and selected plan snapshot, including staged output, verification, and replacement outcomes
+- `tracked_files`: durable source identity and current operational state
+- `probe_snapshots`: immutable normalised probe history
+- `plan_snapshots`: immutable processing-plan history
+- `jobs`: execution, verification, replacement, and analytics outcomes
+- `users`: local authenticated operators
+- `refresh_tokens`: revocable refresh-token state
+- `audit_events`: append-only audit log
+- `manual_review_decisions`: append-only review/protection decisions
+- `workers`: persisted remote worker identity, capability, and heartbeat state
 
-## Core in-memory media model
+## Tracked-file fields of note
 
-- `MediaFile`: one normalised representation of a probed file
-- `ContainerFormat`: file-level container metadata such as format, duration, bitrate, and size
-- `VideoStream`, `AudioStream`, `SubtitleStream`: typed stream models with normalised tags and disposition
-- `AttachmentStream`, `DataStream`, `UnknownStream`: lighter stream models for non-primary stream types
-- `Chapter`: normalised chapter boundaries and titles
+- source path, filename, extension, and directory
+- last observed size and modified time
+- `is_4k`
+- lifecycle/compliance state
+- protected/review fields
+- last processed policy version
 
-These models are produced directly from ffprobe JSON in Milestone 2 so Milestone 3 can consume a stable domain object rather than raw ffprobe output.
+## Snapshot model
 
-## Core in-memory planning model
+- probe and plan snapshots are immutable
+- latest snapshot access is derived, not by mutating old records
+- jobs reference one chosen plan snapshot
+- review decisions reference the relevant file/plan/job context without rewriting history
 
-- `ProcessingPlan`: one deterministic planning result for a file
-- `PolicyContext`: selected policy version and matched profile override context
-- `AudioSelectionIntent`, `SubtitleSelectionIntent`, `VideoPlan`, `ContainerPlan`: execution-facing intent without command generation
-- `PlanReason` and `PlanWarning`: stable explanation objects for operator review and later API/UI surfacing
+## Job model
 
-## Important relationships
+Jobs persist:
 
-- A tracked file can have many probe snapshots.
-- A tracked file can have many plan snapshots.
-- Each plan snapshot references one probe snapshot and one policy version.
-- A tracked file can have many jobs over time.
-- A job references one plan snapshot, though retries are still represented as separate job rows.
+- status and attempts
+- staged output path
+- verification status/payload
+- replacement status/payload
+- final output path and backup path
+- failure message/category
+- measured input/output sizes
+- worker association groundwork fields
 
-## Execution-state persistence
+## Worker model
 
-- job rows persist the staged output path produced by ffmpeg
-- verification status and verification payload are stored on the job
-- replacement status, final output path, backup path, and replacement failure details are stored on the job
-- tracked files only move to fully completed and compliant after verification and final placement succeed
+Remote workers persist:
 
-## Key modelling concerns
+- stable worker key and display name
+- worker type and enablement
+- token hash
+- capability, host, runtime, and binary summaries
+- registration and heartbeat timestamps
+- health summary/status
 
-- distinguish source file identity from current path
-- keep probe and planning history immutable for later audit and analytics use
-- make idempotency possible so already-processed files under the same policy can be detected safely
-- keep plan explanations queryable for debugging and review
+The local worker is projected into the same API shape, but is not persisted as a row.
 
-## Milestone timing
+## In-memory models
 
-- domain models begin in Milestone 2
-- DB schema lands in Milestone 4
-- verification and safe replacement state lands in Milestone 6
-- analytics rollups likely land in Milestone 10
+- `MediaFile` and typed stream/container models from probing
+- `ProcessingPlan` and related plan-intent models from planning
+
+These remain the source for deterministic planning and execution mapping.

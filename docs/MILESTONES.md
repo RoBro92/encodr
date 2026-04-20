@@ -1,6 +1,6 @@
 # Milestones
 
-Use this file as the working delivery checklist. Each milestone is intended to land through small PRs with clear scope.
+Use this file as the delivery checklist and implementation ledger.
 
 ## Milestone 0: scaffold, docs, config examples, compose skeleton
 
@@ -48,7 +48,7 @@ Use this file as the working delivery checklist. Each milestone is intended to l
 ## Milestone 7: auth and security baseline
 
 - [x] PR 7.1 Add user model, password hashing, and login flow
-- [x] PR 7.2 Add JWT or session token handling with refresh flow
+- [x] PR 7.2 Add JWT/refresh-token auth handling
 - [x] PR 7.3 Add audit logging for sensitive actions
 
 ## Milestone 7.5: testing and validation baseline
@@ -57,7 +57,7 @@ Use this file as the working delivery checklist. Each milestone is intended to l
 - [x] PR 7.5.2 Add integration coverage for auth, migrations, and worker execution flow
 - [x] PR 7.5.3 Add end-to-end smoke coverage and selective test commands
 
-## Milestone 8: API endpoints
+## Milestone 8: operational API surface
 
 - [x] PR 8.1 Add authenticated file and job read endpoints
 - [x] PR 8.2 Add conservative probe, plan, job-create, retry, and worker run-once endpoints
@@ -66,35 +66,35 @@ Use this file as the working delivery checklist. Each milestone is intended to l
 ## Milestone 9: initial UI shell and dashboard
 
 - [x] PR 9.1 Add UI shell, routing, and API client baseline
-- [x] PR 9.2 Build dashboard placeholders from live API data
-- [x] PR 9.3 Add queue and recent-job views
+- [x] PR 9.2 Build dashboard views from live API data
+- [x] PR 9.3 Add files, jobs, system, and config views
 
 ## Milestone 10: analytics and reporting
 
-- [ ] PR 10.1 Add analytics tables or rollups
-- [ ] PR 10.2 Expose processed, skipped, remuxed, and transcoded counts
-- [ ] PR 10.3 Expose size-saved and stream-preservation metrics
+- [x] PR 10.1 Add aggregate analytics queries and reporting endpoints
+- [x] PR 10.2 Expose operational outcome and storage metrics
+- [x] PR 10.3 Add dashboard/reporting analytics UI
 
 ## Milestone 11: storage and worker health pages
 
-- [ ] PR 11.1 Add worker heartbeat and capability reporting
-- [ ] PR 11.2 Add storage status endpoints and UI views
-- [ ] PR 11.3 Add operational warnings for low scratch or media path issues
+- [x] PR 11.1 Enrich local worker status with queue and binary diagnostics
+- [x] PR 11.2 Add storage and runtime health endpoints plus UI coverage
+- [x] PR 11.3 Add worker self-test, degraded-state warnings, and health tests
 
 ## Milestone 12: manual review and protected-file flows
 
-- [ ] PR 12.1 Add protected-file rules and hold states
-- [ ] PR 12.2 Add manual approval or reject actions
-- [ ] PR 12.3 Add review notes and audit traceability
+- [x] PR 12.1 Add protected-file rules and hold states
+- [x] PR 12.2 Add manual approval/reject/hold actions
+- [x] PR 12.3 Add review notes, audit traceability, and UI workflow
 
 ## Milestone 13: remote worker groundwork
 
-- [ ] PR 13.1 Define remote worker registration and auth contracts
-- [ ] PR 13.2 Implement worker-agent heartbeat and capability reporting
-- [ ] PR 13.3 Add queue routing groundwork for local vs remote workers
+- [x] PR 13.1 Define remote worker registration and auth contracts
+- [x] PR 13.2 Implement worker-agent heartbeat and capability reporting
+- [x] PR 13.3 Add worker inventory and future assignment groundwork
 
 ## Milestone 14: polish, docs refresh, and release prep
 
-- [ ] PR 14.1 Refresh docs to match implemented behaviour
-- [ ] PR 14.2 Tighten linting, typing, and test gates
-- [ ] PR 14.3 Prepare first internal release checklist
+- [x] PR 14.1 Refresh docs to match implemented behaviour
+- [x] PR 14.2 Tighten setup, validation, and local developer/operator ergonomics
+- [x] PR 14.3 Add release-prep notes, known limitations, and final validation

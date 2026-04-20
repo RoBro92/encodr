@@ -127,6 +127,12 @@ export function JobsPage() {
                   <Link className="table-link" to={APP_ROUTES.jobDetail(item.id)}>
                     <strong>{item.id.slice(0, 8)}</strong>
                     <span>File {item.tracked_file_id.slice(0, 8)}</span>
+                    {item.requires_review || item.tracked_file_is_protected ? (
+                      <span className="badge-row">
+                        {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
+                        {item.tracked_file_is_protected ? <StatusBadge value="manual_review" /> : null}
+                      </span>
+                    ) : null}
                   </Link>
                 ),
               },
@@ -175,6 +181,8 @@ export function JobsPage() {
                   { label: "Status", value: <StatusBadge value={detail.status} /> },
                   { label: "Verification", value: <StatusBadge value={detail.verification_status} /> },
                   { label: "Replacement", value: <StatusBadge value={detail.replacement_status} /> },
+                  { label: "Manual review", value: detail.requires_review ? <Link to={APP_ROUTES.reviewDetail(detail.tracked_file_id)}><StatusBadge value={detail.review_status ?? "open"} /></Link> : "Not required" },
+                  { label: "Protected file", value: detail.tracked_file_is_protected ? <Link to={APP_ROUTES.reviewDetail(detail.tracked_file_id)}><StatusBadge value="manual_review" /></Link> : "No" },
                   { label: "Started", value: formatDateTime(detail.started_at) },
                   { label: "Completed", value: formatDateTime(detail.completed_at) },
                   { label: "Failure message", value: detail.failure_message ?? "Not available" },

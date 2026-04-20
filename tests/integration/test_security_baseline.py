@@ -7,7 +7,12 @@ import pytest
 from encodr_core.config import load_config_bundle
 from encodr_core.config.base import EnvironmentName
 from encodr_db.repositories import RefreshTokenRepository, UserRepository
-from tests.helpers.api import create_test_api_context, load_api_auth_module, load_api_security_module
+from tests.helpers.api import (
+    create_test_api_context,
+    load_api_auth_module,
+    load_api_security_module,
+    load_api_worker_auth_module,
+)
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory, list_table_names
 
@@ -78,6 +83,19 @@ def test_development_auth_secret_fallback_is_available(repo_root: Path, monkeypa
 
     assert settings.secret_key
     assert len(settings.secret_key) >= 32
+
+
+def test_missing_worker_registration_secret_is_rejected_in_production(
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    worker_auth_module = load_api_worker_auth_module()
+    bundle = load_config_bundle(project_root=repo_root)
+    bundle.app.environment = EnvironmentName.PRODUCTION
+    monkeypatch.delenv("ENCODR_WORKER_REGISTRATION_SECRET", raising=False)
+
+    with pytest.raises(RuntimeError, match="ENCODR_WORKER_REGISTRATION_SECRET"):
+        worker_auth_module.load_worker_auth_runtime_settings(bundle.app)
 
 
 def build_context(

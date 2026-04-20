@@ -4,7 +4,7 @@ Local execution service for probing files, building deterministic plans, executi
 
 Current scope:
 
-- boot a placeholder worker process
-- reserve executor, probe, planner, and verification module boundaries
-- keep orchestration thin so later milestones can move logic into shared packages
-
+- local job polling and run-once execution
+- ffmpeg command execution through shared execution helpers
+- staged-output verification and safe placement flow
+- queue/health integration through the shared runtime layer

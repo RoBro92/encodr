@@ -11,6 +11,7 @@ from encodr_db.models.types import enum_type
 
 if TYPE_CHECKING:
     from encodr_db.models.job import Job
+    from encodr_db.models.manual_review_decision import ManualReviewDecision
     from encodr_db.models.probe_snapshot import ProbeSnapshot
     from encodr_db.models.tracked_file import TrackedFile
 
@@ -51,3 +52,4 @@ class PlanSnapshot(Base, IdMixin, TimestampMixin):
     tracked_file: Mapped["TrackedFile"] = relationship(back_populates="plan_snapshots")
     probe_snapshot: Mapped["ProbeSnapshot"] = relationship(back_populates="plan_snapshots")
     jobs: Mapped[list["Job"]] = relationship(back_populates="plan_snapshot")
+    manual_review_decisions: Mapped[list["ManualReviewDecision"]] = relationship(back_populates="plan_snapshot")

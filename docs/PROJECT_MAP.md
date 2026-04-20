@@ -2,71 +2,76 @@
 
 ## Root
 
-- `README.md`: top-level project description and quick start
-- `.env.example`: baseline environment variables
-- `docker-compose.yml`: local development stack skeleton
-- `Makefile`: convenience targets for placeholder services
+- `README.md`: current product overview, setup, auth bootstrap, testing, and limitations
+- `.env.example`: local environment baseline
+- `docker-compose.yml`: local stack for API/UI/worker/dependencies
+- `Makefile`: common local run, bootstrap, test, and check targets
+- `CHANGELOG.md`: internal release notes draft
 
 ## `docs/`
 
-- `PROJECT_OVERVIEW.md`: product purpose and scope boundaries
-- `ARCHITECTURE.md`: runtime and repository architecture
-- `SPEC.md`: baseline requirements and non-goals
-- `MEDIA_POLICY.md`: intended policy behaviour
-- `MILESTONES.md`: milestone and PR checklist
+- `PROJECT_OVERVIEW.md`: product scope and current implementation line
+- `ARCHITECTURE.md`: runtime, persistence, and service boundaries
+- `SPEC.md`: implemented and deferred requirements
+- `MEDIA_POLICY.md`: current planning/policy behaviour
+- `MILESTONES.md`: completed milestone ledger
 - `PROJECT_MAP.md`: this file
-- `API_PLAN.md`: planned API surface
-- `DATA_MODEL.md`: planned persistent and domain data model
-- `SECURITY.md`: security baseline
-- `DEPLOYMENT.md`: deployment assumptions
-- `UI_PLAN.md`: UI shape and information architecture
-- `ANALYTICS_PLAN.md`: planned metrics and reporting
-- `WORKER_PLAN.md`: worker execution model
-- `RENAMING_RULES.md`: Plex-friendly naming rules
-- `DECISIONS.md`: architectural and product decisions already made
+- `API_PLAN.md`: implemented API surface and principles
+- `DATA_MODEL.md`: durable and in-memory model summary
+- `SECURITY.md`: current auth, audit, and worker-auth baseline
+- `DEPLOYMENT.md`: deployment assumptions and operator notes
+- `UI_PLAN.md`: current UI information architecture
+- `ANALYTICS_PLAN.md`: current operational analytics shape
+- `WORKER_PLAN.md`: local worker and remote-worker groundwork
+- `RENAMING_RULES.md`: current naming direction and limits
+- `DECISIONS.md`: confirmed architectural decisions
+- `RELEASE_CHECKLIST.md`: internal release-readiness checklist
+- `KNOWN_LIMITATIONS.md`: explicit current limitations
 
 ## `config/`
 
-- `app.example.yaml`: general app settings
-- `policy.example.yaml`: default policy and path overrides
-- `workers.example.yaml`: local worker plus future remote worker examples
-- `profiles/`: reusable example policy profile overlays
+- `app.example.yaml`: app/runtime defaults
+- `policy.example.yaml`: baseline media policy
+- `workers.example.yaml`: local worker plus remote-worker groundwork examples
+- `profiles/`: reusable policy profile examples
 
 ## `apps/`
 
-- `api/`: FastAPI service entry point, auth routes, operational file or job routes, system or config visibility routes, dependencies, schemas, and service-layer wiring
-- `worker/`: local worker entry point and execution module placeholders
-- `ui/`: Vite + React operational UI with authenticated shell, routed pages, typed API client, and frontend tests
-- `worker-agent/`: future remote worker control-plane process
+- `api/`: FastAPI app, auth, files/jobs/review/analytics/system/worker routes, schemas, and services
+- `worker/`: local execution worker entry point and orchestration shell
+- `ui/`: authenticated React operator console
+- `worker-agent/`: remote worker groundwork for registration, heartbeat, capability reporting, and token handling
 
 ## `packages/`
 
-- `core/`: shared deterministic business logic
-- `core/encodr_core/config/`: typed config models, YAML loading, bootstrap resolution, and validation shaping
-- `core/encodr_core/media/`: normalised media/container/stream models and probe normalisation helpers
-- `core/encodr_core/planning/`: deterministic policy evaluation, profile resolution, stream selection intent, and plan models
-- `core/encodr_core/probe/`: ffprobe client, parser, and structured probe errors
-- `db/`: persistence layer and migrations
-- `db/encodr_db/models/`: SQLAlchemy models for tracked files, snapshots, jobs, users, refresh tokens, and audit events
-- `db/encodr_db/repositories/`: repository helpers for file, snapshot, job, auth, and audit persistence
-- `db/encodr_db/migrations/`: Alembic environment and revision history
-- `db/encodr_db/runtime/`: shared local worker loop and execution bridge used by the worker process and API run-once endpoint
-- `shared/`: small enums and type helpers
+- `core/encodr_core/config/`: typed config models, bootstrap, and validation
+- `core/encodr_core/probe/`: ffprobe execution and parsing
+- `core/encodr_core/media/`: stable media/domain models
+- `core/encodr_core/planning/`: deterministic plan generation and reasons
+- `core/encodr_core/execution/`: plan-to-ffmpeg mapping and runner support
+- `core/encodr_core/verification/`: staged-output verification rules
+- `core/encodr_core/replacement/`: safe placement/replacement helpers
+- `db/encodr_db/models/`: SQLAlchemy models for files, snapshots, jobs, users, audit, review, and workers
+- `db/encodr_db/repositories/`: persistence and aggregate query helpers
+- `db/encodr_db/runtime/`: local worker run-once/runtime helpers
+- `db/encodr_db/migrations/`: Alembic environment and revisions
+- `shared/`: small shared enums and type helpers
 
 ## `infra/`
 
-- `docker/`: skeletal container definitions
-- `scripts/`: project utility scripts
+- `docker/`: Dockerfiles for API, worker, UI, and worker-agent
+- `scripts/bootstrap.sh`: create local working config/env files if missing
+- `scripts/dev-up.sh`: start the Compose stack with a minimal guard
+- `scripts/lint.sh`: lightweight compile sanity check
 
 ## `tests/`
 
-- `fixtures/`: sample metadata and future anonymised media fixtures
-- `helpers/`: reusable API, auth, DB, filesystem, and job-setup helpers
-- `unit/`: deterministic unit tests
-- `integration/`: service and persistence integration tests
-- `e2e/`: controlled vertical-slice workflow tests
-- `conftest.py` and `pytest.ini`: shared pytest path setup, marker registration, and collection defaults
+- `unit/`: deterministic logic and repository tests
+- `integration/`: real app/DB/auth/runtime integration
+- `e2e/`: controlled vertical-slice flows
+- `fixtures/`: representative ffprobe/static fixtures
+- `helpers/`: reusable test setup helpers
 
-## Current naming note
+## Current release note
 
-The repository now uses `encodr_*` package names consistently across code, packaging metadata, and documentation.
+The repository now reflects a usable internal `0.1.0` baseline. Remote worker execution and advanced orchestration remain intentionally out of scope.

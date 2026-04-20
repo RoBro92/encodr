@@ -3,14 +3,14 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Select, desc, select
+from sqlalchemy import Select, desc, or_, select
 from sqlalchemy.orm import Session
 
 from encodr_core.execution import ExecutionResult
 from encodr_core.media.models import MediaFile
 from encodr_core.planning import ProcessingPlan
 from encodr_core.planning.enums import PlanAction
-from encodr_db.models import ComplianceState, FileLifecycleState, PlanSnapshot, ProbeSnapshot, TrackedFile
+from encodr_db.models import ComplianceState, FileLifecycleState, Job, JobStatus, PlanSnapshot, ProbeSnapshot, TrackedFile
 
 
 class TrackedFileRepository:
@@ -92,6 +92,39 @@ class TrackedFileRepository:
             query = query.limit(limit)
         return list(self.session.scalars(query))
 
+    def list_review_candidates(self) -> list[TrackedFile]:
+        manual_review_plan_exists = (
+            select(PlanSnapshot.id)
+            .where(
+                PlanSnapshot.tracked_file_id == TrackedFile.id,
+                PlanSnapshot.action == PlanAction.MANUAL_REVIEW,
+            )
+            .exists()
+        )
+        review_job_exists = (
+            select(Job.id)
+            .where(
+                Job.tracked_file_id == TrackedFile.id,
+                Job.status.in_([JobStatus.MANUAL_REVIEW, JobStatus.FAILED]),
+            )
+            .exists()
+        )
+        query: Select[tuple[TrackedFile]] = (
+            select(TrackedFile)
+            .where(
+                or_(
+                    TrackedFile.lifecycle_state == FileLifecycleState.MANUAL_REVIEW,
+                    TrackedFile.compliance_state == ComplianceState.MANUAL_REVIEW,
+                    TrackedFile.is_protected.is_(True),
+                    TrackedFile.operator_protected.is_(True),
+                    manual_review_plan_exists,
+                    review_job_exists,
+                )
+            )
+            .order_by(desc(TrackedFile.updated_at))
+        )
+        return list(self.session.scalars(query))
+
     def get_latest_probe_snapshot(self, tracked_file_id: str) -> ProbeSnapshot | None:
         query = (
             select(ProbeSnapshot)
@@ -117,7 +150,7 @@ class TrackedFileRepository:
     ) -> TrackedFile:
         tracked_file.last_processed_policy_version = plan.policy_context.policy_version
         tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
-        tracked_file.is_protected = plan.should_treat_as_protected
+        tracked_file.is_protected = plan.should_treat_as_protected or tracked_file.operator_protected
         tracked_file.compliance_state = compliance_state_for_plan(plan)
         tracked_file.lifecycle_state = lifecycle_state_for_plan(plan)
         self.session.flush()
@@ -131,7 +164,7 @@ class TrackedFileRepository:
     ) -> TrackedFile:
         tracked_file.last_processed_policy_version = plan.policy_context.policy_version
         tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
-        tracked_file.is_protected = plan.should_treat_as_protected
+        tracked_file.is_protected = plan.should_treat_as_protected or tracked_file.operator_protected
 
         if result.status == "completed":
             tracked_file.lifecycle_state = FileLifecycleState.COMPLETED
@@ -150,6 +183,29 @@ class TrackedFileRepository:
                 else ComplianceState.NON_COMPLIANT
             )
 
+        self.session.flush()
+        return tracked_file
+
+    def set_operator_protected(
+        self,
+        tracked_file: TrackedFile,
+        *,
+        value: bool,
+        note: str | None,
+        user_id: str | None,
+        updated_at: datetime,
+    ) -> TrackedFile:
+        tracked_file.operator_protected = value
+        tracked_file.operator_protected_note = note
+        tracked_file.operator_protected_by_user_id = user_id
+        tracked_file.operator_protected_updated_at = updated_at
+        tracked_file.is_protected = tracked_file.is_protected or value
+        if not value:
+            latest_plan = self.get_latest_plan_snapshot(tracked_file.id)
+            tracked_file.is_protected = bool(
+                tracked_file.operator_protected
+                or (latest_plan is not None and latest_plan.should_treat_as_protected)
+            )
         self.session.flush()
         return tracked_file
 

@@ -1,13 +1,14 @@
 from __future__ import annotations
 
 import os
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+import shutil
 from typing import Any
 
 from sqlalchemy import text
 from sqlalchemy.orm import sessionmaker
 
-from encodr_core.config import ConfigBundle
 from app.schemas.config import (
     AuthConfigSummaryResponse,
     ConfigSourceFileResponse,
@@ -19,6 +20,10 @@ from app.schemas.config import (
     ProfileSummaryResponse,
     WorkerDefinitionSummaryResponse,
 )
+from app.schemas.worker import HealthStatus
+from encodr_core.config import ConfigBundle
+from encodr_db.models import JobStatus
+from encodr_db.repositories import JobRepository, UserRepository
 
 
 class SystemService:
@@ -33,14 +38,69 @@ class SystemService:
         self.session_factory = session_factory
         self.app_version = app_version
 
-    def path_status(self, path: Path | str) -> dict[str, object]:
+    def path_status(
+        self,
+        path: Path | str,
+        *,
+        role: str,
+        writable_required: bool,
+    ) -> dict[str, object]:
         resolved = Path(path)
+        exists = resolved.exists()
+        is_directory = resolved.is_dir()
+        readable = os.access(resolved, os.R_OK)
+        writable = os.access(resolved, os.W_OK)
+        total_space_bytes: int | None = None
+        free_space_bytes: int | None = None
+        free_space_ratio: float | None = None
+
+        if exists and is_directory:
+            try:
+                usage = shutil.disk_usage(resolved)
+                total_space_bytes = int(usage.total)
+                free_space_bytes = int(usage.free)
+                free_space_ratio = (
+                    round(usage.free / usage.total, 4) if usage.total > 0 else None
+                )
+            except OSError:
+                total_space_bytes = None
+                free_space_bytes = None
+                free_space_ratio = None
+
+        if not exists:
+            status = HealthStatus.FAILED
+            message = "Path does not exist."
+        elif not is_directory:
+            status = HealthStatus.FAILED
+            message = "Path exists but is not a directory."
+        elif not readable:
+            status = HealthStatus.FAILED
+            message = "Path is not readable."
+        elif writable_required and not writable:
+            status = HealthStatus.DEGRADED
+            message = "Path is readable but not writable."
+        elif free_space_ratio is not None and free_space_ratio < 0.05:
+            status = HealthStatus.FAILED
+            message = "Very low free space is available."
+        elif free_space_ratio is not None and free_space_ratio < 0.1:
+            status = HealthStatus.DEGRADED
+            message = "Free space is getting low."
+        else:
+            status = HealthStatus.HEALTHY
+            message = "Path is available."
+
         return {
+            "role": role,
             "path": resolved.as_posix(),
-            "exists": resolved.exists(),
-            "is_directory": resolved.is_dir(),
-            "readable": os.access(resolved, os.R_OK),
-            "writable": os.access(resolved, os.W_OK),
+            "status": status,
+            "message": message,
+            "exists": exists,
+            "is_directory": is_directory,
+            "readable": readable,
+            "writable": writable,
+            "total_space_bytes": total_space_bytes,
+            "free_space_bytes": free_space_bytes,
+            "free_space_ratio": free_space_ratio,
         }
 
     def db_reachable(self) -> bool:
@@ -52,6 +112,175 @@ class SystemService:
             return True
         except Exception:
             return False
+
+    def schema_reachable(self) -> bool:
+        if self.session_factory is None:
+            return False
+        try:
+            with self.session_factory() as session:
+                UserRepository(session).count_users()
+            return True
+        except Exception:
+            return False
+
+    def user_count(self) -> int | None:
+        if self.session_factory is None:
+            return None
+        try:
+            with self.session_factory() as session:
+                return UserRepository(session).count_users()
+        except Exception:
+            return None
+
+    def queue_health_summary(self) -> dict[str, object]:
+        if self.session_factory is None:
+            return {
+                "status": HealthStatus.UNKNOWN,
+                "summary": "Queue state is unavailable.",
+                "pending_count": 0,
+                "running_count": 0,
+                "failed_count": 0,
+                "manual_review_count": 0,
+                "completed_count": 0,
+                "oldest_pending_age_seconds": None,
+                "last_completed_age_seconds": None,
+                "recent_failed_count": 0,
+                "recent_manual_review_count": 0,
+            }
+
+        with self.session_factory() as session:
+            repository = JobRepository(session)
+            counts = repository.count_by_status()
+            now = datetime.now(timezone.utc)
+            oldest_pending = repository.oldest_created_at_for_status(JobStatus.PENDING)
+            last_completed = repository.latest_completed_at()
+            recent_window = now - timedelta(hours=24)
+            recent_failed_count = repository.count_recent_statuses([JobStatus.FAILED], since=recent_window)
+            recent_manual_review_count = repository.count_recent_statuses(
+                [JobStatus.MANUAL_REVIEW],
+                since=recent_window,
+            )
+
+        pending_count = counts.get(JobStatus.PENDING.value, 0)
+        running_count = counts.get(JobStatus.RUNNING.value, 0)
+        failed_count = counts.get(JobStatus.FAILED.value, 0)
+        manual_review_count = counts.get(JobStatus.MANUAL_REVIEW.value, 0)
+        completed_count = counts.get(JobStatus.COMPLETED.value, 0) + counts.get(JobStatus.SKIPPED.value, 0)
+        oldest_pending_age_seconds = self.age_seconds(oldest_pending, now)
+        last_completed_age_seconds = self.age_seconds(last_completed, now)
+
+        if running_count > 0:
+            status = HealthStatus.DEGRADED
+            summary = "The local worker is currently processing jobs."
+        elif failed_count > 0 or manual_review_count > 0:
+            status = HealthStatus.DEGRADED
+            summary = "Recent job history includes failures or manual review outcomes."
+        elif pending_count > 10:
+            status = HealthStatus.DEGRADED
+            summary = "Pending jobs are building up."
+        else:
+            status = HealthStatus.HEALTHY
+            summary = "Queue health is within expected bounds."
+
+        return {
+            "status": status,
+            "summary": summary,
+            "pending_count": pending_count,
+            "running_count": running_count,
+            "failed_count": failed_count,
+            "manual_review_count": manual_review_count,
+            "completed_count": completed_count,
+            "oldest_pending_age_seconds": oldest_pending_age_seconds,
+            "last_completed_age_seconds": last_completed_age_seconds,
+            "recent_failed_count": recent_failed_count,
+            "recent_manual_review_count": recent_manual_review_count,
+        }
+
+    def storage_status(self) -> dict[str, object]:
+        scratch = self.path_status(
+            self.config_bundle.app.scratch_dir,
+            role="scratch",
+            writable_required=True,
+        )
+        data_dir = self.path_status(
+            self.config_bundle.app.data_dir,
+            role="data",
+            writable_required=True,
+        )
+        media_mounts = [
+            self.path_status(path, role="media_mount", writable_required=True)
+            for path in self.config_bundle.workers.local.media_mounts
+        ]
+
+        items = [scratch, data_dir, *media_mounts]
+        warnings = [item["message"] for item in items if item["status"] != HealthStatus.HEALTHY]
+        if any(item["status"] == HealthStatus.FAILED for item in items):
+            status = HealthStatus.FAILED
+            summary = "One or more configured paths are unavailable."
+        elif any(item["status"] == HealthStatus.DEGRADED for item in items):
+            status = HealthStatus.DEGRADED
+            summary = "Storage is reachable but needs attention."
+        else:
+            status = HealthStatus.HEALTHY
+            summary = "Configured storage paths are healthy."
+
+        return {
+            "status": status,
+            "summary": summary,
+            "scratch": scratch,
+            "data_dir": data_dir,
+            "media_mounts": media_mounts,
+            "warnings": warnings,
+        }
+
+    def runtime_status(self) -> dict[str, object]:
+        db_reachable = self.db_reachable()
+        schema_reachable = self.schema_reachable()
+        user_count = self.user_count()
+        queue_health = self.queue_health_summary()
+
+        warnings: list[str] = []
+        if not db_reachable:
+            warnings.append("Database connectivity is unavailable.")
+        if db_reachable and not schema_reachable:
+            warnings.append("Database is reachable but the expected schema is unavailable.")
+        if not self.config_bundle.workers.local.enabled:
+            warnings.append("The local worker is disabled.")
+        if queue_health["status"] == HealthStatus.DEGRADED:
+            warnings.append(str(queue_health["summary"]))
+
+        if not db_reachable or not schema_reachable:
+            status = HealthStatus.FAILED
+            summary = "Runtime health checks failed."
+        elif warnings:
+            status = HealthStatus.DEGRADED
+            summary = "Runtime health completed with warnings."
+        else:
+            status = HealthStatus.HEALTHY
+            summary = "Runtime health is healthy."
+
+        return {
+            "status": status,
+            "summary": summary,
+            "version": self.app_version,
+            "environment": self.config_bundle.app.environment.value,
+            "db_reachable": db_reachable,
+            "schema_reachable": schema_reachable,
+            "auth_enabled": self.config_bundle.app.auth.enabled,
+            "api_base_path": self.config_bundle.app.api.base_path,
+            "scratch_dir": self.config_bundle.app.scratch_dir.as_posix(),
+            "data_dir": self.config_bundle.app.data_dir.as_posix(),
+            "media_mounts": [path.as_posix() for path in self.config_bundle.workers.local.media_mounts],
+            "local_worker_enabled": self.config_bundle.workers.local.enabled,
+            "user_count": user_count,
+            "config_sources": {
+                "app": self.config_bundle.paths.app.resolved_path.as_posix(),
+                "policy": self.config_bundle.paths.policy.resolved_path.as_posix(),
+                "workers": self.config_bundle.paths.workers.resolved_path.as_posix(),
+            },
+            "warnings": warnings,
+            "queue_health": queue_health,
+        }
 
     def effective_config(self) -> EffectiveConfigResponse:
         bundle = self.config_bundle
@@ -159,3 +388,11 @@ class SystemService:
                 ),
             },
         )
+
+    @staticmethod
+    def age_seconds(value: datetime | None, now: datetime) -> int | None:
+        if value is None:
+            return None
+        if value.tzinfo is None:
+            value = value.replace(tzinfo=timezone.utc)
+        return max(0, int((now - value).total_seconds()))

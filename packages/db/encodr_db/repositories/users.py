@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Select, desc, select
+from sqlalchemy import Select, desc, func, select
 from sqlalchemy.orm import Session
 
 from encodr_db.models import User, UserRole
@@ -51,3 +51,6 @@ class UserRepository:
         if limit is not None:
             query = query.limit(limit)
         return list(self.session.scalars(query))
+
+    def count_users(self) -> int:
+        return int(self.session.scalar(select(func.count(User.id))) or 0)

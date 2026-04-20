@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Select, asc, desc, select
+from sqlalchemy import Select, asc, desc, func, select
 from sqlalchemy.orm import Session, joinedload
 
 from encodr_core.execution import ExecutionResult
@@ -14,6 +14,7 @@ from encodr_db.models import (
     ReplacementStatus,
     TrackedFile,
     VerificationStatus,
+    WorkerType,
 )
 
 
@@ -37,6 +38,8 @@ class JobRepository:
             worker_name=worker_name,
             status=JobStatus.PENDING,
             attempt_count=attempt_count,
+            requested_worker_type=WorkerType.LOCAL,
+            input_size_bytes=tracked_file.last_observed_size,
             verification_status=VerificationStatus.PENDING,
             replacement_status=ReplacementStatus.PENDING,
             replace_in_place=replace_payload["in_place"],
@@ -73,6 +76,19 @@ class JobRepository:
         )
         return self.session.scalar(query)
 
+    def get_latest_for_tracked_file(self, tracked_file_id: str) -> Job | None:
+        query = (
+            select(Job)
+            .where(Job.tracked_file_id == tracked_file_id)
+            .options(
+                joinedload(Job.tracked_file),
+                joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
+            )
+            .order_by(desc(Job.created_at))
+            .limit(1)
+        )
+        return self.session.scalar(query)
+
     def mark_running(self, job: Job, *, worker_name: str) -> Job:
         job.status = JobStatus.RUNNING
         job.worker_name = worker_name
@@ -92,6 +108,9 @@ class JobRepository:
         job.status = status_map[result.status]
         job.completed_at = result.completed_at
         job.failure_message = result.failure_message
+        job.failure_category = result.failure_category
+        job.output_size_bytes = result.output_size_bytes
+        job.space_saved_bytes = calculate_space_saved(job.input_size_bytes, result.output_size_bytes)
         job.output_path = str(result.output_path) if result.output_path is not None else None
         job.final_output_path = (
             str(result.final_output_path) if result.final_output_path is not None else None
@@ -138,6 +157,40 @@ class JobRepository:
             query = query.limit(limit)
         return list(self.session.scalars(query))
 
+    def count_by_status(self) -> dict[str, int]:
+        rows = self.session.execute(
+            select(Job.status, func.count(Job.id)).group_by(Job.status).order_by(Job.status.asc())
+        ).all()
+        return {status.value: int(count) for status, count in rows}
+
+    def count_recent_statuses(
+        self,
+        statuses: list[JobStatus],
+        *,
+        since: datetime,
+    ) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count(Job.id)).where(
+                    Job.status.in_(statuses),
+                    Job.updated_at >= since,
+                )
+            )
+            or 0
+        )
+
+    def oldest_created_at_for_status(self, status: JobStatus) -> datetime | None:
+        return self.session.scalar(
+            select(func.min(Job.created_at)).where(Job.status == status)
+        )
+
+    def latest_completed_at(self) -> datetime | None:
+        return self.session.scalar(
+            select(func.max(Job.completed_at)).where(
+                Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED])
+            )
+        )
+
 
 def truncate_log(value: str | None, limit: int = 8000) -> str | None:
     if value is None:
@@ -165,3 +218,12 @@ def replacement_status_for_result(result: ExecutionResult) -> ReplacementStatus:
     if result.replacement.status == "failed":
         return ReplacementStatus.FAILED
     return ReplacementStatus.NOT_REQUIRED
+
+
+def calculate_space_saved(
+    input_size_bytes: int | None,
+    output_size_bytes: int | None,
+) -> int | None:
+    if input_size_bytes is None or output_size_bytes is None:
+        return None
+    return input_size_bytes - output_size_bytes

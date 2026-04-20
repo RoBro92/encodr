@@ -2,30 +2,41 @@
 
 ## Purpose
 
-The UI is an operational console, not a marketing site. It should help an operator understand what the system is doing, why it made a decision, and whether intervention is required.
+The UI is an operator console for authenticated internal use. It prioritises concise operational visibility and safe actions over visual polish or broad feature depth.
 
-## Initial sections
+## Current pages
 
-- dashboard summary
-- recent jobs and queue state
-- worker status
-- storage status
-- policy summary and version display
-- analytics overview
-- authenticated files and jobs views
-- read-only effective configuration view
+- Dashboard
+- Files
+- Jobs
+- Workers
+- Manual Review
+- Reports
+- System
+- Config
 
-## Design principles
+## Current behaviours
 
-- explain decisions plainly
-- make risky actions obvious
-- prefer operational clarity over decorative complexity
-- surface policy version and worker identity in relevant views
+- token-backed login/logout
+- protected routes
+- dashboard summaries from analytics/runtime endpoints
+- file probe/plan actions
+- job create/retry and worker run-once actions
+- manual review decision workflow
+- worker inventory and health visibility
+- read-only config summary
 
-## Milestone mapping
+## Presentation principles
 
-- Milestone 0: placeholder dashboard shell
-- Milestone 9: authenticated routed UI shell with dashboard, files, jobs, system, and config pages backed by the operational API
-- Milestone 10: analytics pages
-- Milestone 11: storage and worker health pages
-- Milestone 12: manual review flows
+- operational clarity over decorative complexity
+- obvious status and risk badges
+- compact tables/cards rather than large raw payload dumps
+- conservative copy and actions
+
+## Still out of scope
+
+- polished design system
+- remote job assignment UI
+- config editing UI
+- user-management UI
+- chart-heavy BI reporting

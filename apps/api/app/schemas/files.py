@@ -33,6 +33,11 @@ class TrackedFileSummaryResponse(BaseModel):
     lifecycle_state: str
     compliance_state: str
     is_protected: bool
+    operator_protected: bool = False
+    protected_source: str | None = None
+    operator_protected_note: str | None = None
+    requires_review: bool = False
+    review_status: str | None = None
     last_processed_policy_version: int | None = None
     last_processed_profile_name: str | None = None
     created_at: datetime
@@ -53,6 +58,27 @@ class TrackedFileSummaryResponse(BaseModel):
             lifecycle_state=tracked_file.lifecycle_state.value,
             compliance_state=tracked_file.compliance_state.value,
             is_protected=tracked_file.is_protected,
+            operator_protected=tracked_file.operator_protected,
+            protected_source=(
+                "operator"
+                if tracked_file.operator_protected
+                else ("planner" if tracked_file.is_protected else None)
+            ),
+            operator_protected_note=tracked_file.operator_protected_note,
+            requires_review=(
+                tracked_file.lifecycle_state.value == "manual_review"
+                or tracked_file.compliance_state.value == "manual_review"
+                or tracked_file.is_protected
+            ),
+            review_status=(
+                "open"
+                if (
+                    tracked_file.lifecycle_state.value == "manual_review"
+                    or tracked_file.compliance_state.value == "manual_review"
+                    or tracked_file.is_protected
+                )
+                else None
+            ),
             last_processed_policy_version=tracked_file.last_processed_policy_version,
             last_processed_profile_name=tracked_file.last_processed_profile_name,
             created_at=tracked_file.created_at,

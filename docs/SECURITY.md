@@ -2,64 +2,50 @@
 
 ## Baseline posture
 
-`encodr` has access to networked media paths and can replace files. Authentication is therefore mandatory from the start of production use.
+Encodr can inspect and replace files on mounted media paths. Authentication and auditability are therefore mandatory.
 
-## Required controls
+## Current controls
 
-- Authentication required for all non-health endpoints
-- Operational API endpoints are currently admin-only to keep mutation scope narrow
-- Passwords stored as strong hashes, not reversible secrets
-- `argon2id` password hashing for local credentials
-- Short-lived JWT access tokens plus revocable refresh tokens
-- Record audit logs for logins, configuration changes, job control actions, and manual review actions
-- Follow least-privilege principles for containers, mounts, and worker file access
-
-## Internal-network assumptions
-
-- Initial deployment is on a trusted internal network, not the public internet
-- Internal deployment reduces exposure but does not remove the need for authentication and auditability
-- Reverse proxy, TLS, and network segmentation should still be considered part of production hardening
-
-## Session approach
-
-- API issues short-lived JWT access tokens for bearer authentication
-- Refresh tokens are opaque, revocable, and stored server-side with rotation on refresh
-- Logout revokes active refresh tokens for the current user
-- `/health` remains public; operational and control endpoints require authenticated access
+- auth required for all non-health routes
+- admin-only operational API by default
+- `argon2id` password hashing
+- short-lived JWT access tokens
+- opaque revocable refresh tokens stored server-side
+- append-only audit logging for auth, review, and worker-security events
+- sanitised config visibility only
 
 ## Bootstrap admin
 
-- First-run bootstrap admin creation is allowed only while no user records exist
-- Once a user exists, bootstrap admin creation is blocked
-- There is no open self-registration endpoint
+- first-run only
+- blocked once any user exists
+- no open registration endpoint
 
-## Audit trail
+## Worker security baseline
 
-- Append-only audit events record bootstrap admin creation, bootstrap blocking, login success or failure, logout, and token refresh
-- Events retain the acting username or user id where available, plus source IP, user agent, outcome, and structured details
+- worker auth is separate from user auth
+- bootstrap registration uses `ENCODR_WORKER_REGISTRATION_SECRET`
+- remote workers receive a token on registration
+- only the token hash is stored
+- invalid worker auth and worker state changes are audited
+- remote workers do not receive job execution authority yet
 
-## Validation baseline
+## Internal-network assumptions
 
-- Security-sensitive behaviour is covered by integration and end-to-end tests rather than unit tests alone.
-- The current baseline checks bootstrap restrictions, protected-route enforcement, inactive-user denial, refresh rotation, logout revocation, audit event persistence, and non-test auth-secret sanity.
-- Worker-flow tests also guard against unsafe success states by asserting that files are not marked complete before verification and placement succeed.
-- API integration tests also verify sanitised config visibility and rejection of unauthenticated access to file, job, worker, and system endpoints.
+- trusted internal network
+- still requires auth, audit, and secret handling
+- TLS/reverse proxy/network segmentation remain recommended for real deployment
 
-## Operational API visibility
+## Operational notes
 
-- `GET /config/effective` exposes a sanitised config summary only. It does not return auth secrets, password hashes, refresh token hashes, or database credentials.
-- Probe, plan, job-creation, retry, and worker run-once endpoints require authentication and explicit request bodies. There is no open registration or unauthenticated operational control path.
+- `/config/effective` does not expose secrets
+- worker inventory is admin-only
+- manual-review/protected actions are explicit and audited
+- local worker success requires verification and replacement success, not ffmpeg success alone
 
-## File-system and process controls
+## Still out of scope
 
-- mount only the required media paths
-- separate scratch space from media libraries
-- avoid running containers with broader permissions than needed
-- prefer explicit worker capability registration over probing unsafe host details on demand
-
-## Future work
-
-- optional single-sign-on support
-- mTLS for remote workers
-- finer role-based access control
-- signed job hand-off for remote execution
+- SSO/OAuth/LDAP
+- MFA
+- API keys
+- remote worker mTLS
+- fine-grained RBAC beyond the current narrow admin/operator baseline

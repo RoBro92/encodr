@@ -24,10 +24,12 @@ class ExecutionResult(ConfigModel):
     output_path: Path | None = None
     final_output_path: Path | None = None
     original_backup_path: Path | None = None
+    output_size_bytes: int | None = None
     exit_code: int | None = None
     stdout: str | None = None
     stderr: str | None = None
     failure_message: str | None = None
+    failure_category: str | None = None
     verification: VerificationResult | None = None
     replacement: ReplacementResult | None = None
     started_at: datetime

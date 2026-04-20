@@ -28,6 +28,24 @@ class JobStatus(StrEnum):
     MANUAL_REVIEW = "manual_review"
 
 
+class WorkerType(StrEnum):
+    LOCAL = "local"
+    REMOTE = "remote"
+
+
+class WorkerRegistrationStatus(StrEnum):
+    REGISTERED = "registered"
+    DISABLED = "disabled"
+    UNKNOWN = "unknown"
+
+
+class WorkerHealthStatus(StrEnum):
+    HEALTHY = "healthy"
+    DEGRADED = "degraded"
+    FAILED = "failed"
+    UNKNOWN = "unknown"
+
+
 class VerificationStatus(StrEnum):
     PENDING = "pending"
     PASSED = "passed"
@@ -42,6 +60,16 @@ class ReplacementStatus(StrEnum):
     NOT_REQUIRED = "not_required"
 
 
+class ManualReviewDecisionType(StrEnum):
+    APPROVED = "approved"
+    REJECTED = "rejected"
+    HELD = "held"
+    MARK_PROTECTED = "mark_protected"
+    CLEAR_PROTECTED = "clear_protected"
+    REPLAN_REQUESTED = "replan_requested"
+    JOB_CREATED = "job_created"
+
+
 class UserRole(StrEnum):
     ADMIN = "admin"
     OPERATOR = "operator"
@@ -53,6 +81,10 @@ class AuditEventType(StrEnum):
     LOGIN = "login"
     LOGOUT = "logout"
     TOKEN_REFRESH = "token_refresh"
+    MANUAL_REVIEW_ACTION = "manual_review_action"
+    WORKER_REGISTRATION = "worker_registration"
+    WORKER_HEARTBEAT_AUTH_FAILURE = "worker_heartbeat_auth_failure"
+    WORKER_STATE_CHANGE = "worker_state_change"
 
 
 class AuditOutcome(StrEnum):

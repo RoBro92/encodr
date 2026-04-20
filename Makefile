@@ -1,21 +1,29 @@
 PYTHON ?= python3
 PYTEST ?= pytest
 
-.PHONY: help api worker worker-agent ui lint format dev-up test-unit test-integration test-e2e test-security test-all
+.PHONY: help bootstrap api worker worker-agent ui-install ui ui-test ui-build lint format dev-up test-unit test-integration test-e2e test-security test-all check
 
 help:
 	@printf "Targets:\n"
-	@printf "  api           Run the API placeholder locally\n"
-	@printf "  worker        Run the worker placeholder locally\n"
-	@printf "  worker-agent  Run the worker-agent placeholder locally\n"
-	@printf "  ui            Run the UI placeholder locally\n"
-	@printf "  lint          Run placeholder lint script\n"
-	@printf "  dev-up        Start the scaffolded Compose stack\n"
+	@printf "  bootstrap     Copy .env/config working files if missing\n"
+	@printf "  api           Run the API locally\n"
+	@printf "  worker        Run the local worker locally\n"
+	@printf "  worker-agent  Run the remote worker-agent heartbeat once\n"
+	@printf "  ui-install    Install UI dependencies\n"
+	@printf "  ui            Run the UI locally\n"
+	@printf "  ui-test       Run the frontend test suite\n"
+	@printf "  ui-build      Build the frontend\n"
+	@printf "  lint          Run lightweight sanity checks\n"
+	@printf "  dev-up        Start the local Compose stack\n"
 	@printf "  test-unit     Run the unit test layer\n"
 	@printf "  test-integration Run the integration test layer\n"
 	@printf "  test-e2e      Run the end-to-end test layer\n"
 	@printf "  test-security Run security-focused tests across layers\n"
 	@printf "  test-all      Run the full test suite\n"
+	@printf "  check         Run Python tests, UI tests/build, and compile checks\n"
+
+bootstrap:
+	./infra/scripts/bootstrap.sh
 
 api:
 	cd apps/api && $(PYTHON) -m uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
@@ -26,8 +34,17 @@ worker:
 worker-agent:
 	cd apps/worker-agent && $(PYTHON) -m app.main
 
+ui-install:
+	cd apps/ui && npm install
+
 ui:
 	cd apps/ui && npm run dev -- --host 0.0.0.0 --port 5173
+
+ui-test:
+	cd apps/ui && npm test -- --run
+
+ui-build:
+	cd apps/ui && npm run build
 
 lint:
 	./infra/scripts/lint.sh
@@ -49,3 +66,6 @@ test-security:
 
 test-all:
 	$(PYTEST)
+
+check: test-all ui-test ui-build
+	$(PYTHON) -m compileall apps packages tests

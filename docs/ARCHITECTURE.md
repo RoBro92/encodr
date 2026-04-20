@@ -1,100 +1,80 @@
 # Architecture
 
-## High-level shape
+## Repository shape
 
-The repository is organised as a small monorepo:
-
-- `apps/api`: FastAPI control plane and user-facing API
-- `apps/worker`: local execution worker for probe, plan, execute, and verify flows
-- `apps/ui`: React dashboard and operational UI
-- `apps/worker-agent`: future remote worker process
+- `apps/api`: FastAPI control plane and authenticated API
+- `apps/worker`: local execution worker
+- `apps/ui`: React operator console
+- `apps/worker-agent`: remote worker groundwork process
 - `packages/core`: deterministic domain logic
-- `packages/db`: persistence models and repositories
-- `packages/shared`: enums, types, and small shared contracts
+- `packages/db`: persistence, migrations, repositories, and local runtime helpers
+- `packages/shared`: small shared enums and types
 
-## Runtime model
+## Runtime flow
 
-1. A file is discovered or submitted.
-2. The worker probes it with `ffprobe`.
-3. Core domain logic normalises probe output into stable internal media models.
-4. The policy engine evaluates the file against YAML policy and selected profile overrides.
-5. A deterministic plan is created: `skip`, `remux`, `transcode`, or `manual_review`.
-6. The local worker polls pending jobs, converts the persisted plan into an execution command, and writes output to scratch space.
-7. Staged outputs are probed and verified against the intended container, stream, and protection expectations before any final placement is attempted.
-8. Verified outputs are placed back into the source directory with a conservative replacement flow that preserves the original on failure.
-9. DB state records file identity, policy version, plan outcome, job lifecycle, staged output, verification result, and replacement outcome.
+1. A source path is probed with `ffprobe`.
+2. Probe output is normalised into a stable `MediaFile`.
+3. Policy and any matching profile override are resolved.
+4. A deterministic `ProcessingPlan` is produced.
+5. Probe and plan snapshots are persisted against a durable tracked-file record.
+6. A job can be created from the plan.
+7. The local worker executes the plan to scratch when appropriate.
+8. Staged output is probed and verified against basic container, stream, and protection expectations.
+9. Verified output is placed back into the source directory conservatively.
+10. Manual-review or protected items require explicit operator action before processing continues.
 
 ## Service boundaries
 
-- API owns authentication, user/session handling, audit logging for security-relevant actions, operational file and job visibility, probe or plan task entry points, local worker run-once control, configuration views, and administrative actions.
-- Worker owns ffprobe, ffmpeg invocation, output verification, and safe replacement logic.
-- UI owns the authenticated operator shell, token-backed session handling, typed API queries and mutations, and concise operational views over files, jobs, system status, and effective config.
-- Core package owns configuration loading, ffprobe parsing, internal media models, policy parsing, planning, naming, and verification rules.
-- DB package owns persistent state and repository access patterns.
-- Shared package stays intentionally small.
+- API owns auth, audit, operational endpoints, analytics endpoints, review actions, local worker run-once control, and worker registration/heartbeat control-plane endpoints.
+- Worker owns local execution, verification, replacement, and local runtime status.
+- UI owns the authenticated operator shell and typed API consumption.
+- Worker-agent owns remote registration and heartbeat only.
+- Core owns configuration, probe parsing, planning, execution mapping, verification rules, and replacement helpers.
+- DB owns durable state and aggregate query helpers.
 
-## Persistence layer
+## Persistence model
 
-- `tracked_files` is the durable identity for a source path known to the system.
-- Probe and plan snapshots are immutable historical records linked back to that tracked file.
-- Jobs reference the chosen plan snapshot and carry execution, verification, and replacement state.
-- Probe and plan snapshots remain immutable; job rows hold operational outcomes for later audit and analytics.
-- Users, refresh tokens, and audit events provide the local authentication baseline for the API.
+- `tracked_files`: durable source identity and current operational state
+- `probe_snapshots`: immutable normalised probe history
+- `plan_snapshots`: immutable planning history
+- `jobs`: execution, verification, replacement, and analytics outcomes
+- `users`, `refresh_tokens`, `audit_events`: auth and security baseline
+- `manual_review_decisions`: append-only review decision history
+- `workers`: persisted remote worker identity, capability, auth-hash, and heartbeat state
 
-## Planning layer
+## Local worker model
 
-- The planner consumes one normalised `MediaFile` plus the validated config bundle.
-- Policy/profile resolution uses configured path-prefix overrides only.
-- The planner returns a structured processing plan with action, selected stream intent, rename intent, replacement intent, reasons, warnings, and confidence.
-- Stream selection intent is separated from execution details so later milestones can turn the plan into worker actions without changing the policy logic.
+- local execution remains the only real execution path
+- local worker status is projected into the same inventory shape as remote workers for the API and UI
+- local worker health includes queue summary, binary discoverability, last run, and self-test results
 
-## Execution bridge
+## Remote worker groundwork
 
-- The execution layer converts `ProcessingPlan` into a concrete local ffmpeg command plan.
-- `skip` and `manual_review` jobs complete without invoking ffmpeg.
-- `remux` uses explicit stream mapping with stream copy.
-- `transcode` currently transcodes video to the target policy codec and preserves selected audio and subtitle streams by copy.
-- ffmpeg success is only a staged outcome. Final completion now requires verification plus successful placement back into the source directory.
+- remote workers register with a bootstrap secret
+- the API issues a persistent worker token and stores only its hash
+- remote workers heartbeat with explicit capability and health data
+- remote workers are visible operationally and can be enabled/disabled
+- remote workers do not poll, claim, or execute jobs yet
 
-## Configuration bootstrap
+## Security model
 
-- `packages/core` owns typed Pydantic models for app, policy, worker, and profile configuration.
-- Bootstrap resolves `config/app.yaml`, `config/policy.yaml`, and `config/workers.yaml`, falling back to the corresponding `.example.yaml` file when the default file is absent.
-- The three primary config file paths can be overridden with environment variables.
-- Profile definitions are loaded from `config/profiles/` and referenced profile names are validated during bootstrap.
+- auth is mandatory for all non-health routes
+- operational routes are currently admin-only
+- bootstrap admin creation is first-run only
+- worker auth is separate from user auth
+- audit events cover user auth, review actions, and worker registration/state changes
 
-## Design constraints
+## Testing model
 
-- YAML policy is the source of truth for behaviour.
-- 4K defaults are conservative: preserve video and strip only unwanted audio or subtitles.
-- The planner must be deterministic and explain its decision.
-- Output replacement must be safe and verifiable.
-- Authentication is mandatory because the system has networked file access.
-- Bootstrap access is tightly scoped to first-run admin creation only.
+- `unit`: deterministic logic and repository helpers
+- `integration`: real FastAPI, migrations, DB, auth, and worker wiring
+- `e2e`: controlled vertical slices across auth, DB, worker, verification, and UI-adjacent flows
+- `smoke`: boot/runtime sanity
+- `security`: auth, audit, and unsafe-regression coverage
 
-## Future expansion points
+## Future work
 
-- remote worker registration and delegation
-- richer manual review workflows
-- UI-backed policy editing layered on top of YAML-backed config
-- stronger storage awareness and scheduling decisions
-
-## Testing baseline
-
-- `tests/unit` covers deterministic domain logic in isolation.
-- `tests/integration` uses the real FastAPI app, Alembic migrations, repositories, auth flow, and worker wiring, while mocking external media binaries where needed.
-- `tests/e2e` provides controlled vertical-slice checks across auth, persisted jobs, worker execution, verification, and safe placement.
-- `smoke` and `security` markers provide small, targeted gates for runtime boot checks and auth or audit regressions.
-
-## Current API surface
-
-- The initial operational API exposes authenticated read access for tracked files, jobs, latest probe or plan snapshots, local worker status, storage status, runtime status, and sanitised effective config.
-- Conservative write endpoints allow probing a file, planning a file, creating a job, retrying an eligible job by creating a new record, and triggering one local worker pass.
-- The API and worker now share the same local run-once runtime path through the DB runtime layer.
-
-## Current UI surface
-
-- The UI is a small React application with an authenticated shell, sidebar navigation, and protected routes.
-- The dashboard derives simple operational summaries from existing file, job, worker, runtime, and storage endpoints.
-- Files and jobs pages provide minimal operator actions for probing, planning, job creation or retry, and worker run-once.
-- System and config pages remain read-only and intentionally sanitised.
+- remote job dispatch and execution
+- richer scheduling and routing
+- config editing UX
+- deeper analytics and trend views

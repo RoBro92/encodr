@@ -16,6 +16,7 @@ from app.schemas.plans import PlanSnapshotDetailResponse, ProbeSnapshotDetailRes
 from app.services.errors import ApiServiceError
 from app.services.files import FilesService
 from app.services.plans import PlansService
+from app.services.review import ReviewService
 from encodr_core.config import ConfigBundle
 from encodr_db.models import ComplianceState, FileLifecycleState, User
 from encodr_db.repositories import TrackedFileRepository
@@ -42,6 +43,13 @@ def get_plans_service(
     config_bundle: ConfigBundle = Depends(get_config_bundle),
 ) -> PlansService:
     return PlansService(config_bundle=config_bundle, files_service=files_service)
+
+
+def get_review_service(
+    files_service: FilesService = Depends(get_files_service),
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
+) -> ReviewService:
+    return ReviewService(plans_service=PlansService(config_bundle=config_bundle, files_service=files_service))
 
 
 def _raise_service_error(error: ApiServiceError) -> None:
@@ -86,6 +94,7 @@ def get_file_detail(
     file_id: str,
     session: Session = Depends(get_session),
     files_service: FilesService = Depends(get_files_service),
+    review_service: ReviewService = Depends(get_review_service),
     current_user: User = Depends(require_admin_user),
 ) -> TrackedFileDetailResponse:
     del current_user
@@ -96,8 +105,18 @@ def get_file_detail(
     repository = TrackedFileRepository(session)
     latest_probe = repository.get_latest_probe_snapshot(tracked_file.id)
     latest_plan = repository.get_latest_plan_snapshot(tracked_file.id)
+    summary = TrackedFileSummaryResponse.from_model(tracked_file).model_dump()
+    try:
+        review_item = review_service.get_item(session, item_id=tracked_file.id)
+        summary["requires_review"] = review_item.requires_review
+        summary["review_status"] = review_item.review_status
+        summary["protected_source"] = review_item.protected_state.source
+        summary["operator_protected"] = review_item.protected_state.operator_protected
+        summary["operator_protected_note"] = review_item.protected_state.note
+    except ApiServiceError:
+        pass
     return TrackedFileDetailResponse(
-        **TrackedFileSummaryResponse.from_model(tracked_file).model_dump(),
+        **summary,
         latest_probe_snapshot_id=latest_probe.id if latest_probe is not None else None,
         latest_plan_snapshot_id=latest_plan.id if latest_plan is not None else None,
     )

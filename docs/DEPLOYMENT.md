@@ -1,35 +1,43 @@
 # Deployment
 
-## Primary deployment target
+## Current deployment target
 
 - Debian LXC host
-- Docker Compose running inside the LXC
-- Postgres and Redis as Compose services
-- API, UI, and worker in the same initial stack
+- Docker Compose inside the LXC
+- Postgres and Redis in the same stack
+- API, UI, and local worker in the initial deployment
 
-## Storage layout assumptions
+## Storage assumptions
 
-- media libraries are mounted into the LXC from an NFS share
-- local NVMe storage is used as scratch working space for probe and output staging
-- processed files return to the original folder by default only after staged-output verification succeeds
-- replacement is designed to preserve the original file until the verified output has been placed safely
+- media libraries mounted into the LXC from NFS
+- local NVMe used as scratch
+- staged outputs verified before final placement
+- original file preserved until replacement flow succeeds
 
 ## Hardware assumptions
 
-- the main worker runs inside the LXC
-- Intel iGPU acceleration may be available and should be supported where practical
-- remote worker support is a future milestone, not part of the initial deployment
+- local worker runs in the LXC
+- Intel iGPU acceleration may be available
+- remote worker registration/heartbeat groundwork is implemented
+- remote worker execution is not implemented yet
 
-## Operational posture
+## Required secrets
 
-- internal tool, trusted network, authenticated users
-- conservative defaults for file replacement and deletion
-- API auth secret must come from environment configuration in deployed environments
-- logs and metrics retained long enough for operational review
+- `ENCODR_AUTH_SECRET`
+- `ENCODR_WORKER_REGISTRATION_SECRET`
+
+These must come from environment configuration in deployed environments.
+
+## Operational notes
+
+- monitor worker/system endpoints and the worker inventory view
+- review `docs/KNOWN_LIMITATIONS.md` before using Encodr on a real media library
+- keep scratch and media mounts distinct
+- keep Postgres data backed up before wider internal use
 
 ## Later deployment work
 
-- remote worker support for machines such as an AMD GPU host
+- remote job assignment to additional hosts
 - stronger reverse-proxy guidance
-- backup and restore guidance for Postgres and configuration
-- container hardening and image slimming
+- container hardening/slimming
+- backup/restore runbooks

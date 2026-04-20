@@ -1,40 +1,44 @@
 # Specification
 
-## Problem statement
+## Problem
 
-Media libraries often contain files that are technically usable but undesirable for a long-term Plex-style library because they include the wrong languages, poor naming, unnecessary subtitles, or codecs that do not fit the target library strategy.
+Media libraries often contain files that are technically usable but undesirable for long-term library ingestion because they contain the wrong languages, redundant tracks, poor codec choices, or ambiguous metadata. Encodr prepares those files with explicit policy and conservative execution.
 
-`encodr` addresses that gap by preparing files before ingestion through explicit policy and safe execution.
+## Implemented functional scope
 
-## Functional requirements
+- inspect media with `ffprobe`
+- normalise probe metadata into typed internal models
+- load and validate YAML app, policy, worker, and profile configuration
+- resolve path-based profile overrides
+- plan `skip`, `remux`, `transcode`, or `manual_review`
+- persist tracked-file, probe, plan, job, review, audit, analytics, and worker state
+- execute local remux/transcode jobs
+- verify staged outputs before final placement
+- replace or place files safely
+- require authenticated operator access
+- expose operational API/UI surfaces for files, jobs, review, analytics, health, config, and workers
 
-- Inspect media streams with `ffprobe`
-- Build internal media models from probe output
-- Load YAML configuration and profiles
-- Distinguish 4K and non-4K policy paths
-- Support `skip`, `remux`, and `transcode` decisions for non-4K files
-- Support strip-only defaults for 4K files
-- Preserve English audio and subtitles according to policy
-- Always preserve forced English subtitles
-- Preserve best surround audio and Atmos-capable audio where possible
-- Default output container to MKV
-- Return processed files to the source folder by default
-- Record processed-file state and policy version
-- Expose API and UI for operations, review, and analytics
+## Important non-functional requirements
 
-## Non-functional requirements
+- deterministic planning
+- explainable decisions
+- append-only history where practical
+- safe replacement and rollback posture
+- clear operational visibility
+- conservative security defaults
 
-- deterministic decisions
-- reviewable rule application
-- safe replacement flow
-- typed Python code
-- clean module boundaries
-- deployable in a private Debian LXC environment
+## Deferred scope
 
-## Explicit non-goals
+- remote worker execution
+- advanced scheduling or balancing
+- UI-driven config editing
+- broad user management
+- SSO, OAuth, LDAP, or public worker protocols
+- BI/report-builder features
+
+## Non-goals
 
 - downloader automation
-- media server administration
-- general-purpose transcoding farm behaviour
-- replacing Tdarr or FileFlows in breadth
-
+- Plex API/library administration
+- general-purpose transcoding farm breadth
+- replacing Tdarr/FileFlows in workflow scope

@@ -1,7 +1,7 @@
 from __future__ import annotations
 
-import hashlib
 import secrets
+import hashlib
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
@@ -87,4 +87,12 @@ class TokenService:
         return secrets.token_urlsafe(48), int(self.settings.refresh_token_ttl.total_seconds())
 
     def hash_refresh_token(self, token: str) -> str:
+        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+
+
+class WorkerTokenService:
+    def generate_worker_token(self) -> str:
+        return secrets.token_urlsafe(48)
+
+    def hash_worker_token(self, token: str) -> str:
         return hashlib.sha256(token.encode("utf-8")).hexdigest()

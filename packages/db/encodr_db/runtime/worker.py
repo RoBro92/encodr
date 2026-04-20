@@ -124,6 +124,7 @@ class WorkerExecutionService:
                 stdout=error.details.get("stdout"),
                 stderr=error.details.get("stderr"),
                 failure_message=error.message,
+                failure_category="execution_failed",
                 exit_code=error.details.get("exit_code"),
                 started_at=job.started_at or completed_at,
                 completed_at=completed_at,
@@ -138,6 +139,7 @@ class WorkerExecutionService:
                 stdout=None,
                 stderr=None,
                 failure_message=str(error),
+                failure_category="execution_failed",
                 exit_code=None,
                 started_at=job.started_at or completed_at,
                 completed_at=completed_at,
@@ -173,6 +175,7 @@ class WorkerExecutionService:
                 stderr=staged_result.stderr,
                 exit_code=staged_result.exit_code,
                 failure_message="The execution runner did not produce a staged output path.",
+                failure_category="execution_failed",
                 verification=VerificationResult(
                     status=VerificationStatus.FAILED,
                     passed=False,
@@ -199,6 +202,8 @@ class WorkerExecutionService:
                 stderr=staged_result.stderr,
                 exit_code=staged_result.exit_code,
                 failure_message=failure_message,
+                failure_category="verification_failed",
+                output_size_bytes=file_size_or_none(staged_result.output_path),
                 verification=verification,
                 replacement=ReplacementResult.not_required(),
                 started_at=staged_result.started_at,
@@ -222,6 +227,8 @@ class WorkerExecutionService:
                 stderr=staged_result.stderr,
                 exit_code=staged_result.exit_code,
                 failure_message=replacement.failure_message or "Verified output placement failed.",
+                failure_category="replacement_failed",
+                output_size_bytes=file_size_or_none(staged_result.output_path),
                 verification=verification,
                 replacement=replacement,
                 started_at=staged_result.started_at,
@@ -235,6 +242,7 @@ class WorkerExecutionService:
             output_path=staged_result.output_path,
             final_output_path=replacement.final_output_path,
             original_backup_path=replacement.original_backup_path,
+            output_size_bytes=file_size_or_none(replacement.final_output_path) or file_size_or_none(staged_result.output_path),
             stdout=staged_result.stdout,
             stderr=staged_result.stderr,
             exit_code=staged_result.exit_code,
@@ -318,3 +326,12 @@ class LocalWorkerLoop:
                 started_at=run_started_at,
                 completed_at=result.completed_at,
             )
+
+
+def file_size_or_none(path: Path | str | None) -> int | None:
+    if path is None:
+        return None
+    resolved = Path(path)
+    if not resolved.exists() or not resolved.is_file():
+        return None
+    return resolved.stat().st_size

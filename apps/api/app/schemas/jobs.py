@@ -30,8 +30,18 @@ class JobSummaryResponse(BaseModel):
     started_at: datetime | None = None
     completed_at: datetime | None = None
     failure_message: str | None = None
+    failure_category: str | None = None
+    input_size_bytes: int | None = None
+    output_size_bytes: int | None = None
+    space_saved_bytes: int | None = None
     verification_status: str
     replacement_status: str
+    tracked_file_is_protected: bool | None = None
+    requires_review: bool = False
+    review_status: str | None = None
+    assigned_worker_id: str | None = None
+    last_worker_id: str | None = None
+    requested_worker_type: str | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -47,8 +57,18 @@ class JobSummaryResponse(BaseModel):
             started_at=job.started_at,
             completed_at=job.completed_at,
             failure_message=job.failure_message,
+            failure_category=job.failure_category,
+            input_size_bytes=job.input_size_bytes,
+            output_size_bytes=job.output_size_bytes,
+            space_saved_bytes=job.space_saved_bytes,
             verification_status=job.verification_status.value,
             replacement_status=job.replacement_status.value,
+            tracked_file_is_protected=job.tracked_file.is_protected if job.tracked_file is not None else None,
+            requires_review=job.status.value == "manual_review",
+            review_status="open" if job.status.value == "manual_review" else None,
+            assigned_worker_id=job.assigned_worker_id,
+            last_worker_id=job.last_worker_id,
+            requested_worker_type=job.requested_worker_type.value if job.requested_worker_type is not None else None,
             created_at=job.created_at,
             updated_at=job.updated_at,
         )

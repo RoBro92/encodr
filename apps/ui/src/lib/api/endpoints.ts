@@ -2,6 +2,11 @@ import type {
   ApiClient,
 } from "./client";
 import type {
+  AnalyticsDashboard,
+  AnalyticsMedia,
+  AnalyticsOutcomes,
+  AnalyticsOverview,
+  AnalyticsStorage,
   AuthTokens,
   CreateJobPayload,
   CurrentUser,
@@ -16,9 +21,18 @@ import type {
   ProbeFileResponse,
   ProbeOrPlanPayload,
   ProbeSnapshotDetail,
+  RecentAnalytics,
   RuntimeStatus,
   StorageStatus,
+  ReviewDecisionPayload,
+  ReviewDecisionResponse,
+  ReviewItemDetail,
+  ReviewListResponse,
+  WorkerInventoryDetail,
+  WorkerInventoryListResponse,
   WorkerRunOnceResponse,
+  WorkerStateChangeResponse,
+  WorkerSelfTestResponse,
   WorkerStatus,
 } from "../types/api";
 
@@ -95,6 +109,108 @@ export function getJob(client: ApiClient, jobId: string): Promise<JobDetail> {
   return client.request<JobDetail>(`/jobs/${jobId}`);
 }
 
+export function listWorkers(client: ApiClient): Promise<WorkerInventoryListResponse> {
+  return client.request<WorkerInventoryListResponse>("/workers");
+}
+
+export function getWorker(client: ApiClient, workerId: string): Promise<WorkerInventoryDetail> {
+  return client.request<WorkerInventoryDetail>(`/workers/${workerId}`);
+}
+
+export function enableWorker(client: ApiClient, workerId: string): Promise<WorkerStateChangeResponse> {
+  return client.request<WorkerStateChangeResponse>(`/workers/${workerId}/enable`, { method: "POST" });
+}
+
+export function disableWorker(client: ApiClient, workerId: string): Promise<WorkerStateChangeResponse> {
+  return client.request<WorkerStateChangeResponse>(`/workers/${workerId}/disable`, { method: "POST" });
+}
+
+export function listReviewItems(
+  client: ApiClient,
+  query: Record<string, string | number | boolean | undefined>,
+): Promise<ReviewListResponse> {
+  const search = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") {
+      search.set(key, String(value));
+    }
+  });
+  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  return client.request<ReviewListResponse>(`/review/items${suffix}`);
+}
+
+export function getReviewItem(client: ApiClient, itemId: string): Promise<ReviewItemDetail> {
+  return client.request<ReviewItemDetail>(`/review/items/${itemId}`);
+}
+
+function postReviewDecision(
+  client: ApiClient,
+  itemId: string,
+  action: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return client.request<ReviewDecisionResponse>(`/review/items/${itemId}/${action}`, {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function approveReviewItem(
+  client: ApiClient,
+  itemId: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return postReviewDecision(client, itemId, "approve", payload);
+}
+
+export function rejectReviewItem(
+  client: ApiClient,
+  itemId: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return postReviewDecision(client, itemId, "reject", payload);
+}
+
+export function holdReviewItem(
+  client: ApiClient,
+  itemId: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return postReviewDecision(client, itemId, "hold", payload);
+}
+
+export function markReviewItemProtected(
+  client: ApiClient,
+  itemId: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return postReviewDecision(client, itemId, "mark-protected", payload);
+}
+
+export function clearReviewItemProtected(
+  client: ApiClient,
+  itemId: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return postReviewDecision(client, itemId, "clear-protected", payload);
+}
+
+export function replanReviewItem(
+  client: ApiClient,
+  itemId: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return postReviewDecision(client, itemId, "replan", payload);
+}
+
+export function createJobFromReviewItem(
+  client: ApiClient,
+  itemId: string,
+  payload: ReviewDecisionPayload,
+): Promise<ReviewDecisionResponse> {
+  return postReviewDecision(client, itemId, "create-job", payload);
+}
+
 export function createJob(client: ApiClient, payload: CreateJobPayload): Promise<JobDetail> {
   return client.request<JobDetail>("/jobs", {
     method: "POST",
@@ -114,6 +230,10 @@ export function getWorkerStatus(client: ApiClient): Promise<WorkerStatus> {
   return client.request<WorkerStatus>("/worker/status");
 }
 
+export function runWorkerSelfTest(client: ApiClient): Promise<WorkerSelfTestResponse> {
+  return client.request<WorkerSelfTestResponse>("/worker/self-test", { method: "POST" });
+}
+
 export function getStorageStatus(client: ApiClient): Promise<StorageStatus> {
   return client.request<StorageStatus>("/system/storage");
 }
@@ -124,4 +244,28 @@ export function getRuntimeStatus(client: ApiClient): Promise<RuntimeStatus> {
 
 export function getEffectiveConfig(client: ApiClient): Promise<EffectiveConfig> {
   return client.request<EffectiveConfig>("/config/effective");
+}
+
+export function getAnalyticsOverview(client: ApiClient): Promise<AnalyticsOverview> {
+  return client.request<AnalyticsOverview>("/analytics/overview");
+}
+
+export function getAnalyticsStorage(client: ApiClient): Promise<AnalyticsStorage> {
+  return client.request<AnalyticsStorage>("/analytics/storage");
+}
+
+export function getAnalyticsOutcomes(client: ApiClient): Promise<AnalyticsOutcomes> {
+  return client.request<AnalyticsOutcomes>("/analytics/outcomes");
+}
+
+export function getAnalyticsMedia(client: ApiClient): Promise<AnalyticsMedia> {
+  return client.request<AnalyticsMedia>("/analytics/media");
+}
+
+export function getAnalyticsRecent(client: ApiClient): Promise<RecentAnalytics> {
+  return client.request<RecentAnalytics>("/analytics/recent");
+}
+
+export function getAnalyticsDashboard(client: ApiClient): Promise<AnalyticsDashboard> {
+  return client.request<AnalyticsDashboard>("/analytics/dashboard");
 }

@@ -2,39 +2,30 @@
 
 ## Goal
 
-Renaming must remain Plex-friendly and predictable. Templates should be configurable, but defaults should map cleanly to common Plex naming expectations.
+Naming should remain Plex-friendly, predictable, and policy-driven.
 
-## Default direction
+## Current state
+
+- policy models include movie and episode templates
+- replacement flow currently stays conservative and source-path oriented
+- advanced rich rename generation is not yet a major execution feature
+
+## Default template direction
 
 - Movies: `Title (Year)`
 - Episodes: `Series Title/Season NN/Series Title - sNNeNN - Episode Title`
-- Output container defaults to `.mkv`
+- default extension/container: `.mkv`
 
-## Template principles
+## Principles
 
-- use metadata already known from the file or provided alongside it
-- sanitise filesystem-hostile characters
-- avoid overly clever transformations
-- preserve human readability
-- keep the template system explicit and reviewable
+- explicit template fields
+- filesystem-safe output
+- human-readable names
+- no hidden or clever transformations
+- naming actions should remain reviewable
 
-## Future template fields
+## Future work
 
-- `title`
-- `year`
-- `series_title`
-- `season_number`
-- `season_number_padded`
-- `episode_number`
-- `episode_number_padded`
-- `episode_title`
-- `edition`
-- `video_codec`
-- `resolution_label`
-
-## Operational rules
-
-- renaming should be optional per policy
-- return-to-source-folder remains the default even when renaming is enabled
-- naming changes should be logged for reviewability
-
+- richer metadata-backed filename generation
+- edition/resolution/template variables
+- stronger rename preview in the UI

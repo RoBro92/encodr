@@ -7,6 +7,9 @@ const navigation = [
   { label: "Dashboard", to: APP_ROUTES.dashboard },
   { label: "Files", to: APP_ROUTES.files },
   { label: "Jobs", to: APP_ROUTES.jobs },
+  { label: "Workers", to: APP_ROUTES.workers },
+  { label: "Manual Review", to: APP_ROUTES.review },
+  { label: "Reports", to: APP_ROUTES.reports },
   { label: "System", to: APP_ROUTES.system },
   { label: "Config", to: APP_ROUTES.config },
 ];

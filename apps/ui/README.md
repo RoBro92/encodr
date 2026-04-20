@@ -4,7 +4,7 @@ React + Vite frontend for the encodr dashboard, queue views, worker status, stor
 
 Current scope:
 
-- boot a minimal UI shell
-- present a placeholder dashboard page
-- reserve directories for reusable components, features, pages, and client-side library helpers
-
+- authenticated operator shell and session handling
+- dashboard, files, jobs, workers, manual review, reports, system, and config pages
+- typed API client with TanStack Query hooks
+- frontend tests for login, routing, operational views, and action wiring
