@@ -13,12 +13,15 @@ Encodr can inspect and replace files on mounted media paths. Authentication and 
 - opaque revocable refresh tokens stored server-side
 - append-only audit logging for auth, review, and worker-security events
 - sanitised config visibility only
+- bootstrap status endpoint only reports whether first-user setup is still required
+- CLI admin reset is explicit, local to the installed host, and audited
 
 ## Bootstrap admin
 
 - first-run only
 - blocked once any user exists
 - no open registration endpoint
+- UI first-user setup uses the same bootstrap-admin backend path rather than a separate registration model
 
 ## Worker security baseline
 
@@ -41,6 +44,8 @@ Encodr can inspect and replace files on mounted media paths. Authentication and 
 - worker inventory is admin-only
 - manual-review/protected actions are explicit and audited
 - local worker success requires verification and replacement success, not ffmpeg success alone
+- `ENCODR_AUTH_SECRET` and `ENCODR_WORKER_REGISTRATION_SECRET` must be set outside committed config for real deployments
+- update metadata may be checked from a configured source, but web-driven self-update remains read-only
 
 ## Still out of scope
 

@@ -1,6 +1,7 @@
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/AuthProvider";
+import { useCheckUpdateStatusMutation, useRuntimeStatusQuery, useUpdateStatusQuery } from "../lib/api/hooks";
 import { APP_ROUTES } from "../lib/utils/routes";
 
 const navigation = [
@@ -17,6 +18,9 @@ const navigation = [
 export function AppShell() {
   const navigate = useNavigate();
   const { logout, user } = useSession();
+  const runtimeQuery = useRuntimeStatusQuery();
+  const updateQuery = useUpdateStatusQuery();
+  const checkUpdateMutation = useCheckUpdateStatusMutation();
 
   async function handleLogout() {
     await logout();
@@ -59,10 +63,51 @@ export function AppShell() {
             <span className="topbar-title">Operational UI</span>
             <span className="topbar-subtitle">Internal-only control surface</span>
           </div>
+          <div className="topbar-meta">
+            <span className="topbar-version">
+              v{runtimeQuery.data?.version ?? __ENCODR_VERSION__}
+            </span>
+          </div>
         </header>
+        {updateQuery.data?.update_available ? (
+          <section className="update-banner" role="status" aria-live="polite">
+            <div>
+              <strong>Update available</strong>
+              <p>
+                Encodr {updateQuery.data.latest_version} is available. Current version is{" "}
+                {updateQuery.data.current_version}.
+              </p>
+            </div>
+            <div className="section-card-actions">
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => {
+                  checkUpdateMutation.mutate();
+                }}
+                disabled={checkUpdateMutation.isPending}
+              >
+                {checkUpdateMutation.isPending ? "Checking…" : "Check again"}
+              </button>
+            </div>
+          </section>
+        ) : null}
+        {runtimeQuery.data?.storage_setup_incomplete ? (
+          <div className="info-strip" role="note">
+            <strong>Storage needs attention.</strong>
+            <span>
+              One or more configured paths are degraded or missing. Review the System page or run{" "}
+              <code>encodr mount-setup --validate-only</code>.
+            </span>
+          </div>
+        ) : null}
         <main className="page-shell">
           <Outlet />
         </main>
+        <footer className="app-footer">
+          <span>Encodr v{runtimeQuery.data?.version ?? __ENCODR_VERSION__}</span>
+          <span>Local operator release line</span>
+        </footer>
       </div>
     </div>
   );

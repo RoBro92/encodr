@@ -3,6 +3,7 @@ from __future__ import annotations
 import platform
 
 from app.config import WorkerAgentSettings
+from app.version import read_agent_version
 
 
 def build_capability_summary(settings: WorkerAgentSettings) -> dict[str, object]:
@@ -29,7 +30,7 @@ def build_host_summary() -> dict[str, object]:
     return {
         "hostname": platform.node() or None,
         "platform": platform.platform(),
-        "agent_version": "0.1.0",
+        "agent_version": read_agent_version(),
         "python_version": platform.python_version(),
     }
 

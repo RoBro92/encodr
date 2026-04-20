@@ -58,6 +58,13 @@ class DashboardSettings(ConfigModel):
     analytics_window_days: PositiveInt = 30
 
 
+class UpdateSettings(ConfigModel):
+    enabled: bool = False
+    metadata_url: AnyUrl | None = None
+    channel: NonEmptyString = "internal"
+    check_timeout_seconds: PositiveInt = 5
+
+
 class AppConfig(ConfigModel):
     name: NonEmptyString
     environment: EnvironmentName = EnvironmentName.DEVELOPMENT
@@ -73,6 +80,7 @@ class AppConfig(ConfigModel):
     redis: RedisSettings
     media: MediaToolSettings
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
+    update: UpdateSettings = Field(default_factory=UpdateSettings)
 
     @model_validator(mode="after")
     def validate_paths(self) -> "AppConfig":

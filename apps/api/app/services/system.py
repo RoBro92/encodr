@@ -24,6 +24,7 @@ from app.schemas.worker import HealthStatus
 from encodr_core.config import ConfigBundle
 from encodr_db.models import JobStatus
 from encodr_db.repositories import JobRepository, UserRepository
+from encodr_shared.update import UpdateChecker
 
 
 class SystemService:
@@ -238,6 +239,8 @@ class SystemService:
         schema_reachable = self.schema_reachable()
         user_count = self.user_count()
         queue_health = self.queue_health_summary()
+        storage = self.storage_status()
+        first_user_setup_required = user_count == 0 if user_count is not None else False
 
         warnings: list[str] = []
         if not db_reachable:
@@ -246,6 +249,8 @@ class SystemService:
             warnings.append("Database is reachable but the expected schema is unavailable.")
         if not self.config_bundle.workers.local.enabled:
             warnings.append("The local worker is disabled.")
+        if storage["status"] != HealthStatus.HEALTHY:
+            warnings.append(str(storage["summary"]))
         if queue_health["status"] == HealthStatus.DEGRADED:
             warnings.append(str(queue_health["summary"]))
 
@@ -272,6 +277,8 @@ class SystemService:
             "data_dir": self.config_bundle.app.data_dir.as_posix(),
             "media_mounts": [path.as_posix() for path in self.config_bundle.workers.local.media_mounts],
             "local_worker_enabled": self.config_bundle.workers.local.enabled,
+            "first_user_setup_required": first_user_setup_required,
+            "storage_setup_incomplete": storage["status"] != HealthStatus.HEALTHY,
             "user_count": user_count,
             "config_sources": {
                 "app": self.config_bundle.paths.app.resolved_path.as_posix(),
@@ -280,6 +287,20 @@ class SystemService:
             },
             "warnings": warnings,
             "queue_health": queue_health,
+        }
+
+    def update_status(self, update_checker: UpdateChecker, *, refresh: bool = False) -> dict[str, object]:
+        result = update_checker.check_now() if refresh else update_checker.current_status(auto_check=True)
+        return {
+            "current_version": result.current_version,
+            "latest_version": result.latest_version,
+            "update_available": result.update_available,
+            "channel": result.channel,
+            "status": result.status,
+            "checked_at": result.checked_at.isoformat() if result.checked_at else None,
+            "error": result.error,
+            "download_url": result.download_url,
+            "release_notes_url": result.release_notes_url,
         }
 
     def effective_config(self) -> EffectiveConfigResponse:

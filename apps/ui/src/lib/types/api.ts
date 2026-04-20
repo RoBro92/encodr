@@ -6,6 +6,13 @@ export type AuthTokens = {
   refresh_token_expires_in: number;
 };
 
+export type BootstrapStatus = {
+  bootstrap_allowed: boolean;
+  first_user_setup_required: boolean;
+  user_count: number;
+  version: string;
+};
+
 export type CurrentUser = {
   id: string;
   username: string;
@@ -240,10 +247,24 @@ export type RuntimeStatus = {
   data_dir: string;
   media_mounts: string[];
   local_worker_enabled: boolean;
+  first_user_setup_required: boolean;
+  storage_setup_incomplete: boolean;
   user_count: number | null;
   config_sources: Record<string, string>;
   warnings: string[];
   queue_health: QueueHealthSummary;
+};
+
+export type UpdateStatus = {
+  current_version: string;
+  latest_version: string | null;
+  update_available: boolean;
+  channel: string;
+  status: string;
+  checked_at: string | null;
+  error: string | null;
+  download_url: string | null;
+  release_notes_url: string | null;
 };
 
 export type WorkerSelfTestCheck = {

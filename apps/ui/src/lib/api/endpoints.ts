@@ -8,6 +8,7 @@ import type {
   AnalyticsOverview,
   AnalyticsStorage,
   AuthTokens,
+  BootstrapStatus,
   CreateJobPayload,
   CurrentUser,
   EffectiveConfig,
@@ -24,6 +25,7 @@ import type {
   RecentAnalytics,
   RuntimeStatus,
   StorageStatus,
+  UpdateStatus,
   ReviewDecisionPayload,
   ReviewDecisionResponse,
   ReviewItemDetail,
@@ -41,6 +43,21 @@ export function login(client: ApiClient, payload: LoginPayload): Promise<AuthTok
     method: "POST",
     body: JSON.stringify(payload),
   }, { auth: false, retryOnUnauthorised: false });
+}
+
+export function getBootstrapStatus(client: ApiClient): Promise<BootstrapStatus> {
+  return client.request<BootstrapStatus>("/auth/bootstrap-status", {}, { auth: false, retryOnUnauthorised: false });
+}
+
+export function bootstrapAdmin(client: ApiClient, payload: LoginPayload): Promise<{ user: CurrentUser }> {
+  return client.request<{ user: CurrentUser }>(
+    "/auth/bootstrap-admin",
+    {
+      method: "POST",
+      body: JSON.stringify(payload),
+    },
+    { auth: false, retryOnUnauthorised: false },
+  );
 }
 
 export function logout(client: ApiClient): Promise<{ status: string }> {
@@ -240,6 +257,14 @@ export function getStorageStatus(client: ApiClient): Promise<StorageStatus> {
 
 export function getRuntimeStatus(client: ApiClient): Promise<RuntimeStatus> {
   return client.request<RuntimeStatus>("/system/runtime");
+}
+
+export function getUpdateStatus(client: ApiClient): Promise<UpdateStatus> {
+  return client.request<UpdateStatus>("/system/update");
+}
+
+export function checkUpdateStatus(client: ApiClient): Promise<UpdateStatus> {
+  return client.request<UpdateStatus>("/system/update/check", { method: "POST" });
 }
 
 export function getEffectiveConfig(client: ApiClient): Promise<EffectiveConfig> {

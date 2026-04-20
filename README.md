@@ -9,7 +9,8 @@ Encodr is intentionally narrow in scope. It is not a downloader, a Plex manager,
 - Current release line: `0.1.0`
 - Maturity: internal `v0.x`
 - Implemented: local auth, probe, planning, DB history, local worker execution, verification/replacement, operational API, UI shell, analytics, manual review/protected flows, and remote-worker registration/heartbeat groundwork
-- Not implemented: remote worker execution, advanced scheduling/orchestration, config editing UI, SSO, BI/report-builder features
+- Release hardening included: central versioning, update-check plumbing, root CLI management commands, fresh-LXC installer, first-user setup flow, and storage-mount validation guidance
+- Not implemented: remote worker execution, advanced scheduling/orchestration, config editing UI, SSO, BI/report-builder features, automatic rollback for updates
 
 ## Current capabilities
 
@@ -65,6 +66,35 @@ Encodr is intentionally narrow in scope. It is not a downloader, a Plex manager,
    make dev-up
    ```
 
+5. If no users exist yet, either:
+   - open the UI and follow the first-user setup form on the sign-in page, or
+   - call `POST /api/auth/bootstrap-admin`, or
+   - run `./encodr reset-admin --username admin`
+
+## Fresh Debian LXC install
+
+For a conservative fresh install inside a Debian LXC:
+
+```bash
+sudo ./install.sh
+```
+
+The installer:
+- installs base packages plus Docker and Compose if missing
+- bootstraps `.env` and `config/*.yaml`
+- generates strong local secrets when placeholders are still present
+- brings up the stack
+- waits for API health
+- prints detected IP addresses, URLs, and next steps
+
+After install, use:
+
+```bash
+encodr doctor
+encodr mount-setup --validate-only
+encodr version
+```
+
 ## Local development
 
 Run the main processes in separate terminals:
@@ -77,6 +107,21 @@ make ui
 ```
 
 The API defaults to `http://localhost:8000/api` and the UI to `http://localhost:5173`.
+
+## Operator CLI
+
+The installed machine can use the root/operator CLI:
+
+```bash
+encodr version
+encodr doctor
+encodr update-check
+encodr update
+encodr reset-admin --username admin
+encodr mount-setup --validate-only
+```
+
+`encodr update` uses release metadata plus a downloaded archive. It does not push git branches or merge to `main`.
 
 ## Auth bootstrap flow
 
@@ -139,6 +184,13 @@ make ui-test
 make ui-build
 ```
 
+Release-maintainer helpers:
+
+```bash
+make version
+make release-check
+```
+
 ## Known limitations
 
 - remote worker execution is not implemented
@@ -154,13 +206,9 @@ See:
 
 ## Documentation map
 
-- [docs/PROJECT_OVERVIEW.md](docs/PROJECT_OVERVIEW.md)
-- [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)
-- [docs/API_PLAN.md](docs/API_PLAN.md)
-- [docs/DATA_MODEL.md](docs/DATA_MODEL.md)
+- [docs/MEDIA_POLICY.md](docs/MEDIA_POLICY.md)
 - [docs/SECURITY.md](docs/SECURITY.md)
 - [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md)
-- [docs/UI_PLAN.md](docs/UI_PLAN.md)
-- [docs/ANALYTICS_PLAN.md](docs/ANALYTICS_PLAN.md)
-- [docs/WORKER_PLAN.md](docs/WORKER_PLAN.md)
-- [docs/MILESTONES.md](docs/MILESTONES.md)
+- [docs/INSTALL.md](docs/INSTALL.md)
+- [docs/STORAGE_SETUP.md](docs/STORAGE_SETUP.md)
+- [docs/UPDATES.md](docs/UPDATES.md)

@@ -11,8 +11,9 @@ from app.core.worker_auth import load_worker_auth_runtime_settings
 from encodr_core.config import ConfigBundle, load_config_bundle
 from encodr_core.probe import FFprobeClient
 from encodr_db.runtime import LocalWorkerLoop, WorkerExecutionService, WorkerStatusTracker
+from encodr_shared import UpdateCheckSettings, UpdateChecker, read_version
 
-APP_VERSION = "0.1.0"
+APP_VERSION = read_version()
 
 
 def create_app(
@@ -36,6 +37,15 @@ def create_app(
     app.state.token_service = TokenService(auth_runtime)
     app.state.worker_token_service = WorkerTokenService()
     app.state.worker_auth_runtime = worker_auth_runtime
+    app.state.update_checker = UpdateChecker(
+        current_version=APP_VERSION,
+        settings=UpdateCheckSettings(
+            enabled=bundle.app.update.enabled,
+            metadata_url=str(bundle.app.update.metadata_url) if bundle.app.update.metadata_url else None,
+            channel=bundle.app.update.channel,
+            timeout_seconds=bundle.app.update.check_timeout_seconds,
+        ),
+    )
 
     if session_factory is None:
         engine = create_engine(bundle.app.database.dsn, future=True)

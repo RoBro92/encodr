@@ -78,6 +78,7 @@ class UserRole(StrEnum):
 class AuditEventType(StrEnum):
     BOOTSTRAP_ADMIN_CREATED = "bootstrap_admin_created"
     BOOTSTRAP_ADMIN_BLOCKED = "bootstrap_admin_blocked"
+    ADMIN_RESET = "admin_reset"
     LOGIN = "login"
     LOGOUT = "logout"
     TOKEN_REFRESH = "token_refresh"

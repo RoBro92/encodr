@@ -41,5 +41,12 @@ class BootstrapAdminResponse(BaseModel):
     user: CurrentUserResponse
 
 
+class BootstrapStatusResponse(BaseModel):
+    bootstrap_allowed: bool
+    first_user_setup_required: bool
+    user_count: int
+    version: str
+
+
 class LogoutResponse(BaseModel):
     status: str = "logged_out"

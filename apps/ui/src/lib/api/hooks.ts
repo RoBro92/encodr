@@ -2,6 +2,8 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   approveReviewItem,
+  bootstrapAdmin,
+  checkUpdateStatus,
   clearReviewItemProtected,
   createJobFromReviewItem,
   disableWorker,
@@ -13,6 +15,7 @@ import {
   getAnalyticsStorage,
   createJob,
   getCurrentUser,
+  getBootstrapStatus,
   getEffectiveConfig,
   getFile,
   getJob,
@@ -21,6 +24,7 @@ import {
   getReviewItem,
   getRuntimeStatus,
   getStorageStatus,
+  getUpdateStatus,
   getWorker,
   getWorkerStatus,
   holdReviewItem,
@@ -42,6 +46,16 @@ import {
 } from "./endpoints";
 import { useSession } from "../../features/auth/AuthProvider";
 import type { CreateJobPayload, LoginPayload, ProbeOrPlanPayload, ReviewDecisionPayload } from "../types/api";
+
+export function useBootstrapStatusQuery(enabled = true) {
+  const { apiClient } = useSession();
+  return useQuery({
+    queryKey: ["auth", "bootstrap-status"],
+    queryFn: () => getBootstrapStatus(apiClient),
+    enabled,
+    retry: false,
+  });
+}
 
 export function useCurrentUserQuery(enabled = true) {
   const { apiClient, isAuthenticated } = useSession();
@@ -211,6 +225,26 @@ export function useRuntimeStatusQuery() {
     queryKey: ["system", "runtime"],
     queryFn: () => getRuntimeStatus(apiClient),
     enabled: isAuthenticated,
+  });
+}
+
+export function useUpdateStatusQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["system", "update"],
+    queryFn: () => getUpdateStatus(apiClient),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useCheckUpdateStatusMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => checkUpdateStatus(apiClient),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["system", "update"] });
+    },
   });
 }
 
@@ -401,6 +435,17 @@ export function useLoginMutation() {
   const { apiClient } = useSession();
   return useMutation({
     mutationFn: (payload: LoginPayload) => login(apiClient, payload),
+  });
+}
+
+export function useBootstrapAdminMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: LoginPayload) => bootstrapAdmin(apiClient, payload),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["auth", "bootstrap-status"] });
+    },
   });
 }
 
