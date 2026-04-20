@@ -27,6 +27,19 @@ describe("Encodr UI shell", () => {
   });
 
   it("shows the login screen when an unauthenticated user opens a protected route", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/auth/bootstrap-status",
+        body: {
+          bootstrap_allowed: false,
+          first_user_setup_required: false,
+          user_count: 1,
+          version: CURRENT_VERSION,
+        },
+      },
+    ]);
+
     renderApp({ route: "/" });
 
     expect(await screen.findByRole("heading", { name: /sign in to the operator console/i })).toBeInTheDocument();
@@ -98,6 +111,22 @@ describe("Encodr UI shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /create first admin/i }));
 
     expect(await screen.findByText(/operator console/i)).toBeInTheDocument();
+  });
+
+  it("shows a bootstrap-status error instead of falling back silently to sign in", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/auth/bootstrap-status",
+        status: 500,
+        body: { detail: "bootstrap status unavailable" },
+      },
+    ]);
+
+    renderApp({ route: "/login" });
+
+    expect(await screen.findByRole("heading", { name: /unable to load sign-in state/i })).toBeInTheDocument();
+    expect(screen.getByRole("alert")).toHaveTextContent(/bootstrap status unavailable/i);
   });
 
   it("signs in, stores the session, and loads the app shell", async () => {

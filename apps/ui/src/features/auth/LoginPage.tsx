@@ -35,6 +35,26 @@ export function LoginPage() {
     return <LoadingBlock label="Checking first-run setup" fullScreen />;
   }
 
+  if (bootstrapStatusQuery.isError) {
+    const message = bootstrapStatusQuery.error instanceof Error
+      ? bootstrapStatusQuery.error.message
+      : "Unable to determine whether first-run setup is required.";
+
+    return (
+      <main className="login-shell">
+        <section className="login-panel">
+          <p className="section-eyebrow">Encodr</p>
+          <h1>Unable to load sign-in state</h1>
+          <p className="section-copy">
+            Encodr could not confirm whether a first admin user needs to be created. Check API access and refresh the page.
+          </p>
+          <p className="login-version">Encodr v{__ENCODR_VERSION__}</p>
+          <ErrorPanel title="Unable to load first-run status" message={message} />
+        </section>
+      </main>
+    );
+  }
+
   const state = (location.state ?? {}) as LocationState;
   const bootstrapRequired = bootstrapStatusQuery.data?.first_user_setup_required ?? false;
   const displayedVersion = bootstrapStatusQuery.data?.version ?? __ENCODR_VERSION__;
