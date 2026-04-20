@@ -50,7 +50,7 @@ cd encodr
 Encodr expects:
 
 - `/media` as the standard library mount
-- `/temp/encodr` as the transcode scratch workspace inside the containers
+- `/temp` as the transcode scratch workspace inside the containers
 
 If `/media` or `/temp` exist but do not look like the mounts you expected, the System page and `encodr doctor` will warn clearly.
 

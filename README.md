@@ -71,7 +71,7 @@ encodr update --apply
 ## Storage
 
 Encodr uses `/media` as the standard media path.
-Encodr uses `/temp/encodr` inside the stack as the standard transcode scratch path.
+Encodr uses `/temp` inside the stack as the standard transcode scratch path.
 
 Recommended storage setup:
 

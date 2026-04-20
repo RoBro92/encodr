@@ -18,9 +18,9 @@ copy_if_missing() {
 mkdir -p "$ROOT_DIR/.runtime" "$ROOT_DIR/.runtime/data"
 
 if [[ "${EUID}" -eq 0 ]]; then
-  mkdir -p /temp/encodr /media
+  mkdir -p /temp /media
 else
-  mkdir -p "$ROOT_DIR/.runtime/temp/encodr" "$ROOT_DIR/.runtime/media"
+  mkdir -p "$ROOT_DIR/.runtime/temp" "$ROOT_DIR/.runtime/media"
 fi
 
 copy_if_missing "$ROOT_DIR/.env.example" "$ROOT_DIR/.env"

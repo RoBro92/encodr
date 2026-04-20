@@ -168,7 +168,7 @@ def test_command_doctor_prefers_dockerised_runtime_context(
                     "role": "scratch",
                     "display_name": "Scratch workspace",
                     "status": "healthy",
-                    "path": "/temp/encodr",
+                    "path": "/temp",
                     "message": "The path is available.",
                     "recommended_action": None,
                 },
@@ -312,8 +312,8 @@ def test_bootstrap_script_creates_runtime_data_and_temp_subdir(repo_root: Path) 
     bootstrap_script = (repo_root / "infra" / "scripts" / "bootstrap.sh").read_text(encoding="utf-8")
 
     assert '$ROOT_DIR/.runtime/data' in bootstrap_script
-    assert 'mkdir -p /temp/encodr /media' in bootstrap_script
-    assert '$ROOT_DIR/.runtime/temp/encodr' in bootstrap_script
+    assert 'mkdir -p /temp /media' in bootstrap_script
+    assert '$ROOT_DIR/.runtime/temp' in bootstrap_script
     assert '$ROOT_DIR/.runtime/media' in bootstrap_script
 
 
@@ -339,8 +339,8 @@ def test_example_configs_use_temp_for_transcode_scratch(repo_root: Path) -> None
     worker_config = (repo_root / "config" / "workers.example.yaml").read_text(encoding="utf-8")
     env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
 
-    assert "scratch_dir: /temp/encodr" in app_config
-    assert "scratch_dir: /temp/encodr" in worker_config
+    assert "scratch_dir: /temp" in app_config
+    assert "scratch_dir: /temp" in worker_config
     assert "ENCODR_TEMP_HOST_PATH=/temp" in env_example
 
 

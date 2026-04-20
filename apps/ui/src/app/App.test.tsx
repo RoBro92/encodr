@@ -769,7 +769,7 @@ function runtimeStatus({
     auth_enabled: true,
     api_base_path: "/api",
     standard_media_root: "/media",
-    scratch_dir: "/temp/encodr",
+    scratch_dir: "/temp",
     data_dir: "/tmp/data",
     media_mounts: ["/media"],
     local_worker_enabled: true,
@@ -812,7 +812,7 @@ function storageStatus({
     scratch: {
       role: "scratch",
       display_name: "Scratch workspace",
-      path: "/temp/encodr",
+      path: "/temp",
       status: scratchStatus,
       issue_code: scratchStatus === "healthy" ? "ok" : "path_missing",
       message: scratchStatus === "healthy" ? "The path is available." : "The path does not exist.",
@@ -875,7 +875,7 @@ function effectiveConfig() {
     app_name: "encodr",
     environment: "testing",
     timezone: "Europe/London",
-    scratch_dir: "/temp/encodr",
+    scratch_dir: "/temp",
     data_dir: "/tmp/data",
     output: { return_to_original_folder: true, default_container: "mkv" },
     auth: {

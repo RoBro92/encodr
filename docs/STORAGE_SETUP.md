@@ -11,7 +11,7 @@ This is the standard in-container media root used by the app, the installer guid
 Encodr also expects its transcode scratch workspace at:
 
 ```text
-/temp/encodr
+/temp
 ```
 
 The installer and bootstrap flow create both `/media` and `/temp` automatically. That keeps first start simple, but Encodr now warns if those paths look empty or appear to share the container root filesystem instead of a real mounted library or scratch disk.

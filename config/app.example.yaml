@@ -4,7 +4,7 @@ app:
   log_level: INFO
   timezone: Europe/London
   data_dir: /data
-  scratch_dir: /temp/encodr
+  scratch_dir: /temp
   output:
     return_to_original_folder: true
     default_container: mkv
