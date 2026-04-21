@@ -246,3 +246,15 @@ class WorkerJobResultResponse(BaseModel):
     job_id: str
     final_status: str
     completed_at: datetime | None = None
+
+
+class WorkerJobFailureRequest(BaseModel):
+    failure_message: str = Field(min_length=1, max_length=4000)
+    failure_category: str = Field(default="worker_agent_error", min_length=1, max_length=255)
+    runtime_summary: WorkerRuntimeSummaryResponse | None = None
+
+
+class WorkerJobFailureResponse(BaseModel):
+    job_id: str
+    final_status: Literal["failed"]
+    completed_at: datetime | None = None

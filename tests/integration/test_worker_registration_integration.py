@@ -278,6 +278,67 @@ def test_remote_worker_can_request_claim_and_submit_job_result(
         assert saved_job.last_worker_id == worker.id
 
 
+def test_remote_worker_can_report_failure_for_running_job(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Failure Example.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        create_job(
+            session,
+            context.bundle,
+            media,
+            source_path=source_path.as_posix(),
+        )
+        session.commit()
+
+    registration = context.client.post("/api/worker/register", json=registration_payload("valid-secret"))
+    worker_token = registration.json()["worker_token"]
+
+    request_response = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    job_id = request_response.json()["job"]["job_id"]
+    claim_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert claim_response.status_code == 200
+
+    failure_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/failure",
+        json={
+            "failure_message": "submit failed",
+            "failure_category": "worker_agent_error",
+            "runtime_summary": {
+                "queue": "remote-amd",
+                "scratch_dir": "/srv/scratch",
+                "media_mounts": ["/srv/media"],
+                "last_completed_job_id": None,
+            },
+        },
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert failure_response.status_code == 200
+    assert failure_response.json()["final_status"] == "failed"
+
+    with session_factory() as session:
+        worker = WorkerRepository(session).get_by_key("remote-amd-01")
+        assert worker is not None
+        saved_job = session.get(Job, job_id)
+        assert saved_job is not None
+        assert saved_job.status == JobStatus.FAILED
+        assert saved_job.last_worker_id == worker.id
+
+
 def test_worker_agent_service_can_execute_remote_job_against_api_context(
     tmp_path: Path,
     repo_root: Path,

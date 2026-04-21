@@ -184,6 +184,98 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
     )
 
 
+def probe_vaapi(ffmpeg_path: Path | str) -> HardwareProbe:
+    hwaccels = detect_ffmpeg_hwaccels(ffmpeg_path)
+    render_devices = sorted(path.as_posix() for path in Path("/dev/dri").glob("renderD*"))
+
+    if not render_devices:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=False,
+            usable=False,
+            status="failed",
+            message="No VAAPI render device is visible to the runtime.",
+            details={"hwaccels": hwaccels, "render_devices": render_devices},
+        )
+
+    if "vaapi" not in hwaccels:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="FFmpeg does not report VAAPI hardware acceleration support.",
+            details={"hwaccels": hwaccels, "render_devices": render_devices},
+        )
+
+    resolved_ffmpeg = probe_binary(ffmpeg_path).resolved_path or str(ffmpeg_path)
+    device = render_devices[0]
+    command = [
+        resolved_ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-init_hw_device",
+        f"vaapi=vaapi:{device}",
+        "-filter_hw_device",
+        "vaapi",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc=size=16x16:rate=1",
+        "-frames:v",
+        "1",
+        "-vf",
+        "format=nv12,hwupload",
+        "-c:v",
+        "h264_vaapi",
+        "-f",
+        "null",
+        "-",
+    ]
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=False,
+            status="failed",
+            message=f"VAAPI probe could not be executed: {error}",
+            details={"hwaccels": hwaccels, "render_devices": render_devices},
+        )
+
+    if completed.returncode == 0:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=True,
+            status="healthy",
+            message="VAAPI is available and FFmpeg can initialise it.",
+            details={"hwaccels": hwaccels, "render_devices": render_devices},
+        )
+
+    stderr = (completed.stderr or completed.stdout or "").strip()
+    return HardwareProbe(
+        backend="vaapi",
+        detected=True,
+        usable=False,
+        status="failed",
+        message="VAAPI hardware is visible but FFmpeg could not initialise it.",
+        details={
+            "hwaccels": hwaccels,
+            "render_devices": render_devices,
+            "stderr": stderr[:1000] if stderr else None,
+        },
+    )
+
+
 def probe_directory(path: Path | str, *, writable_required: bool) -> dict[str, object]:
     resolved = Path(path)
     exists = resolved.exists()

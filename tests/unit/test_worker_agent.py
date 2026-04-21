@@ -298,6 +298,113 @@ def test_worker_agent_process_once_claims_and_submits_result(tmp_path: Path) -> 
     assert any(call["url"].endswith("/worker/jobs/job-1/result") for call in requester.calls)
 
 
+def test_worker_agent_reports_failure_when_result_submit_raises(tmp_path: Path) -> None:
+    class FakeExecutionService:
+        def execute(self, *, job_id: str, plan_payload: dict, media_payload: dict) -> ExecutionResult:
+            del job_id, plan_payload, media_payload
+            return ExecutionResult(
+                mode="remux",
+                status="completed",
+                command=["ffmpeg", "-i", "input.mkv", "output.mkv"],
+                output_path=Path("/media/output.mkv"),
+                final_output_path=Path("/media/output.mkv"),
+                original_backup_path=Path("/media/input.encodr-backup.mkv"),
+                output_size_bytes=123,
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+
+    requester = FakeRequester()
+
+    def request_json(*, method: str, url: str, body: dict | None = None, bearer_token: str | None = None) -> dict:
+        requester.calls.append({"method": method, "url": url, "body": body, "bearer_token": bearer_token})
+        if url.endswith("/worker/jobs/request"):
+            return {
+                "status": "assigned",
+                "job": {
+                    "job_id": "job-2",
+                    "tracked_file_id": "file-2",
+                    "plan_snapshot_id": "plan-2",
+                    "source_path": "/media/input.mkv",
+                    "plan_payload": {
+                        "action": "remux",
+                        "replace": {
+                            "in_place": True,
+                            "require_verification": True,
+                            "keep_original_until_verified": True,
+                            "delete_replaced_source": False,
+                        },
+                        "container": {"target_container": "mkv"},
+                        "selected_streams": {
+                            "video_stream_indices": [0],
+                            "audio_stream_indices": [1],
+                            "subtitle_stream_indices": [],
+                            "attachment_stream_indices": [],
+                            "data_stream_indices": [],
+                        },
+                        "video": {"transcode_required": False, "target_codec": None},
+                        "policy_context": {"policy_version": 1, "selected_profile_name": "movies-default"},
+                        "should_treat_as_protected": False,
+                    },
+                    "media_payload": {
+                        "file_path": "/media/input.mkv",
+                        "file_name": "input.mkv",
+                        "is_4k": False,
+                        "container": {"size_bytes": 123},
+                        "video_streams": [{"index": 0, "codec_name": "hevc", "width": 1920, "height": 1080}],
+                        "audio_streams": [{"index": 1, "codec_name": "aac", "language": "eng", "channel_layout": "mono"}],
+                        "subtitle_streams": [],
+                        "attachment_streams": [],
+                        "data_streams": [],
+                    },
+                    "requested_worker_type": None,
+                    "assignment_state": "assigned",
+                    "assigned_worker_id": "worker-1",
+                },
+            }
+        if url.endswith("/worker/jobs/job-2/result"):
+            raise RuntimeError("submit failed")
+        if url.endswith("/worker/jobs/job-2/failure"):
+            return {
+                "job_id": "job-2",
+                "final_status": "failed",
+                "completed_at": "2026-04-20T12:03:00Z",
+            }
+        return FakeRequester.request_json(requester, method=method, url=url, body=body, bearer_token=bearer_token)
+
+    requester.request_json = request_json  # type: ignore[attr-defined]
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("persisted-token", encoding="utf-8")
+    (tmp_path / "bin").mkdir(parents=True, exist_ok=True)
+    for name in ("ffmpeg", "ffprobe"):
+        binary = tmp_path / "bin" / name
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o755)
+    (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_KEY": "remote-amd-01",
+            "ENCODR_WORKER_AGENT_DISPLAY_NAME": "Remote AMD Worker",
+            "ENCODR_WORKER_AGENT_TOKEN_FILE": str(token_file),
+            "ENCODR_WORKER_AGENT_FFMPEG_PATH": str(tmp_path / "bin" / "ffmpeg"),
+            "ENCODR_WORKER_AGENT_FFPROBE_PATH": str(tmp_path / "bin" / "ffprobe"),
+            "ENCODR_WORKER_AGENT_SCRATCH_DIR": str(tmp_path / "scratch"),
+        }
+    )
+    client = WorkerApiClient(base_url="http://encodr.test/api", requester=requester)
+    service = WorkerAgentService(settings=settings, api_client=client, execution_service=FakeExecutionService())
+
+    with pytest.raises(RuntimeError, match="submit failed"):
+        service.process_once()
+
+    assert any(call["url"].endswith("/worker/jobs/job-2/result") for call in requester.calls)
+    assert any(call["url"].endswith("/worker/jobs/job-2/failure") for call in requester.calls)
+
+
 def test_worker_agent_version_lookup_handles_shallow_paths(monkeypatch: pytest.MonkeyPatch) -> None:
     class FakeResolvedPath:
         parents = (Path("/virtual"),)

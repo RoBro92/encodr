@@ -27,7 +27,7 @@ from encodr_db.models import (
 )
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary
-from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_intel_qsv
+from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_intel_qsv, probe_vaapi
 
 
 class WorkerService:
@@ -75,13 +75,14 @@ class WorkerService:
             for path in self.config_bundle.workers.local.media_mounts
         ]
         qsv_probe = probe_intel_qsv(self.config_bundle.app.media.ffmpeg_path)
+        vaapi_probe = probe_vaapi(self.config_bundle.app.media.ffmpeg_path)
         execution_backends: list[str] = []
         if ffmpeg["status"] == HealthStatus.HEALTHY:
             execution_backends.extend(["remux", "transcode"])
         hardware_acceleration = [
-            qsv_probe.backend
-            for qsv_probe in [qsv_probe]
-            if qsv_probe.usable
+            probe.backend
+            for probe in [qsv_probe, vaapi_probe]
+            if probe.usable
         ]
         scratch_ready = scratch_path["status"] == "healthy"
         media_ready = all(item["status"] == "healthy" for item in media_paths) if media_paths else False
@@ -115,6 +116,14 @@ class WorkerService:
                     "status": qsv_probe.status,
                     "message": qsv_probe.message,
                     "details": qsv_probe.details,
+                },
+                {
+                    "backend": vaapi_probe.backend,
+                    "detected": vaapi_probe.detected,
+                    "usable": vaapi_probe.usable,
+                    "status": vaapi_probe.status,
+                    "message": vaapi_probe.message,
+                    "details": vaapi_probe.details,
                 }
             ],
             "eligible": eligible,
@@ -507,6 +516,63 @@ class WorkerService:
             raise ApiConflictError("Only running jobs can be completed.")
 
         result = ExecutionResult.model_validate(result_payload)
+        repository.mark_result(job, result)
+        job.last_worker_id = worker.id
+        job.worker_name = worker.display_name
+        tracked_files.update_file_state_from_execution_result(
+            job.tracked_file,
+            ProcessingPlan.model_validate(job.plan_snapshot.payload),
+            result,
+        )
+
+        if runtime_summary is not None:
+            worker.runtime_payload = runtime_summary
+
+        return {
+            "job_id": job.id,
+            "final_status": job.status.value,
+            "completed_at": job.completed_at,
+        }
+
+    def report_job_failure(
+        self,
+        session: Session,
+        *,
+        worker: Worker,
+        job_id: str,
+        failure_message: str,
+        failure_category: str,
+        runtime_summary: dict | None,
+    ) -> dict[str, object]:
+        repository = JobRepository(session)
+        tracked_files = TrackedFileRepository(session)
+        job = repository.get_by_id(job_id)
+        if job is None:
+            raise ApiNotFoundError("Job could not be found.")
+        if job.assigned_worker_id != worker.id:
+            raise ApiConflictError("Job is not assigned to this worker.")
+        if job.status != JobStatus.RUNNING:
+            raise ApiConflictError("Only running jobs can be marked failed by a worker.")
+
+        completed_at = datetime.now(timezone.utc)
+        result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            final_output_path=None,
+            original_backup_path=None,
+            output_size_bytes=None,
+            exit_code=None,
+            stdout=None,
+            stderr=None,
+            failure_message=failure_message,
+            failure_category=failure_category,
+            verification=None,
+            replacement=None,
+            started_at=job.started_at or completed_at,
+            completed_at=completed_at,
+        )
         repository.mark_result(job, result)
         job.last_worker_id = worker.id
         job.worker_name = worker.display_name

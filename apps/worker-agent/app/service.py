@@ -112,17 +112,48 @@ class WorkerAgentService:
 
         job = assignment["job"]
         self.api_client.claim_job(worker_token=session.worker_token, job_id=str(job["job_id"]))
-        result = self.execution_service.execute(
-            job_id=str(job["job_id"]),
-            plan_payload=dict(job["plan_payload"]),
-            media_payload=dict(job["media_payload"]),
-        )
-        response = self.api_client.submit_job_result(
-            worker_token=session.worker_token,
-            job_id=str(job["job_id"]),
-            payload={
-                "result_payload": result.model_dump(mode="json"),
-                "runtime_summary": build_runtime_summary(self.settings) | {"last_completed_job_id": str(job["job_id"])},
-            },
-        )
-        return response
+        job_id = str(job["job_id"])
+        try:
+            result = self.execution_service.execute(
+                job_id=job_id,
+                plan_payload=dict(job["plan_payload"]),
+                media_payload=dict(job["media_payload"]),
+            )
+            response = self.api_client.submit_job_result(
+                worker_token=session.worker_token,
+                job_id=job_id,
+                payload={
+                    "result_payload": result.model_dump(mode="json"),
+                    "runtime_summary": build_runtime_summary(self.settings) | {"last_completed_job_id": job_id},
+                },
+            )
+            return response
+        except Exception as error:
+            self._best_effort_report_failure(
+                session=session,
+                job_id=job_id,
+                failure_message=str(error),
+                failure_category="worker_agent_error",
+            )
+            raise
+
+    def _best_effort_report_failure(
+        self,
+        *,
+        session: WorkerSession,
+        job_id: str,
+        failure_message: str,
+        failure_category: str,
+    ) -> None:
+        try:
+            self.api_client.report_job_failure(
+                worker_token=session.worker_token,
+                job_id=job_id,
+                payload={
+                    "failure_message": failure_message,
+                    "failure_category": failure_category,
+                    "runtime_summary": build_runtime_summary(self.settings),
+                },
+            )
+        except Exception:
+            return
