@@ -91,3 +91,26 @@ class LibraryRootsResponse(BaseModel):
     media_root: str
     movies_root: str | None = None
     tv_root: str | None = None
+
+
+class ProcessingRuleValuesResponse(BaseModel):
+    target_video_codec: str
+    output_container: str
+    keep_english_audio_only: bool
+    keep_forced_subtitles: bool
+    keep_one_full_english_subtitle: bool
+    preserve_surround: bool
+    preserve_atmos: bool
+    four_k_mode: str
+
+
+class ProcessingRulesetResponse(BaseModel):
+    profile_name: str | None = None
+    current: ProcessingRuleValuesResponse
+    defaults: ProcessingRuleValuesResponse
+    uses_defaults: bool
+
+
+class ProcessingRulesResponse(BaseModel):
+    movies: ProcessingRulesetResponse
+    tv: ProcessingRulesetResponse

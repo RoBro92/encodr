@@ -36,7 +36,7 @@ export function DataTable<T>({
         </thead>
         <tbody>
           {items.map((item) => (
-            <tr key={rowKey(item)}>
+            <tr key={rowKey(item)} className="data-table-row">
               {columns.map((column) => (
                 <td key={column.key} className={column.className}>
                   {column.render(item)}

@@ -138,14 +138,35 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^library$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^manual review$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^workers$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^system$/i })).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: /^config$/i })).toBeInTheDocument();
+    const nav = screen.getByRole("navigation", { name: /primary/i });
+    const navLabels = within(nav)
+      .getAllByRole("link")
+      .map((item) => item.textContent?.trim());
+    expect(navLabels).toEqual(["Dashboard", "Library", "Jobs", "Review", "Workers", "System", "Settings"]);
     expect(screen.getByRole("link", { name: /open library/i })).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /open reports/i }).length).toBeGreaterThan(0);
     expect(screen.queryByRole("link", { name: /^reports$/i, hidden: false })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/probe source path/i)).not.toBeInTheDocument();
+  });
+
+  it("keeps the storage warning visible when setup is incomplete", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: "/api/system/runtime",
+        body: {
+          ...runtimeStatus(),
+          storage_setup_incomplete: true,
+        },
+      },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("note")).toHaveTextContent(/storage still needs setup/i);
   });
 
   it("shows an update banner when a newer version is available", async () => {
@@ -219,10 +240,12 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("button", { name: new RegExp(`update ${latestVersion} available`, "i") })).toBeInTheDocument();
   });
 
-  it("lets an operator choose Movies and TV folders from the config page", async () => {
+  it("lets an operator choose Movies and TV folders from the settings page", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",
@@ -258,7 +281,7 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/config", initialSession: makeSession() });
 
-    expect(await screen.findByRole("heading", { name: /^setup$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
     await userEvent.click(screen.getAllByRole("button", { name: /choose folder/i })[0]);
 
     const dialog = await screen.findByRole("dialog", { name: /choose movies folder/i });
@@ -273,8 +296,184 @@ describe("Encodr UI shell", () => {
     });
   });
 
-  it("scans a folder and runs a dry run from the library page", async () => {
+  it("renders editable processing rules and saves movie changes through the settings API", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      {
+        method: "PUT",
+        path: "/api/config/setup/processing-rules",
+        body: {
+          movies: {
+            profile_name: "movies-default",
+            uses_defaults: false,
+            defaults: processingRules().movies.defaults,
+            current: {
+              ...processingRules().movies.current,
+              target_video_codec: "h264",
+            },
+          },
+          tv: processingRules().tv,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/movies rules/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/tv rules/i).length).toBeGreaterThan(0);
+    expect(screen.queryByLabelText(/4k handling/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getAllByRole("button", { name: /advanced options/i })[0]);
+    expect(screen.getByLabelText(/4k handling/i)).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[0], "h264");
+    await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/config/setup/processing-rules"),
+        expect.objectContaining({
+          method: "PUT",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            movies: {
+              ...processingRules().movies.current,
+              target_video_codec: "h264",
+            },
+            tv: null,
+          }),
+        }),
+      );
+    });
+  });
+
+  it("does not save unsaved TV rule edits when only movie rules are submitted", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      {
+        method: "PUT",
+        path: "/api/config/setup/processing-rules",
+        body: {
+          movies: {
+            profile_name: "movies-default",
+            uses_defaults: false,
+            defaults: processingRules().movies.defaults,
+            current: {
+              ...processingRules().movies.current,
+              target_video_codec: "h264",
+            },
+          },
+          tv: processingRules().tv,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[1], "av1");
+    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[0], "h264");
+    await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/config/setup/processing-rules"),
+        expect.objectContaining({
+          method: "PUT",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            movies: {
+              ...processingRules().movies.current,
+              target_video_codec: "h264",
+            },
+            tv: null,
+          }),
+        }),
+      );
+    });
+  });
+
+  it("renders the redesigned library workspace and lets tabs switch cleanly", async () => {
     mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      {
+        method: "POST",
+        path: "/api/files/scan",
+        body: {
+          folder_path: "/media/Movies",
+          root_path: "/media",
+          directory_count: 1,
+          direct_directory_count: 1,
+          video_file_count: 1,
+          likely_show_count: 0,
+          likely_season_count: 0,
+          likely_episode_count: 0,
+          likely_film_count: 1,
+          files: [
+            { name: "Film One (2024).mkv", path: "/media/Movies/Film One (2024).mkv", entry_type: "file", is_video: true },
+          ],
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: {
+          media_root: "/media",
+          movies_root: "/media/Movies",
+          tv_root: "/media/TV",
+        },
+      },
+    ]);
+
+    renderApp({ route: "/files", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
+    expect(screen.getByText(/movies root/i)).toBeInTheDocument();
+    expect(screen.getByText(/tv root/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /current folder/i })).toBeInTheDocument();
+    expect(screen.queryByRole("tab", { name: /dry run/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/choose another folder/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+
+    expect(await screen.findByRole("tab", { name: /^browse$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: /^dry run$/i }));
+    expect(screen.getByText(/no dry run yet/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: /batch plan/i }));
+    expect(screen.getByText(/no batch results yet/i)).toBeInTheDocument();
+  });
+
+  it("shows a missing-roots prompt when library roots have not been set", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: {
+          media_root: "/media",
+          movies_root: null,
+          tv_root: null,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/files", initialSession: makeSession() });
+
+    expect(await screen.findByText(/library roots not set/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /settings/i })[0]).toBeInTheDocument();
+  });
+
+  it("scans a folder and runs a dry run from the library action bar", async () => {
+    const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       {
         method: "GET",
@@ -335,23 +534,43 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    await userEvent.click(screen.getAllByRole("button", { name: /^scan$/i })[0]);
+    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
 
-    expect(await screen.findByText(/likely films/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("checkbox", { name: /film one/i }));
-    await userEvent.click(screen.getByRole("button", { name: /dry run selected/i }));
-
-    const dryRunHeading = await screen.findByRole("heading", { name: /dry run/i });
-    const dryRunCard = dryRunHeading.closest(".section-card") as HTMLElement | null;
-    expect(dryRunCard).not.toBeNull();
-    expect(screen.getByText(/read-only preview of what encodr would do/i)).toBeInTheDocument();
-    if (dryRunCard) {
-      expect(within(dryRunCard).getByText(/film one \(2024\)\.mkv/i, { selector: "strong" })).toBeInTheDocument();
+    const selectedFolderCard = screen.getByRole("heading", { name: /current folder/i }).closest(".section-card") as HTMLElement | null;
+    expect(selectedFolderCard).not.toBeNull();
+    if (selectedFolderCard) {
+      expect((await within(selectedFolderCard).findAllByText("/media/Movies")).length).toBeGreaterThan(0);
     }
+    await userEvent.click(screen.getByRole("checkbox", { name: /film one/i }));
+    expect(screen.getByText(/1 file selected/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /^dry run$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /batch plan/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /create jobs/i })).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^dry run$/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/files/dry-run"),
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            selected_paths: ["/media/Movies/Film One (2024).mkv"],
+          }),
+        }),
+      );
+    });
+
+    expect(screen.getByRole("tab", { name: /^dry run$/i })).toHaveAttribute("aria-selected", "true");
+    const dryRunPanel = screen.getByRole("tabpanel", { name: /^dry run$/i });
+    expect(within(dryRunPanel).getByText(/safe preview/i)).toBeInTheDocument();
+    expect(within(dryRunPanel).getByText(/replacing media/i)).toBeInTheDocument();
+    expect(within(dryRunPanel).getByText(/film one \(2024\)\.mkv/i, { selector: "strong" })).toBeInTheDocument();
   });
 
-  it("creates batch jobs from a scanned folder", async () => {
-    mockFetchRoutes([
+  it("creates batch jobs from the selected folder without changing the job API", async () => {
+    const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       {
         method: "GET",
@@ -414,18 +633,366 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    await userEvent.click(screen.getAllByRole("button", { name: /^scan$/i })[0]);
-    await userEvent.click(await screen.findByRole("button", { name: /create jobs for folder/i }));
+    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+    await userEvent.click(await screen.findByRole("button", { name: /create jobs/i }));
 
-    const batchJobsSection = await screen.findByRole("heading", { name: /batch jobs/i });
-    const batchJobsCard = batchJobsSection.closest(".section-card") as HTMLElement | null;
-    expect(batchJobsCard).not.toBeNull();
-    if (batchJobsCard) {
-      expect(within(batchJobsCard).getByRole("link", { name: /open job/i })).toBeInTheDocument();
-      expect(within(batchJobsCard).getByText(/^Created$/i, { selector: ".metric-label" })).toBeInTheDocument();
-      expect(within(batchJobsCard).getByText(/^Blocked$/i, { selector: ".metric-label" })).toBeInTheDocument();
-      expect(within(batchJobsCard).getByText(/manual review or protected-file approval/i)).toBeInTheDocument();
-    }
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/batch"),
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            folder_path: "/media/Movies",
+          }),
+        }),
+      );
+    });
+
+    expect(await screen.findByText(/jobs created/i)).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /batch plan/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("link", { name: /open job/i })).toBeInTheDocument();
+    expect(screen.getByText(/^Created$/i, { selector: ".metric-label" })).toBeInTheDocument();
+    expect(screen.getByText(/^Blocked$/i, { selector: ".metric-label" })).toBeInTheDocument();
+    expect(screen.getByText(/manual review or protected-file approval/i)).toBeInTheDocument();
+  });
+
+  it("renders the cleaned jobs queue, keeps retry wiring intact, and hides advanced detail by default", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/files",
+        body: {
+          items: [
+            {
+              ...reviewItemDetail().tracked_file,
+              id: "file-1",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/job-1",
+        body: {
+          ...jobDetail(),
+          id: "job-1",
+          status: "failed",
+          verification_status: "failed",
+          replacement_status: "pending",
+          failure_message: "ffmpeg exited with code 1",
+          requires_review: true,
+          review_status: "open",
+          execution_command: ["ffmpeg", "-i", "input.mkv", "output.mkv"],
+          execution_stdout: "ffmpeg stdout",
+          execution_stderr: "ffmpeg stderr",
+          verification_payload: { checks: ["duration"], status: "failed" },
+          replacement_payload: { replaced: false },
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-1",
+              status: "failed",
+              verification_status: "failed",
+              replacement_status: "pending",
+              failure_message: "ffmpeg exited with code 1",
+              requires_review: true,
+              review_status: "open",
+            },
+            {
+              ...jobDetail(),
+              id: "job-2",
+              tracked_file_id: "file-2",
+              status: "completed",
+              verification_status: "passed",
+              replacement_status: "succeeded",
+              completed_at: "2026-04-20T10:12:30Z",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/job-1/retry",
+        body: {
+          ...jobDetail(),
+          id: "job-1",
+          status: "pending",
+          verification_status: "pending",
+          replacement_status: "pending",
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs/job-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: /jobs list/i })).toBeInTheDocument();
+    expect(screen.getByText(/needs attention/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/create from tracked file/i)).toBeInTheDocument();
+    expect(screen.queryByText(/ffmpeg -i input\.mkv output\.mkv/i)).not.toBeInTheDocument();
+
+    const executionToggle = screen.getByRole("button", { name: /advanced execution details/i });
+    await userEvent.click(executionToggle);
+    expect(executionToggle).toHaveAttribute("aria-expanded", "true");
+
+    await userEvent.click(screen.getByRole("button", { name: /retry job/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/job-1/retry"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+  });
+
+  it("uses tracked-file search requests instead of a fixed local picker list", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: /\/api\/files\?.*limit=25/,
+        body: {
+          items: [],
+          limit: 25,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    const picker = screen.getByLabelText(/create from tracked file/i);
+    await userEvent.type(picker, "F");
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          typeof url === "string" && url.includes("/api/files?path_search=F&limit=25"),
+        ),
+      ).toBe(true);
+    });
+  });
+
+  it("shows an empty jobs state when the queue is clear", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/files",
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    expect(screen.getByText(/no jobs yet/i)).toBeInTheDocument();
+  });
+
+  it("renders the review inbox layout, keeps decisions wired, and hides advanced sections by default", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/review/items/item-1",
+        body: reviewItemDetail(),
+      },
+      {
+        method: "GET",
+        path: "/api/review/items",
+        body: {
+          items: [
+            reviewItemDetail(),
+            {
+              ...reviewItemDetail(),
+              id: "item-2",
+              review_status: "held",
+              tracked_file: {
+                ...reviewItemDetail().tracked_file,
+                id: "file-2",
+                source_filename: "Another Film (2024).mkv",
+              },
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/review/items/item-1/approve",
+        body: {
+          review_item: {
+            ...reviewItemDetail(),
+            review_status: "approved",
+          },
+          decision: null,
+          job: null,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/review/item-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^review$/i })).toBeInTheDocument();
+    expect(screen.getByRole("list", { name: /review items list/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/missing english audio/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/planner protected/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /show protection details/i }));
+    expect(screen.getByText(/planner protected/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /^approve$/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/review/items/item-1/approve"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+  });
+
+  it("shows an empty review inbox when no items match the current filters", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/review/items",
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/review", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^review$/i })).toBeInTheDocument();
+    expect(screen.getByText(/no review items/i)).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /selected item/i })).not.toBeInTheDocument();
+  });
+
+  it("uses consistent page headings for workers, system, and settings", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/workers", body: { items: [] } },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: {
+          media_root: "/media",
+          movies_root: "/media/Movies",
+          tv_root: "/media/TV",
+        },
+      },
+    ]);
+
+    const workersRender = renderApp({ route: "/workers", initialSession: makeSession() });
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    workersRender.unmount();
+
+    const systemRender = renderApp({ route: "/system", initialSession: makeSession() });
+    expect(await screen.findByRole("heading", { name: /^system$/i, level: 1 })).toBeInTheDocument();
+    systemRender.unmount();
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+    expect(await screen.findByRole("heading", { name: /^settings$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /processing rules/i })).toBeInTheDocument();
+  });
+
+  it("moves system warnings to the top when runtime or storage is degraded", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: "/api/system/runtime",
+        body: {
+          ...runtimeStatus(),
+          warnings: ["Database lag detected"],
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/system/storage",
+        body: {
+          ...storageStatus(),
+          warnings: ["Scratch workspace is nearly full"],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/system", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
+    const warningsHeading = screen.getByRole("heading", { name: /^warnings$/i });
+    expect(warningsHeading).toBeInTheDocument();
+    const warningCard = warningsHeading.closest(".section-card");
+    expect(warningCard).toHaveTextContent(/database lag detected/i);
+    expect(warningCard).toHaveTextContent(/scratch workspace is nearly full/i);
+  });
+
+  it("marks a remote worker without a heartbeat as not configured", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [
+            {
+              ...workerInventory(),
+              id: "worker-remote-1",
+              worker_key: "remote-1",
+              display_name: "Remote worker",
+              worker_type: "remote",
+              health_status: "healthy",
+              last_seen_at: null,
+              last_heartbeat_at: null,
+              health_summary: "Healthy",
+            },
+          ],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByText(/not configured/i)).toBeInTheDocument();
   });
 });
 
@@ -605,6 +1172,121 @@ function storageStatus() {
   };
 }
 
+function effectiveConfig() {
+  return {
+    app_name: "Encodr",
+    environment: "production",
+    timezone: "Europe/London",
+    scratch_dir: "/temp",
+    data_dir: "/data",
+    output: {
+      return_to_original_folder: true,
+      default_container: "mkv",
+    },
+    auth: {
+      enabled: true,
+      session_mode: "jwt",
+      access_token_ttl_minutes: 30,
+      refresh_token_ttl_days: 14,
+      access_token_algorithm: "HS256",
+    },
+    policy_version: 1,
+    policy_name: "default",
+    profile_names: ["Movies", "TV"],
+    audio: {
+      keep_languages: ["eng"],
+      preserve_best_surround: true,
+      preserve_atmos_capable: true,
+      preferred_codecs: ["aac", "ac3"],
+      allow_commentary: false,
+      max_tracks_to_keep: 2,
+    },
+    subtitles: {
+      keep_languages: ["eng"],
+      keep_forced_languages: ["eng"],
+      keep_commentary: false,
+      keep_hearing_impaired: false,
+    },
+    video: {
+      output_container: "mkv",
+      non_4k_preferred_codec: "hevc",
+      non_4k_allow_transcode: true,
+      non_4k_max_video_bitrate_mbps: 18,
+      non_4k_max_width: 1920,
+      four_k_mode: "preserve",
+      four_k_preserve_original_video: true,
+      four_k_remove_non_english_audio: true,
+      four_k_remove_non_english_subtitles: true,
+    },
+    workers: [],
+    profiles: [
+      { name: "Movies", description: null, source_path: "/config/profiles/movies.yaml", path_prefixes: ["/media/Movies"] },
+      { name: "TV", description: null, source_path: "/config/profiles/tv.yaml", path_prefixes: ["/media/TV"] },
+    ],
+    sources: {
+      app: {
+        requested_path: "/config/app.yaml",
+        resolved_path: "/config/app.yaml",
+        used_example_fallback: false,
+        from_environment: false,
+      },
+    },
+  };
+}
+
+function processingRules() {
+  return {
+    movies: {
+      profile_name: "movies-default",
+      uses_defaults: true,
+      current: {
+        target_video_codec: "hevc",
+        output_container: "mkv",
+        keep_english_audio_only: true,
+        keep_forced_subtitles: true,
+        keep_one_full_english_subtitle: true,
+        preserve_surround: true,
+        preserve_atmos: true,
+        four_k_mode: "strip_only",
+      },
+      defaults: {
+        target_video_codec: "hevc",
+        output_container: "mkv",
+        keep_english_audio_only: true,
+        keep_forced_subtitles: true,
+        keep_one_full_english_subtitle: true,
+        preserve_surround: true,
+        preserve_atmos: true,
+        four_k_mode: "strip_only",
+      },
+    },
+    tv: {
+      profile_name: "tv-default",
+      uses_defaults: true,
+      current: {
+        target_video_codec: "hevc",
+        output_container: "mkv",
+        keep_english_audio_only: true,
+        keep_forced_subtitles: true,
+        keep_one_full_english_subtitle: true,
+        preserve_surround: true,
+        preserve_atmos: true,
+        four_k_mode: "strip_only",
+      },
+      defaults: {
+        target_video_codec: "hevc",
+        output_container: "mkv",
+        keep_english_audio_only: true,
+        keep_forced_subtitles: true,
+        keep_one_full_english_subtitle: true,
+        preserve_surround: true,
+        preserve_atmos: true,
+        four_k_mode: "strip_only",
+      },
+    },
+  };
+}
+
 function pathStatus({
   role,
   display_name,
@@ -674,5 +1356,119 @@ function jobDetail() {
     require_verification: true,
     keep_original_until_verified: true,
     delete_replaced_source: false,
+  };
+}
+
+function reviewItemDetail() {
+  return {
+    id: "item-1",
+    source_path: "/media/Movies/Example Film (2024).mkv",
+    review_status: "open",
+    requires_review: true,
+    confidence: "low",
+    tracked_file: {
+      id: "file-1",
+      source_path: "/media/Movies/Example Film (2024).mkv",
+      source_filename: "Example Film (2024).mkv",
+      source_extension: ".mkv",
+      source_directory: "/media/Movies",
+      last_observed_size: 100,
+      last_observed_modified_time: "2026-04-20T10:00:00Z",
+      fingerprint_placeholder: null,
+      is_4k: false,
+      lifecycle_state: "manual_review",
+      compliance_state: "manual_review",
+      is_protected: true,
+      operator_protected: false,
+      protected_source: "planner",
+      operator_protected_note: null,
+      requires_review: true,
+      review_status: "open",
+      last_processed_policy_version: 1,
+      last_processed_profile_name: "default",
+      created_at: "2026-04-20T10:00:00Z",
+      updated_at: "2026-04-20T10:00:00Z",
+    },
+    latest_plan: {
+      id: "plan-1",
+      tracked_file_id: "file-1",
+      probe_snapshot_id: "probe-1",
+      action: "manual_review",
+      confidence: "low",
+      policy_version: 1,
+      profile_name: "default",
+      is_already_compliant: false,
+      should_treat_as_protected: true,
+      created_at: "2026-04-20T10:01:00Z",
+      reason_codes: ["manual_review_missing_english_audio"],
+      warning_codes: ["video_transcode_required_for_policy_codec"],
+      selected_audio_stream_indices: [],
+      selected_subtitle_stream_indices: [],
+    },
+    latest_job: {
+      ...jobDetail(),
+      id: "job-1",
+      status: "failed",
+      verification_status: "failed",
+      replacement_status: "pending",
+      failure_message: "Verification failed",
+    },
+    protected_state: {
+      is_protected: true,
+      planner_protected: true,
+      operator_protected: false,
+      source: "planner",
+      reason_codes: ["manual_review_missing_english_audio"],
+      note: null,
+      updated_at: "2026-04-20T10:02:00Z",
+      updated_by_username: "admin",
+    },
+    reasons: [
+      { code: "manual_review_missing_english_audio", message: "Missing English audio", kind: "reason" },
+    ],
+    warnings: [
+      { code: "video_transcode_required_for_policy_codec", message: "Video transcode required", kind: "warning" },
+    ],
+    latest_probe_at: "2026-04-20T10:00:30Z",
+    latest_plan_at: "2026-04-20T10:01:00Z",
+    latest_job_at: "2026-04-20T10:02:30Z",
+    latest_decision: null,
+    latest_probe_snapshot_id: "probe-1",
+    latest_plan_snapshot_id: "plan-1",
+    latest_job_id: "job-1",
+  };
+}
+
+function workerInventory() {
+  return {
+    id: "worker-local-1",
+    worker_key: "local",
+    display_name: "Local worker",
+    worker_type: "local",
+    source: "local",
+    enabled: true,
+    registration_status: "registered",
+    health_status: "healthy",
+    health_summary: "Healthy",
+    last_seen_at: "2026-04-20T10:05:00Z",
+    last_heartbeat_at: "2026-04-20T10:05:00Z",
+    last_registration_at: "2026-04-20T10:00:00Z",
+    capability_summary: {
+      execution_modes: ["local"],
+      supported_video_codecs: ["hevc"],
+      supported_audio_codecs: ["aac"],
+      hardware_hints: [],
+      binary_support: { ffmpeg: true },
+      max_concurrent_jobs: 1,
+      tags: [],
+    },
+    host_summary: {
+      hostname: "encodr",
+      platform: "linux",
+      agent_version: CURRENT_VERSION,
+      python_version: "3.12",
+    },
+    pending_assignment_count: 0,
+    last_completed_job_id: null,
   };
 }

@@ -4,7 +4,11 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from app.core.dependencies import get_config_bundle, get_session_factory, require_admin_user
-from app.schemas.config import EffectiveConfigResponse, LibraryRootsResponse
+from app.schemas.config import (
+    EffectiveConfigResponse,
+    LibraryRootsResponse,
+    ProcessingRulesResponse,
+)
 from app.services.errors import ApiServiceError
 from app.services.library import LibraryService
 from app.services.setup import SetupStateService
@@ -41,6 +45,22 @@ def get_effective_config(
 class UpdateLibraryRootsRequest(BaseModel):
     movies_root: str | None = None
     tv_root: str | None = None
+
+
+class UpdateProcessingRulesetRequest(BaseModel):
+    target_video_codec: str
+    output_container: str
+    keep_english_audio_only: bool
+    keep_forced_subtitles: bool
+    keep_one_full_english_subtitle: bool
+    preserve_surround: bool
+    preserve_atmos: bool
+    four_k_mode: str
+
+
+class UpdateProcessingRulesRequest(BaseModel):
+    movies: UpdateProcessingRulesetRequest | None = None
+    tv: UpdateProcessingRulesetRequest | None = None
 
 
 @router.get("/setup/library-roots", response_model=LibraryRootsResponse)
@@ -80,5 +100,35 @@ def update_library_roots(
             movies_root=state["movies_root"],
             tv_root=state["tv_root"],
         )
+    except ApiServiceError as error:
+        _raise_service_error(error)
+
+
+@router.get("/setup/processing-rules", response_model=ProcessingRulesResponse)
+def get_processing_rules(
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
+    current_user: User = Depends(require_admin_user),
+) -> ProcessingRulesResponse:
+    del current_user
+    try:
+        payload = SetupStateService(config_bundle=config_bundle).get_processing_rules()
+        return ProcessingRulesResponse(**payload)
+    except ApiServiceError as error:
+        _raise_service_error(error)
+
+
+@router.put("/setup/processing-rules", response_model=ProcessingRulesResponse)
+def update_processing_rules(
+    payload: UpdateProcessingRulesRequest,
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
+    current_user: User = Depends(require_admin_user),
+) -> ProcessingRulesResponse:
+    del current_user
+    try:
+        state = SetupStateService(config_bundle=config_bundle).update_processing_rules(
+            movies=payload.movies.model_dump(mode="json") if payload.movies is not None else None,
+            tv=payload.tv.model_dump(mode="json") if payload.tv is not None else None,
+        )
+        return ProcessingRulesResponse(**state)
     except ApiServiceError as error:
         _raise_service_error(error)

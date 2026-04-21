@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased / Internal `0.2.0`
+## Unreleased / Internal `0.2.1`
 
 Initial internal release line covering:
 
@@ -23,6 +23,10 @@ Initial internal release line covering:
 - dry-run planning for single files, selected files, and whole folders
 - folder scan summaries and batch planning/job creation for library paths
 - cleaner setup, dashboard, and navigation copy for day-to-day operator use
+- phased UI redesign across Dashboard, Library, Jobs, Review, System, and Settings
+- real editable Movies and TV processing rules in Settings, backed by persisted runtime state
+- improved tracked-file selection for job creation and cleaner folder-first library workflow
+- clearer Reports access from the dashboard without restoring primary-nav clutter
 - configurable UI host allowlisting for operator FQDNs
 - `encodr addhost <fqdn>` host-side helper to update `.env` and recreate the stack
 - dedicated UI asset folders for future icons and images
@@ -31,5 +35,5 @@ Known important limitations:
 
 - remote worker execution is not implemented
 - advanced scheduling/orchestration is not implemented
-- config editing remains read-only
+- config editing remains intentionally narrow rather than a full generic editor
 - analytics are operational rather than BI-grade

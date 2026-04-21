@@ -111,7 +111,7 @@ export function LoginPage() {
         <p className="section-copy">
           {bootstrapRequired
             ? "No users exist yet. Create the first admin account to finish setup. You can mount your media library later if it is not ready yet."
-            : "Encodr controls file probing, planning, job execution, and safe replacement. Authentication is required for every operational action."}
+            : "Sign in to manage your library, jobs, review queue, and system status."}
         </p>
         <p className="login-version">Encodr v{displayedVersion}</p>
         <form className="form-grid" onSubmit={bootstrapRequired ? handleBootstrapSubmit : handleSubmit}>

@@ -593,6 +593,29 @@ export type LibraryRoots = {
   tv_root: string | null;
 };
 
+export type ProcessingRuleValues = {
+  target_video_codec: string;
+  output_container: string;
+  keep_english_audio_only: boolean;
+  keep_forced_subtitles: boolean;
+  keep_one_full_english_subtitle: boolean;
+  preserve_surround: boolean;
+  preserve_atmos: boolean;
+  four_k_mode: string;
+};
+
+export type ProcessingRuleset = {
+  profile_name: string | null;
+  current: ProcessingRuleValues;
+  defaults: ProcessingRuleValues;
+  uses_defaults: boolean;
+};
+
+export type ProcessingRules = {
+  movies: ProcessingRuleset;
+  tv: ProcessingRuleset;
+};
+
 export type LoginPayload = {
   username: string;
   password: string;

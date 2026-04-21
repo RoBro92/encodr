@@ -26,6 +26,8 @@ import type {
   LoginPayload,
   PlanFileResponse,
   PlanSnapshotDetail,
+  ProcessingRules,
+  ProcessingRuleValues,
   ProbeFileResponse,
   ProbeOrPlanPayload,
   ProbeSnapshotDetail,
@@ -321,6 +323,20 @@ export function updateLibraryRoots(
   payload: { movies_root?: string | null; tv_root?: string | null },
 ): Promise<LibraryRoots> {
   return client.request<LibraryRoots>("/config/setup/library-roots", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function getProcessingRules(client: ApiClient): Promise<ProcessingRules> {
+  return client.request<ProcessingRules>("/config/setup/processing-rules");
+}
+
+export function updateProcessingRules(
+  client: ApiClient,
+  payload: { movies?: ProcessingRuleValues | null; tv?: ProcessingRuleValues | null },
+): Promise<ProcessingRules> {
+  return client.request<ProcessingRules>("/config/setup/processing-rules", {
     method: "PUT",
     body: JSON.stringify(payload),
   });

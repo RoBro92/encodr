@@ -50,7 +50,9 @@ def select_audio_streams(
     warnings: list[PlanWarning] = []
     preferred_languages = set(audio_rules.keep_languages)
     preferred_streams = [
-        stream for stream in media_file.audio_streams if stream.language in preferred_languages
+        stream
+        for stream in media_file.audio_streams
+        if stream.language in preferred_languages or (stream.language is None and "und" in preferred_languages)
     ]
     commentary_removed = [
         stream.index

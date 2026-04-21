@@ -9,8 +9,6 @@ import { StatCard } from "../../components/StatCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
   useAnalyticsDashboardQuery,
-  usePlanFileMutation,
-  useProbeFileMutation,
   useRunWorkerOnceMutation,
   useRuntimeStatusQuery,
   useStorageStatusQuery,
@@ -53,6 +51,32 @@ export function DashboardPage() {
   const queuedJobCount = (jobStatusCounts.pending ?? 0) + (jobStatusCounts.running ?? 0);
   const completedJobCount = jobStatusCounts.completed ?? 0;
   const failedJobCount = jobStatusCounts.failed ?? 0;
+  const outcomeActions = analytics?.overview.plans_by_action.filter((item) => item.count > 0) ?? [];
+  const outcomeStatuses = analytics?.outcomes.jobs_by_status.filter((item) => item.count > 0) ?? [];
+  const hasOutcomePanel = outcomeActions.length > 0 || outcomeStatuses.length > 0;
+  const hasSpaceSaved =
+    (analytics?.storage.total_space_saved_bytes ?? 0) > 0 ||
+    (analytics?.storage.savings_by_action.some((item) => item.space_saved_bytes > 0) ?? false);
+  const mediaHighlights = analytics
+    ? [
+        {
+          label: "English audio present",
+          value: analytics.media.latest_probe_english_audio_count,
+        },
+        {
+          label: "Forced subtitle intent",
+          value: analytics.media.latest_plan_forced_subtitle_intent_count,
+        },
+        {
+          label: "Surround preserved",
+          value: analytics.media.latest_plan_surround_preservation_intent_count,
+        },
+        {
+          label: "Atmos preserved",
+          value: analytics.media.latest_plan_atmos_preservation_intent_count,
+        },
+      ].filter((item) => item.value > 0)
+    : [];
   const recentItems = analytics
     ? [...analytics.recent.recent_failed_jobs, ...analytics.recent.recent_completed_jobs]
         .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
@@ -64,17 +88,7 @@ export function DashboardPage() {
       <PageHeader
         eyebrow="Dashboard"
         title="Dashboard"
-        description="A quick view of files, jobs, review items, and storage."
-        actions={
-          <button
-            className="button button-primary"
-            type="button"
-            onClick={() => runOnceMutation.mutate()}
-            disabled={runOnceMutation.isPending}
-          >
-            {runOnceMutation.isPending ? "Running worker…" : "Run worker once"}
-          </button>
-        }
+        description="Library, jobs, review, and storage at a glance."
       />
 
       {runOnceMutation.error instanceof Error ? (
@@ -91,77 +105,84 @@ export function DashboardPage() {
       </section>
 
       <section className="dashboard-grid">
-        <SectionCard title="Start here" subtitle="Pick the next step.">
-          <div className="list-stack">
-            <Link className="list-row" to={APP_ROUTES.files}>
-              <div>
-                <strong>Open Library</strong>
-                <p>Browse folders, scan a location, and run a dry run.</p>
-              </div>
+        <SectionCard title="Start here" subtitle="Choose the next step.">
+          <div className="action-button-row">
+            <Link className="button button-secondary" to={APP_ROUTES.files}>
+              Open Library
             </Link>
-            <Link className="list-row" to={APP_ROUTES.review}>
-              <div>
-                <strong>Check Manual Review</strong>
-                <p>Approve or hold files that need attention.</p>
-              </div>
+            <Link className="button button-secondary" to={APP_ROUTES.review}>
+              Open Review
             </Link>
-            <Link className="list-row" to={APP_ROUTES.config}>
-              <div>
-                <strong>Check Setup</strong>
-                <p>Confirm your Movies and TV roots and storage status.</p>
-              </div>
+            <Link className="button button-secondary" to={APP_ROUTES.config}>
+              Open Settings
             </Link>
+            <Link className="button button-secondary" to={APP_ROUTES.reports}>
+              Open Reports
+            </Link>
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={() => runOnceMutation.mutate()}
+              disabled={runOnceMutation.isPending}
+            >
+              {runOnceMutation.isPending ? "Running worker…" : "Run worker once"}
+            </button>
           </div>
+          <p className="muted-copy">Process the next queued job.</p>
         </SectionCard>
 
-        <SectionCard title="Outcomes" subtitle="Current job and plan results.">
-          {analytics ? (
+        {hasOutcomePanel ? (
+          <SectionCard title="Outcomes" subtitle="Current results.">
             <div className="card-stack">
-              <div className="badge-list">
-                {analytics.overview.plans_by_action.map((item) => (
-                  <div key={item.value} className="metric-pill">
-                    <span>{titleCase(item.value)}</span>
-                    <strong>{item.count}</strong>
-                  </div>
-                ))}
-              </div>
-              <div className="badge-list">
-                {analytics.outcomes.jobs_by_status.map((item) => (
-                  <div key={item.value} className="metric-pill">
-                    <StatusBadge value={item.value} />
-                    <strong>{item.count}</strong>
-                  </div>
-                ))}
-              </div>
+              {outcomeActions.length > 0 ? (
+                <div className="badge-list">
+                  {outcomeActions.map((item) => (
+                    <div key={item.value} className="metric-pill">
+                      <span>{titleCase(item.value)}</span>
+                      <strong>{item.count}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
+              {outcomeStatuses.length > 0 ? (
+                <div className="badge-list">
+                  {outcomeStatuses.map((item) => (
+                    <div key={item.value} className="metric-pill">
+                      <StatusBadge value={item.value} />
+                      <strong>{item.count}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
               <Link className="text-link" to={APP_ROUTES.reports}>Open reports</Link>
             </div>
-          ) : (
-            <EmptyState title="No analytics yet" message="Run probe, planning, and jobs to build reporting history." />
-          )}
-        </SectionCard>
+          </SectionCard>
+        ) : null}
 
-        <SectionCard title="Space saved" subtitle="Measured completed jobs only.">
-          {analytics ? (
+        {hasSpaceSaved ? (
+          <SectionCard title="Space saved" subtitle="Measured completed jobs only.">
             <div className="card-stack">
-              <p className="metric-lead">{formatBytes(analytics.storage.total_space_saved_bytes)} saved</p>
+              <p className="metric-lead">{formatBytes(analytics!.storage.total_space_saved_bytes)} saved</p>
               <p className="muted-copy">
                 Average per completed measurable job:{" "}
-                <strong>{formatBytes(analytics.storage.average_space_saved_bytes)}</strong>
+                <strong>{formatBytes(analytics!.storage.average_space_saved_bytes)}</strong>
               </p>
               <div className="metric-grid">
-                {analytics.storage.savings_by_action.map((item) => (
-                  <div key={item.action} className="metric-panel">
-                    <span className="metric-label">{titleCase(item.action)}</span>
-                    <strong>{formatBytes(item.space_saved_bytes)}</strong>
-                    <span className="metric-subtle">{item.job_count} measurable jobs</span>
-                  </div>
-                ))}
+                {analytics!.storage.savings_by_action
+                  .filter((item) => item.space_saved_bytes > 0)
+                  .map((item) => (
+                    <div key={item.action} className="metric-pill">
+                      <span>{titleCase(item.action)}</span>
+                      <strong>{formatBytes(item.space_saved_bytes)}</strong>
+                      <span className="metric-subtle">{item.job_count} measurable jobs</span>
+                    </div>
+                  ))}
               </div>
             </div>
-          ) : null}
-        </SectionCard>
+          </SectionCard>
+        ) : null}
 
-        <SectionCard title="Worker" subtitle="Current worker state.">
+        <SectionCard title="Worker" subtitle="Current status.">
           {worker ? (
             <div className="card-stack">
               <div className="info-strip">
@@ -176,7 +197,7 @@ export function DashboardPage() {
                 Last completed run: <strong>{formatDateTime(worker.last_run_completed_at)}</strong>
               </p>
               <Link className="text-link" to={APP_ROUTES.system}>
-                Open system status
+                Open system
               </Link>
             </div>
           ) : (
@@ -184,7 +205,7 @@ export function DashboardPage() {
           )}
         </SectionCard>
 
-        <SectionCard title="System" subtitle="Runtime and storage status.">
+        <SectionCard title="System" subtitle="Runtime and storage.">
           {runtime && storage ? (
             <div className="card-stack">
               <div className="info-strip">
@@ -195,7 +216,7 @@ export function DashboardPage() {
                 <div className="info-strip" role="note">
                   <strong>Storage still needs setup.</strong>
                   <span>
-                    Encodr expects your media library at <code>{storage.standard_media_root}</code>. You can keep setting up the app, then mount storage when ready.
+                    Encodr expects media at <code>{storage.standard_media_root}</code>. Finish setup when your mounts are ready.
                   </span>
                 </div>
               ) : null}
@@ -226,32 +247,22 @@ export function DashboardPage() {
               ))}
             </div>
           ) : (
-            <EmptyState title="No reporting history yet" message="Completed and failed jobs will appear here once the worker has processed them." />
+            <EmptyState title="No activity yet" message="Completed and failed jobs will appear here." />
           )}
         </SectionCard>
 
-        <SectionCard title="Media summary" subtitle="A quick view from recent probe and plan data.">
-          {analytics ? (
+        {mediaHighlights.length > 0 ? (
+          <SectionCard title="Media summary" subtitle="Recent media signals.">
             <div className="metric-grid">
-              <div className="metric-panel">
-                <span className="metric-label">English audio present</span>
-                <strong>{analytics.media.latest_probe_english_audio_count}</strong>
-              </div>
-              <div className="metric-panel">
-                <span className="metric-label">Forced subtitle intent</span>
-                <strong>{analytics.media.latest_plan_forced_subtitle_intent_count}</strong>
-              </div>
-              <div className="metric-panel">
-                <span className="metric-label">Surround preserved</span>
-                <strong>{analytics.media.latest_plan_surround_preservation_intent_count}</strong>
-              </div>
-              <div className="metric-panel">
-                <span className="metric-label">Atmos preserved</span>
-                <strong>{analytics.media.latest_plan_atmos_preservation_intent_count}</strong>
-              </div>
+              {mediaHighlights.map((item) => (
+                <div key={item.label} className="metric-panel">
+                  <span className="metric-label">{item.label}</span>
+                  <strong>{item.value}</strong>
+                </div>
+              ))}
             </div>
-          ) : null}
-        </SectionCard>
+          </SectionCard>
+        ) : null}
       </section>
     </div>
   );

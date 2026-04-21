@@ -51,12 +51,12 @@ export function ReportsPage() {
     <div className="page-stack">
       <PageHeader
         eyebrow="Reports"
-        title="Operational reporting"
-        description="Read-only analytics derived from persisted file, plan, verification, replacement, and job history."
+        title="Reports"
+        description="Read-only analytics from file, plan, and job history."
       />
 
       <section className="dashboard-grid">
-        <SectionCard title="Overview" subtitle="High-value counts for files, jobs, and policy outcomes.">
+        <SectionCard title="Overview" subtitle="Key counts for files, jobs, and outcomes.">
           {overview ? (
             <div className="metric-grid">
               <MetricPanel label="Tracked files" value={String(overview.total_tracked_files)} />
@@ -73,7 +73,7 @@ export function ReportsPage() {
           )}
         </SectionCard>
 
-        <SectionCard title="Storage" subtitle="Measured size change based on persisted input and output sizes.">
+        <SectionCard title="Storage" subtitle="Measured size change from recorded input and output sizes.">
           {storage ? (
             <div className="metric-grid">
               <MetricPanel label="Original size observed" value={formatBytes(storage.total_original_size_bytes)} />
@@ -112,7 +112,7 @@ export function ReportsPage() {
           ) : null}
         </SectionCard>
 
-        <SectionCard title="Media and policy intent" subtitle="Supported media insight from latest probe and plan snapshots.">
+        <SectionCard title="Media summary" subtitle="Recent probe and plan trends.">
           {media ? (
             <div className="card-stack">
               <div className="metric-grid">
