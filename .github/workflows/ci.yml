@@ -1,0 +1,101 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  backend-tests:
+    name: backend-tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/pyproject.toml
+            packages/core/pyproject.toml
+            packages/db/pyproject.toml
+            packages/shared/pyproject.toml
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest \
+            "psycopg[binary]>=3.1,<4.0" \
+            -e ./packages/core[dev] \
+            -e ./packages/shared \
+            -e ./packages/db[dev] \
+            -e ./apps/api
+
+      - name: Run backend test suite
+        run: pytest -q
+
+  ui-checks:
+    name: ui-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    defaults:
+      run:
+        working-directory: apps/ui
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+
+      - name: Install UI dependencies
+        run: npm ci
+
+      - name: Run UI tests
+        run: npm test -- --run
+
+      - name: Build UI
+        run: npm run build
+
+  sanity-checks:
+    name: sanity-checks
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run compile checks
+        run: python -m compileall apps packages tests encodr_cli.py
+
+      - name: Run installer and launcher shell checks
+        run: |
+          bash -n install.sh
+          bash -n encodr
+          bash -n infra/scripts/bootstrap.sh
