@@ -1,8 +1,8 @@
 # Known Limitations
 
-- remote workers can register and heartbeat, but cannot execute jobs yet
 - advanced scheduling, balancing, and orchestration are not implemented
 - local worker execution is single-node and intentionally simple
+- Windows is the first documented remote worker target; broader Linux/macOS worker packaging is still follow-on work
 - config is generated automatically for first run, but full in-app config editing is not implemented
 - analytics are operational and concise, not BI-grade
 - rich rename execution is still limited even though policy templates exist

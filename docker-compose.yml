@@ -59,11 +59,15 @@ services:
     environment:
       ENCODR_WORKER_AGENT_API_BASE_URL: http://api:8000/api
       ENCODR_WORKER_AGENT_REGISTRATION_SECRET: ${ENCODR_WORKER_REGISTRATION_SECRET}
+      ENCODR_WORKER_AGENT_SCRATCH_DIR: /temp
+      ENCODR_WORKER_AGENT_MEDIA_MOUNTS: /media
       ENCODR_APP_CONFIG_FILE: /config/app.yaml
       ENCODR_POLICY_CONFIG_FILE: /config/policy.yaml
       ENCODR_WORKERS_CONFIG_FILE: /config/workers.yaml
     volumes:
       - ./config:/config:ro
+      - ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp
+      - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
     depends_on:
       api:
         condition: service_healthy

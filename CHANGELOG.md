@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased / Internal `0.2.1`
+## Unreleased / Internal `0.3.0`
 
 Initial internal release line covering:
 
@@ -30,10 +30,16 @@ Initial internal release line covering:
 - configurable UI host allowlisting for operator FQDNs
 - `encodr addhost <fqdn>` host-side helper to update `.env` and recreate the stack
 - dedicated UI asset folders for future icons and images
+- truthful local worker capability reporting for ffmpeg, ffprobe, scratch/media readiness, and hardware acceleration probes
+- remote worker assignment, polling, claiming, execution, and result submission
+- Windows-first remote worker bootstrap documentation and install script
+- local-only ffmpeg-generated E2E media harness for real stack validation
+- verified local and remote worker E2E execution flow against controlled media samples
 
 Known important limitations:
 
-- remote worker execution is not implemented
 - advanced scheduling/orchestration is not implemented
+- remote worker progress reporting remains intentionally simple
+- Windows is the first documented remote worker target; broader Linux/macOS packaging is still follow-on work
 - config editing remains intentionally narrow rather than a full generic editor
 - analytics are operational rather than BI-grade

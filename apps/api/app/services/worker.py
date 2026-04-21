@@ -3,7 +3,6 @@ from __future__ import annotations
 import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import shutil
 from typing import Any
 
 from fastapi import Request
@@ -14,6 +13,8 @@ from app.schemas.worker import HealthStatus
 from app.services.audit import AuditService
 from app.services.errors import ApiAuthenticationError, ApiConflictError, ApiNotFoundError
 from encodr_core.config import ConfigBundle
+from encodr_core.execution import ExecutionResult
+from encodr_core.planning import ProcessingPlan
 from encodr_db.models import (
     AuditEventType,
     AuditOutcome,
@@ -24,8 +25,9 @@ from encodr_db.models import (
     WorkerRegistrationStatus,
     WorkerType,
 )
-from encodr_db.repositories import JobRepository, WorkerRepository
+from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary
+from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_intel_qsv
 
 
 class WorkerService:
@@ -50,31 +52,73 @@ class WorkerService:
         return self.local_worker_loop.run_once_with_summary()
 
     def binary_status(self, configured_path: Path | str) -> dict[str, object]:
-        resolved = Path(configured_path)
-        if resolved.is_absolute():
-            exists = resolved.exists()
-            executable = exists and os.access(resolved, os.X_OK)
-            discoverable = executable
-        else:
-            resolved_command = shutil.which(str(configured_path))
-            exists = resolved_command is not None
-            executable = exists
-            discoverable = exists
+        probe = probe_binary(configured_path)
+        return {
+            "configured_path": probe.configured_path,
+            "resolved_path": probe.resolved_path,
+            "exists": probe.exists,
+            "executable": probe.executable,
+            "discoverable": probe.discoverable,
+            "status": HealthStatus(probe.status),
+            "message": probe.message,
+        }
 
-        if discoverable:
-            status = HealthStatus.HEALTHY
-            message = "Binary is discoverable and executable."
+    def _local_runtime_probes(self) -> dict[str, object]:
+        ffmpeg = self.binary_status(self.config_bundle.app.media.ffmpeg_path)
+        ffprobe = self.binary_status(self.config_bundle.app.media.ffprobe_path)
+        scratch_path = probe_directory(
+            self.config_bundle.workers.local.scratch_dir,
+            writable_required=True,
+        )
+        media_paths = [
+            probe_directory(path, writable_required=True)
+            for path in self.config_bundle.workers.local.media_mounts
+        ]
+        qsv_probe = probe_intel_qsv(self.config_bundle.app.media.ffmpeg_path)
+        execution_backends: list[str] = []
+        if ffmpeg["status"] == HealthStatus.HEALTHY:
+            execution_backends.extend(["remux", "transcode"])
+        hardware_acceleration = [
+            qsv_probe.backend
+            for qsv_probe in [qsv_probe]
+            if qsv_probe.usable
+        ]
+        scratch_ready = scratch_path["status"] == "healthy"
+        media_ready = all(item["status"] == "healthy" for item in media_paths) if media_paths else False
+        binaries_healthy = (
+            ffmpeg["status"] == HealthStatus.HEALTHY and ffprobe["status"] == HealthStatus.HEALTHY
+        )
+        eligible = bool(self.config_bundle.workers.local.enabled and binaries_healthy and scratch_ready and media_ready)
+        if not self.config_bundle.workers.local.enabled:
+            eligibility_summary = "The local worker is disabled in configuration."
+        elif not binaries_healthy:
+            eligibility_summary = "Required media binaries are not available."
+        elif not scratch_ready:
+            eligibility_summary = "The scratch path is not ready for execution."
+        elif not media_ready:
+            eligibility_summary = "One or more media mount paths are unavailable."
         else:
-            status = HealthStatus.FAILED
-            message = "Binary is not discoverable or executable."
+            eligibility_summary = "The local worker can accept execution work."
 
         return {
-            "configured_path": str(configured_path),
-            "exists": exists,
-            "executable": executable,
-            "discoverable": discoverable,
-            "status": status,
-            "message": message,
+            "ffmpeg": ffmpeg,
+            "ffprobe": ffprobe,
+            "scratch_path": scratch_path,
+            "media_paths": media_paths,
+            "execution_backends": execution_backends,
+            "hardware_acceleration": hardware_acceleration,
+            "hardware_probes": [
+                {
+                    "backend": qsv_probe.backend,
+                    "detected": qsv_probe.detected,
+                    "usable": qsv_probe.usable,
+                    "status": qsv_probe.status,
+                    "message": qsv_probe.message,
+                    "details": qsv_probe.details,
+                }
+            ],
+            "eligible": eligible,
+            "eligibility_summary": eligibility_summary,
         }
 
     def queue_health_summary(self) -> dict[str, object]:
@@ -142,28 +186,40 @@ class WorkerService:
         }
 
     def status_summary(self) -> dict[str, object]:
-        ffmpeg = self.binary_status(self.config_bundle.app.media.ffmpeg_path)
-        ffprobe = self.binary_status(self.config_bundle.app.media.ffprobe_path)
+        runtime_probes = self._local_runtime_probes()
+        ffmpeg = runtime_probes["ffmpeg"]
+        ffprobe = runtime_probes["ffprobe"]
         queue_health = self.queue_health_summary()
         snapshot = self.local_worker_loop.status_tracker.snapshot()
         enabled = self.config_bundle.workers.local.enabled
-        binaries_healthy = (
-            ffmpeg["status"] == HealthStatus.HEALTHY and ffprobe["status"] == HealthStatus.HEALTHY
-        )
-        available = enabled and binaries_healthy
+        available = bool(runtime_probes["eligible"])
 
         if not enabled:
             status = HealthStatus.DEGRADED
             summary = "The local worker is disabled in configuration."
-        elif not binaries_healthy:
+        elif (not runtime_probes["eligible"]) and (
+            ffmpeg["status"] != HealthStatus.HEALTHY or ffprobe["status"] != HealthStatus.HEALTHY
+        ):
             status = HealthStatus.FAILED
             summary = "One or more media binaries are unavailable."
+        elif not runtime_probes["eligible"]:
+            status = HealthStatus.DEGRADED
+            summary = str(runtime_probes["eligibility_summary"])
         elif queue_health["status"] == HealthStatus.DEGRADED:
             status = HealthStatus.DEGRADED
             summary = "The local worker is available but queue health needs attention."
         else:
             status = HealthStatus.HEALTHY
             summary = "The local worker is healthy and available."
+
+        live_capabilities = {
+            "ffmpeg": bool(ffmpeg["discoverable"]),
+            "ffprobe": bool(ffprobe["discoverable"]),
+            "intel_qsv": "intel_qsv" in runtime_probes["hardware_acceleration"],
+            "nvenc": False,
+            "vaapi": "vaapi" in runtime_probes["hardware_acceleration"],
+            "amd_amf": False,
+        }
 
         return {
             "status": status,
@@ -173,17 +229,24 @@ class WorkerService:
             "local_only": True,
             "enabled": enabled,
             "available": available,
+            "eligible": runtime_probes["eligible"],
+            "eligibility_summary": runtime_probes["eligibility_summary"],
             "default_queue": self.config_bundle.workers.default_queue,
             "ffmpeg": ffmpeg,
             "ffprobe": ffprobe,
             "local_worker_queue": self.config_bundle.workers.local.queue,
+            "execution_backends": runtime_probes["execution_backends"],
+            "hardware_acceleration": runtime_probes["hardware_acceleration"],
+            "hardware_probes": runtime_probes["hardware_probes"],
+            "scratch_path": runtime_probes["scratch_path"],
+            "media_paths": runtime_probes["media_paths"],
             "last_run_started_at": snapshot.last_run_started_at,
             "last_run_completed_at": snapshot.last_run_completed_at,
             "last_processed_job_id": snapshot.last_processed_job_id,
             "last_result_status": snapshot.last_result_status,
             "last_failure_message": snapshot.last_failure_message,
             "processed_jobs": snapshot.processed_jobs,
-            "capabilities": self.config_bundle.workers.local.capabilities.model_dump(mode="json"),
+            "capabilities": live_capabilities,
             "queue_health": queue_health,
             "self_test_available": True,
         }
@@ -377,6 +440,91 @@ class WorkerService:
             "heartbeat_at": heartbeat_at,
         }
 
+    def request_job(
+        self,
+        session: Session,
+        *,
+        worker: Worker,
+    ) -> dict[str, object]:
+        self._ensure_remote_worker_can_execute(worker)
+        repository = JobRepository(session)
+        job = repository.fetch_next_pending_remote_job(worker)
+        if job is None:
+            return {"status": "no_job", "job": None}
+
+        if job.assigned_worker_id is None:
+            repository.assign_worker(job, worker=worker)
+
+        return {
+            "status": "assigned",
+            "job": self._build_remote_job_payload(job),
+        }
+
+    def claim_job(
+        self,
+        session: Session,
+        *,
+        worker: Worker,
+        job_id: str,
+    ) -> dict[str, object]:
+        self._ensure_remote_worker_can_execute(worker)
+        repository = JobRepository(session)
+        job = repository.get_by_id(job_id)
+        if job is None:
+            raise ApiNotFoundError("Job could not be found.")
+        if job.status != JobStatus.PENDING:
+            raise ApiConflictError("Only pending jobs can be claimed.")
+        if job.assigned_worker_id not in {None, worker.id}:
+            raise ApiConflictError("Job is assigned to another worker.")
+
+        if job.assigned_worker_id is None:
+            repository.assign_worker(job, worker=worker)
+        repository.mark_running_for_worker(job, worker=worker)
+        claimed_at = job.started_at or datetime.now(timezone.utc)
+        return {
+            "status": "claimed",
+            "job_id": job.id,
+            "claimed_at": claimed_at,
+        }
+
+    def submit_job_result(
+        self,
+        session: Session,
+        *,
+        worker: Worker,
+        job_id: str,
+        result_payload: dict[str, object],
+        runtime_summary: dict | None,
+    ) -> dict[str, object]:
+        repository = JobRepository(session)
+        tracked_files = TrackedFileRepository(session)
+        job = repository.get_by_id(job_id)
+        if job is None:
+            raise ApiNotFoundError("Job could not be found.")
+        if job.assigned_worker_id != worker.id:
+            raise ApiConflictError("Job is not assigned to this worker.")
+        if job.status != JobStatus.RUNNING:
+            raise ApiConflictError("Only running jobs can be completed.")
+
+        result = ExecutionResult.model_validate(result_payload)
+        repository.mark_result(job, result)
+        job.last_worker_id = worker.id
+        job.worker_name = worker.display_name
+        tracked_files.update_file_state_from_execution_result(
+            job.tracked_file,
+            ProcessingPlan.model_validate(job.plan_snapshot.payload),
+            result,
+        )
+
+        if runtime_summary is not None:
+            worker.runtime_payload = runtime_summary
+
+        return {
+            "job_id": job.id,
+            "final_status": job.status.value,
+            "completed_at": job.completed_at,
+        }
+
     def list_worker_inventory(
         self,
         session: Session,
@@ -522,27 +670,48 @@ class WorkerService:
             )
         return item
 
+    def _ensure_remote_worker_can_execute(self, worker: Worker) -> None:
+        if worker.worker_type != WorkerType.REMOTE:
+            raise ApiConflictError("Only remote workers can poll for remote work.")
+        if not worker.enabled or worker.registration_status != WorkerRegistrationStatus.REGISTERED:
+            raise ApiConflictError("The worker is not currently enabled for execution.")
+        if worker.last_health_status == WorkerHealthStatus.FAILED:
+            raise ApiConflictError("The worker last reported a failed health state.")
+
+        capability_summary = self._clean_capability_summary(worker.capability_payload)
+        binary_support = capability_summary.get("binary_support", {})
+        if not binary_support.get("ffmpeg") or not binary_support.get("ffprobe"):
+            raise ApiConflictError("The worker has not reported usable FFmpeg and FFprobe support.")
+        if not capability_summary.get("execution_modes"):
+            raise ApiConflictError("The worker has not reported any execution modes.")
+
+    def _build_remote_job_payload(self, job: Any) -> dict[str, object]:
+        media_payload = job.plan_snapshot.probe_snapshot.payload if job.plan_snapshot and job.plan_snapshot.probe_snapshot else {}
+        return {
+            "job_id": job.id,
+            "tracked_file_id": job.tracked_file_id,
+            "plan_snapshot_id": job.plan_snapshot_id,
+            "source_path": job.tracked_file.source_path if job.tracked_file is not None else media_payload.get("file_path", ""),
+            "plan_payload": job.plan_snapshot.payload,
+            "media_payload": media_payload,
+            "requested_worker_type": job.requested_worker_type.value if job.requested_worker_type is not None else None,
+            "assignment_state": "claimed" if job.status == JobStatus.RUNNING else "assigned",
+            "assigned_worker_id": job.assigned_worker_id,
+        }
+
     def _local_capability_summary(self) -> dict[str, object]:
-        capabilities = self.config_bundle.workers.local.capabilities
-        hardware_hints = []
-        if capabilities.intel_qsv:
-            hardware_hints.append("intel_qsv")
-        if capabilities.vaapi:
-            hardware_hints.append("vaapi")
-        if capabilities.nvenc:
-            hardware_hints.append("nvenc")
-        if capabilities.amd_amf:
-            hardware_hints.append("amd_amf")
+        runtime_probes = self._local_runtime_probes()
+        hardware_hints = list(runtime_probes["hardware_acceleration"])
         if not hardware_hints:
             hardware_hints.append("cpu_only")
         return {
-            "execution_modes": ["remux", "transcode"] if capabilities.ffmpeg else [],
-            "supported_video_codecs": ["hevc"],
+            "execution_modes": runtime_probes["execution_backends"],
+            "supported_video_codecs": [],
             "supported_audio_codecs": [],
             "hardware_hints": hardware_hints,
             "binary_support": {
-                "ffmpeg": capabilities.ffmpeg,
-                "ffprobe": capabilities.ffprobe,
+                "ffmpeg": runtime_probes["ffmpeg"]["discoverable"],
+                "ffprobe": runtime_probes["ffprobe"]["discoverable"],
             },
             "max_concurrent_jobs": self.config_bundle.workers.local.max_concurrent_jobs,
             "tags": ["local"],

@@ -8,10 +8,12 @@ from app.capabilities import (
     build_binary_summary,
     build_capability_summary,
     build_host_summary,
+    build_worker_health,
     build_runtime_summary,
 )
 from app.client import WorkerApiClient
 from app.config import WorkerAgentSettings
+from app.execution import RemoteExecutionService
 
 
 @dataclass(frozen=True, slots=True)
@@ -27,9 +29,11 @@ class WorkerAgentService:
         *,
         settings: WorkerAgentSettings,
         api_client: WorkerApiClient,
+        execution_service: RemoteExecutionService | None = None,
     ) -> None:
         self.settings = settings
         self.api_client = api_client
+        self.execution_service = execution_service or RemoteExecutionService(settings=settings)
 
     def load_worker_token(self) -> str | None:
         if self.settings.worker_token:
@@ -46,6 +50,7 @@ class WorkerAgentService:
         self.settings.worker_token_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
     def build_registration_payload(self) -> dict:
+        health_status, health_summary = build_worker_health(self.settings)
         return {
             "registration_secret": self.settings.registration_secret,
             "worker_key": self.settings.worker_key,
@@ -54,19 +59,20 @@ class WorkerAgentService:
             "capability_summary": build_capability_summary(self.settings),
             "host_summary": build_host_summary(),
             "runtime_summary": build_runtime_summary(self.settings),
-            "binary_summary": build_binary_summary(),
-            "health_status": "healthy",
-            "health_summary": "Remote worker registered and ready for future dispatch capabilities.",
+            "binary_summary": build_binary_summary(self.settings),
+            "health_status": health_status,
+            "health_summary": health_summary,
         }
 
     def build_heartbeat_payload(self) -> dict:
+        health_status, health_summary = build_worker_health(self.settings)
         return {
             "capability_summary": build_capability_summary(self.settings),
             "host_summary": build_host_summary(),
             "runtime_summary": build_runtime_summary(self.settings),
-            "binary_summary": build_binary_summary(),
-            "health_status": "healthy",
-            "health_summary": "Remote worker heartbeat succeeded.",
+            "binary_summary": build_binary_summary(self.settings),
+            "health_status": health_status,
+            "health_summary": health_summary,
         }
 
     def register(self) -> WorkerSession:
@@ -93,3 +99,30 @@ class WorkerAgentService:
             worker_token=session.worker_token,
             payload=self.build_heartbeat_payload(),
         )
+
+    def process_once(self) -> dict | None:
+        session = self.ensure_registered()
+        self.api_client.heartbeat(
+            worker_token=session.worker_token,
+            payload=self.build_heartbeat_payload(),
+        )
+        assignment = self.api_client.request_job(worker_token=session.worker_token)
+        if assignment.get("status") != "assigned" or assignment.get("job") is None:
+            return None
+
+        job = assignment["job"]
+        self.api_client.claim_job(worker_token=session.worker_token, job_id=str(job["job_id"]))
+        result = self.execution_service.execute(
+            job_id=str(job["job_id"]),
+            plan_payload=dict(job["plan_payload"]),
+            media_payload=dict(job["media_payload"]),
+        )
+        response = self.api_client.submit_job_result(
+            worker_token=session.worker_token,
+            job_id=str(job["job_id"]),
+            payload={
+                "result_payload": result.model_dump(mode="json"),
+                "runtime_summary": build_runtime_summary(self.settings) | {"last_completed_job_id": str(job["job_id"])},
+            },
+        )
+        return response

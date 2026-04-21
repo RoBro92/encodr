@@ -1,17 +1,33 @@
 from __future__ import annotations
 
 from pathlib import Path
+from datetime import datetime, timezone
 
 import pytest
 
+from encodr_core.execution import ExecutionResult
 from encodr_core.config import load_config_bundle
-from encodr_db.models import AuditEventType, AuditOutcome
+from encodr_db.models import AuditEventType, AuditOutcome, Job, JobStatus
 from encodr_db.repositories import AuditEventRepository, WorkerRepository
 from encodr_shared.versioning import read_version
 from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
 from tests.helpers.filesystem import create_filesystem_layout
+from tests.helpers.jobs import create_job, media_at_path, parse_fixture
+
+import sys
+import importlib
+
+WORKER_AGENT_ROOT = Path(__file__).resolve().parents[2] / "apps" / "worker-agent"
+sys.modules.pop("app", None)
+sys.path.insert(0, str(WORKER_AGENT_ROOT))
+WorkerApiClient = importlib.import_module("app.client").WorkerApiClient  # type: ignore[attr-defined]
+load_settings = importlib.import_module("app.config").load_settings  # type: ignore[attr-defined]
+WorkerAgentService = importlib.import_module("app.service").WorkerAgentService  # type: ignore[attr-defined]
+sys.path.remove(str(WORKER_AGENT_ROOT))
+for module_name in [name for name in list(sys.modules) if name == "app" or name.startswith("app.")]:
+    sys.modules.pop(module_name, None)
 
 pytestmark = [pytest.mark.integration, pytest.mark.security]
 CURRENT_VERSION = read_version(Path(__file__))
@@ -177,6 +193,178 @@ def test_remote_worker_enable_disable_flow_is_audited(
     with session_factory() as session:
         events = AuditEventRepository(session).list_events(limit=20)
         assert any(event.event_type == AuditEventType.WORKER_STATE_CHANGE for event in events)
+
+
+def test_remote_worker_can_request_claim_and_submit_job_result(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Example.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        create_job(
+            session,
+            context.bundle,
+            media,
+            source_path=source_path.as_posix(),
+        )
+        session.commit()
+
+    registration = context.client.post("/api/worker/register", json=registration_payload("valid-secret"))
+    worker_token = registration.json()["worker_token"]
+
+    request_response = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert request_response.status_code == 200
+    request_payload = request_response.json()
+    assert request_payload["status"] == "assigned"
+    job_id = request_payload["job"]["job_id"]
+
+    claim_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert claim_response.status_code == 200
+    assert claim_response.json()["status"] == "claimed"
+
+    result = ExecutionResult(
+        mode="remux",
+        status="completed",
+        command=["ffmpeg", "-i", source_path.as_posix(), source_path.as_posix()],
+        output_path=source_path,
+        final_output_path=source_path,
+        original_backup_path=source_path.with_suffix(".encodr-backup.mkv"),
+        output_size_bytes=123,
+        exit_code=0,
+        stdout="ok",
+        stderr="",
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+    )
+    result_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/result",
+        json={
+            "result_payload": result.model_dump(mode="json"),
+            "runtime_summary": {
+                "queue": "remote-amd",
+                "scratch_dir": "/srv/scratch",
+                "media_mounts": ["/srv/media"],
+                "last_completed_job_id": job_id,
+            },
+        },
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert result_response.status_code == 200
+    assert result_response.json()["final_status"] == "completed"
+
+    with session_factory() as session:
+        worker = WorkerRepository(session).get_by_key("remote-amd-01")
+        assert worker is not None
+        assert worker.runtime_payload["last_completed_job_id"] == job_id
+
+        from encodr_db.models import Job
+
+        saved_job = session.get(Job, job_id)
+        assert saved_job is not None
+        assert saved_job.status == JobStatus.COMPLETED
+        assert saved_job.last_worker_id == worker.id
+
+
+def test_worker_agent_service_can_execute_remote_job_against_api_context(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class TestClientRequester:
+        def __init__(self, client) -> None:
+            self.client = client
+
+        def request_json(self, *, method: str, url: str, body: dict | None = None, bearer_token: str | None = None) -> dict:
+            path = "/" + url.split("/api/", 1)[1]
+            headers = {}
+            if bearer_token is not None:
+                headers["Authorization"] = f"Bearer {bearer_token}"
+            response = self.client.request(method, f"/api{path}", json=body, headers=headers)
+            assert response.status_code < 400, response.text
+            return response.json()
+
+    class FakeExecutionService:
+        def execute(self, *, job_id: str, plan_payload: dict, media_payload: dict) -> ExecutionResult:
+            del plan_payload, media_payload
+            return ExecutionResult(
+                mode="remux",
+                status="completed",
+                command=["ffmpeg", "-i", "input.mkv", "output.mkv"],
+                output_path=Path("/media/output.mkv"),
+                final_output_path=Path("/media/output.mkv"),
+                original_backup_path=Path("/media/output.encodr-backup.mkv"),
+                output_size_bytes=123,
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Agent Example.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        create_job(
+            session,
+            context.bundle,
+            media,
+            source_path=source_path.as_posix(),
+        )
+        session.commit()
+
+    (tmp_path / "bin").mkdir(parents=True, exist_ok=True)
+    for name in ("ffmpeg", "ffprobe"):
+        binary = tmp_path / "bin" / name
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o755)
+
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_KEY": "remote-agent-01",
+            "ENCODR_WORKER_AGENT_DISPLAY_NAME": "Remote Agent Worker",
+            "ENCODR_WORKER_AGENT_REGISTRATION_SECRET": "valid-secret",
+            "ENCODR_WORKER_AGENT_QUEUE": "remote-default",
+            "ENCODR_WORKER_AGENT_SCRATCH_DIR": str(tmp_path / "scratch"),
+            "ENCODR_WORKER_AGENT_MEDIA_MOUNTS": context.bundle.workers.local.media_mounts[0].as_posix(),
+            "ENCODR_WORKER_AGENT_TOKEN_FILE": str(tmp_path / "worker.token"),
+            "ENCODR_WORKER_AGENT_FFMPEG_PATH": str(tmp_path / "bin" / "ffmpeg"),
+            "ENCODR_WORKER_AGENT_FFPROBE_PATH": str(tmp_path / "bin" / "ffprobe"),
+        }
+    )
+    requester = TestClientRequester(context.client)
+    client = WorkerApiClient(base_url="http://encodr.test/api", requester=requester)
+    service = WorkerAgentService(settings=settings, api_client=client, execution_service=FakeExecutionService())
+
+    response = service.process_once()
+
+    assert response is not None
+    assert response["final_status"] == "completed"
+
+    with session_factory() as session:
+        worker = WorkerRepository(session).get_by_key("remote-agent-01")
+        assert worker is not None
+        saved_job = session.query(Job).one()
+        assert saved_job.status == JobStatus.COMPLETED
+        assert saved_job.last_worker_id == worker.id
 
 
 def registration_payload(secret: str) -> dict:
