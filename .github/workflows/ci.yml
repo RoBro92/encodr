@@ -43,7 +43,7 @@ jobs:
             -e ./packages/core[dev] \
             -e ./packages/shared \
             -e ./packages/db[dev] \
-            -e ./apps/api
+            -e ./apps/api[dev]
 
       - name: Run backend test suite
         run: pytest -q
