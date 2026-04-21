@@ -162,6 +162,8 @@ def build_video_plan(
                 preserve_original=True,
                 target_codec=None,
                 transcode_required=False,
+                quality_mode=None,
+                max_allowed_video_reduction_percent=None,
             ),
             reasons,
             True,
@@ -178,18 +180,37 @@ def build_4k_video_plan(
     resolved_policy: ResolvedPlanningPolicy,
 ) -> tuple[VideoPlan, list[PlanReason], bool]:
     rules = resolved_policy.video_rules.four_k
-    reasons = [
-        make_reason(
-            "video_preserved_for_4k_policy",
-            "4K video is preserved under the effective 4K policy.",
-            stream_index=video_stream.index,
+    target_codec = rules.preferred_codec.value
+    transcode_required = False
+    reasons: list[PlanReason] = []
+
+    if rules.mode == FourKMode.STRIP_ONLY and not rules.allow_transcode:
+        reasons.append(
+            make_reason(
+                "video_preserved_for_4k_policy",
+                "4K video is preserved under the effective 4K policy.",
+                stream_index=video_stream.index,
+            )
         )
-    ]
-    if rules.mode != FourKMode.STRIP_ONLY:
+        return (
+            VideoPlan(
+                primary_stream_index=video_stream.index,
+                handling=VideoHandling.PRESERVE,
+                preserve_original=True,
+                target_codec=video_stream.codec_name,
+                transcode_required=False,
+                quality_mode=rules.quality_mode.value,
+                max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+            ),
+            reasons,
+            False,
+        )
+
+    if not rules.allow_transcode:
         reasons.append(
             make_reason(
                 "manual_review_unsupported_4k_policy_mode",
-                "The planner only supports explicit strip-only handling for 4K at this stage.",
+                "The effective 4K rule is not configured to allow video transcoding.",
                 mode=rules.mode,
             )
         )
@@ -200,18 +221,42 @@ def build_4k_video_plan(
                 preserve_original=True,
                 target_codec=video_stream.codec_name,
                 transcode_required=False,
+                quality_mode=rules.quality_mode.value,
+                max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
             ),
             reasons,
             True,
         )
 
+    if video_stream.codec_name != target_codec:
+        transcode_required = True
+        reasons.append(
+            make_reason(
+                "video_transcode_required_for_4k_policy_codec",
+                "4K video codec does not match the effective 4K policy target.",
+                source_codec=video_stream.codec_name,
+                target_codec=target_codec,
+            )
+        )
+
+    if transcode_required:
+        reasons.append(
+            make_reason(
+                "video_reduction_limit_applies",
+                "Compression safety will be checked after encoding using video-only reduction.",
+                max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+            )
+        )
+
     return (
         VideoPlan(
             primary_stream_index=video_stream.index,
-            handling=VideoHandling.PRESERVE,
-            preserve_original=True,
-            target_codec=video_stream.codec_name,
-            transcode_required=False,
+            handling=VideoHandling.TRANSCODE_TO_POLICY if transcode_required else VideoHandling.PRESERVE,
+            preserve_original=not transcode_required,
+            target_codec=target_codec,
+            transcode_required=transcode_required,
+            quality_mode=rules.quality_mode.value,
+            max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
         ),
         reasons,
         False,
@@ -261,6 +306,15 @@ def build_non_4k_video_plan(
             )
         )
 
+    if transcode_required:
+        reasons.append(
+            make_reason(
+                "video_reduction_limit_applies",
+                "Compression safety will be checked after encoding using video-only reduction.",
+                max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+            )
+        )
+
     return (
         VideoPlan(
             primary_stream_index=video_stream.index,
@@ -268,6 +322,8 @@ def build_non_4k_video_plan(
             preserve_original=not transcode_required,
             target_codec=target_codec,
             transcode_required=transcode_required,
+            quality_mode=rules.quality_mode.value,
+            max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
         ),
         reasons,
         False,
@@ -301,7 +357,9 @@ def determine_action(
 
     if media_file.is_4k:
         if video_plan.transcode_required:
-            return PlanAction.MANUAL_REVIEW
+            if not resolved_policy.video_rules.four_k.allow_transcode:
+                return PlanAction.MANUAL_REVIEW
+            return PlanAction.TRANSCODE
         if compliance_candidate:
             return PlanAction.SKIP
         return PlanAction.REMUX
@@ -330,4 +388,3 @@ def determine_confidence(action: PlanAction, warnings) -> ConfidenceLevel:
     if warnings:
         return ConfidenceLevel.MEDIUM
     return ConfidenceLevel.HIGH
-

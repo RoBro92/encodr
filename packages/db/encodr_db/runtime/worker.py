@@ -5,13 +5,22 @@ from datetime import datetime, timezone
 import logging
 import time
 from pathlib import Path
+from collections.abc import Callable
 
 from sqlalchemy.orm import Session, sessionmaker
 
 from encodr_core.config import ConfigBundle
-from encodr_core.execution import ExecutionResult, ExecutionRunner, FFmpegBinaryNotFoundError, FFmpegProcessError
+from encodr_core.execution import (
+    ExecutionProgressUpdate,
+    ExecutionResult,
+    ExecutionRunner,
+    FFmpegBinaryNotFoundError,
+    FFmpegProcessError,
+    calculate_media_savings,
+)
 from encodr_core.media.models import MediaFile
 from encodr_core.planning import ProcessingPlan
+from encodr_core.probe import ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
 from encodr_db.models import Job
@@ -98,6 +107,7 @@ class WorkerExecutionService:
         media_file: MediaFile,
         ffmpeg_path: Path | str,
         scratch_dir: Path | str,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ExecutionResult:
         job_repository = JobRepository(session)
         tracked_file_repository = TrackedFileRepository(session)
@@ -113,6 +123,8 @@ class WorkerExecutionService:
                 scratch_dir=scratch_dir,
                 ffmpeg_path=ffmpeg_path,
                 job_id=job.id,
+                total_duration_seconds=media_file.container.duration_seconds,
+                progress_callback=progress_callback,
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
@@ -146,10 +158,19 @@ class WorkerExecutionService:
             )
 
         if result.status == "staged":
+            if progress_callback is not None:
+                progress_callback(
+                    ExecutionProgressUpdate(
+                        stage="verifying",
+                        percent=95.0,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
             result = self._verify_and_place(
                 plan=plan,
                 media_file=media_file,
                 staged_result=result,
+                progress_callback=progress_callback,
             )
 
         job_repository.mark_result(job, result)
@@ -163,6 +184,7 @@ class WorkerExecutionService:
         plan: ProcessingPlan,
         media_file: MediaFile,
         staged_result: ExecutionResult,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ExecutionResult:
         completed_at = datetime.now(timezone.utc)
         if staged_result.output_path is None:
@@ -191,6 +213,8 @@ class WorkerExecutionService:
             plan=plan,
             source_media=media_file,
         )
+        metrics = self._probe_media_savings(media_file, staged_result.output_path)
+        staged_metrics = {**metrics, "output_size_bytes": file_size_or_none(staged_result.output_path)}
         if not verification.passed:
             failure_message = verification.failures[0].message if verification.failures else "Output verification failed."
             return ExecutionResult(
@@ -203,11 +227,29 @@ class WorkerExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message=failure_message,
                 failure_category="verification_failed",
-                output_size_bytes=file_size_or_none(staged_result.output_path),
+                **staged_metrics,
                 verification=verification,
                 replacement=ReplacementResult.not_required(),
                 started_at=staged_result.started_at,
                 completed_at=datetime.now(timezone.utc),
+            )
+
+        compression_failure = self._compression_safety_failure(
+            plan=plan,
+            metrics=metrics,
+            staged_result=staged_result,
+            verification=verification,
+        )
+        if compression_failure is not None:
+            return compression_failure
+
+        if progress_callback is not None:
+            progress_callback(
+                ExecutionProgressUpdate(
+                    stage="replacing",
+                    percent=98.0,
+                    updated_at=datetime.now(timezone.utc),
+                )
             )
 
         replacement = self.replacement_service.place_verified_output(
@@ -228,13 +270,17 @@ class WorkerExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message=replacement.failure_message or "Verified output placement failed.",
                 failure_category="replacement_failed",
-                output_size_bytes=file_size_or_none(staged_result.output_path),
+                **staged_metrics,
                 verification=verification,
                 replacement=replacement,
                 started_at=staged_result.started_at,
                 completed_at=datetime.now(timezone.utc),
             )
 
+        final_metrics = {
+            **metrics,
+            "output_size_bytes": file_size_or_none(replacement.final_output_path) or staged_metrics["output_size_bytes"],
+        }
         return ExecutionResult(
             mode=staged_result.mode,
             status="completed",
@@ -242,14 +288,80 @@ class WorkerExecutionService:
             output_path=staged_result.output_path,
             final_output_path=replacement.final_output_path,
             original_backup_path=replacement.original_backup_path,
-            output_size_bytes=file_size_or_none(replacement.final_output_path) or file_size_or_none(staged_result.output_path),
             stdout=staged_result.stdout,
             stderr=staged_result.stderr,
             exit_code=staged_result.exit_code,
+            **final_metrics,
             verification=verification,
             replacement=replacement,
             started_at=staged_result.started_at,
             completed_at=datetime.now(timezone.utc),
+        )
+
+    def _probe_media_savings(self, source_media: MediaFile, output_path: Path | str) -> dict[str, float | int | None]:
+        probe_client = getattr(self.verifier, "probe_client", None)
+        if probe_client is None:
+            return {}
+        try:
+            output_media = probe_client.probe_file(output_path)
+        except ProbeError:
+            return {}
+        return calculate_media_savings(
+            source_media,
+            output_media,
+            ffprobe_path=getattr(probe_client, "binary_path", None),
+        )
+
+    def _compression_safety_failure(
+        self,
+        *,
+        plan: ProcessingPlan,
+        metrics: dict[str, float | int | None],
+        staged_result: ExecutionResult,
+        verification: VerificationResult,
+    ) -> ExecutionResult | None:
+        limit = plan.video.max_allowed_video_reduction_percent
+        if not plan.video.transcode_required or limit is None:
+            return None
+        reduction = metrics.get("compression_reduction_percent")
+        completed_at = datetime.now(timezone.utc)
+        if reduction is None:
+            return ExecutionResult(
+                mode=staged_result.mode,
+                status="manual_review",
+                command=staged_result.command,
+                output_path=staged_result.output_path,
+                stdout=staged_result.stdout,
+                stderr=staged_result.stderr,
+                exit_code=staged_result.exit_code,
+                failure_message="Video reduction could not be measured safely, so the output requires manual review.",
+                failure_category="compression_safety_unmeasurable",
+                verification=verification,
+                replacement=ReplacementResult.not_required(),
+                started_at=staged_result.started_at,
+                completed_at=completed_at,
+                **metrics,
+            )
+        if reduction <= limit:
+            return None
+        return ExecutionResult(
+            mode=staged_result.mode,
+            status="manual_review",
+            command=staged_result.command,
+            output_path=staged_result.output_path,
+            stdout=staged_result.stdout,
+            stderr=staged_result.stderr,
+            exit_code=staged_result.exit_code,
+            failure_message=(
+                f"Video compression reduced the picture by {reduction:.1f}% which exceeds the "
+                f"configured safety limit of {limit}%."
+            ),
+            failure_category="compression_safety_exceeded",
+            verification=verification,
+            replacement=ReplacementResult.not_required(),
+            started_at=staged_result.started_at,
+            completed_at=completed_at,
+            **metrics,
         )
 
 
@@ -297,11 +409,15 @@ class LocalWorkerLoop:
                     completed_at=completed_at,
                 )
 
-            jobs.mark_running(job, worker_name=self.worker_name)
             plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
             media_file = MediaFile.model_validate(job.plan_snapshot.probe_snapshot.payload)
+            jobs.mark_running(job, worker_name=self.worker_name)
+            # Commit the running transition before execution starts so Postgres-backed
+            # progress updates can use separate sessions without blocking on this row.
+            session.commit()
 
             logger.info("processing job %s for %s", job.id, media_file.file_name)
+            progress_reporter = self._build_progress_reporter(job_id=job.id, session=session)
             result = self.execution_service.execute_job(
                 session,
                 job_id=job.id,
@@ -309,6 +425,7 @@ class LocalWorkerLoop:
                 media_file=media_file,
                 ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
                 scratch_dir=self.config_bundle.app.scratch_dir,
+                progress_callback=progress_reporter,
             )
             session.commit()
             self.status_tracker.record_processed_run(
@@ -326,6 +443,30 @@ class LocalWorkerLoop:
                 started_at=run_started_at,
                 completed_at=result.completed_at,
             )
+
+    def _build_progress_reporter(
+        self,
+        *,
+        job_id: str,
+        session: Session,
+    ) -> Callable[[ExecutionProgressUpdate], None]:
+        dialect_name = session.bind.dialect.name if session.bind is not None else None
+
+        def report(update: ExecutionProgressUpdate) -> None:
+            if dialect_name == "sqlite":
+                progress_job = session.get(Job, job_id)
+                if progress_job is None:
+                    return
+                JobRepository(session).record_progress(progress_job, update=update)
+                return
+            with self.session_factory() as progress_session:
+                progress_job = progress_session.get(Job, job_id)
+                if progress_job is None:
+                    return
+                JobRepository(progress_session).record_progress(progress_job, update=update)
+                progress_session.commit()
+
+        return report
 
 
 def file_size_or_none(path: Path | str | None) -> int | None:

@@ -13,6 +13,12 @@ VIDEO_CODEC_MAP = {
     "av1": "libaom-av1",
 }
 
+QUALITY_MODE_MAP = {
+    "high_quality": {"preset": "slow", "crf": "18"},
+    "balanced": {"preset": "medium", "crf": "20"},
+    "efficient": {"preset": "medium", "crf": "23"},
+}
+
 
 def build_execution_command_plan(
     plan: ProcessingPlan,
@@ -41,6 +47,9 @@ def build_execution_command_plan(
         "-y",
         "-i",
         str(resolved_input),
+        "-nostats",
+        "-progress",
+        "pipe:1",
     ]
 
     for stream_index in plan.selected_streams.video_stream_indices:
@@ -72,14 +81,15 @@ def build_execution_command_plan(
         mode = "remux"
     else:
         codec = VIDEO_CODEC_MAP.get(plan.video.target_codec or "", "libx265")
+        quality = QUALITY_MODE_MAP.get(plan.video.quality_mode or "", QUALITY_MODE_MAP["high_quality"])
         command.extend(
             [
                 "-c:v",
                 codec,
                 "-preset",
-                "medium",
+                quality["preset"],
                 "-crf",
-                "23",
+                quality["crf"],
                 "-c:a",
                 "copy",
                 "-c:s",

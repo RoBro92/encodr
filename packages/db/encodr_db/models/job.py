@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin, json_type
@@ -57,11 +57,22 @@ class Job(Base, IdMixin, TimestampMixin):
     attempt_count: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     started_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     completed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    progress_stage: Mapped[str | None] = mapped_column(String(255))
+    progress_percent: Mapped[int | None] = mapped_column(Integer)
+    progress_out_time_seconds: Mapped[int | None] = mapped_column(Integer)
+    progress_fps: Mapped[float | None] = mapped_column(Float)
+    progress_speed: Mapped[float | None] = mapped_column(Float)
+    progress_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     failure_message: Mapped[str | None] = mapped_column(Text)
     failure_category: Mapped[str | None] = mapped_column(String(255), index=True)
     input_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     output_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
     space_saved_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    video_input_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    video_output_size_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    video_space_saved_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    non_video_space_saved_bytes: Mapped[int | None] = mapped_column(BigInteger)
+    compression_reduction_percent: Mapped[int | None] = mapped_column(Integer)
     output_path: Mapped[str | None] = mapped_column(Text)
     execution_command: Mapped[list[str] | None] = mapped_column(json_type())
     execution_stdout: Mapped[str | None] = mapped_column(Text)

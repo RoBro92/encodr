@@ -300,23 +300,23 @@ describe("Encodr UI shell", () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
-      { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
       { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
       { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
       {
         method: "PUT",
         path: "/api/config/setup/processing-rules",
         body: {
-          movies: {
+          movies: processingRuleset({
             profile_name: "movies-default",
             uses_defaults: false,
-            defaults: processingRules().movies.defaults,
             current: {
               ...processingRules().movies.current,
               target_video_codec: "h264",
             },
-          },
+          }),
+          movies_4k: processingRules().movies_4k,
           tv: processingRules().tv,
+          tv_4k: processingRules().tv_4k,
         },
       },
     ]);
@@ -324,14 +324,13 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/config", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
-    expect(screen.getAllByText(/movies rules/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/tv rules/i).length).toBeGreaterThan(0);
-    expect(screen.queryByLabelText(/4k handling/i)).not.toBeInTheDocument();
+    expect(screen.getByText(/^movies$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^movies 4k$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^tv$/i)).toBeInTheDocument();
+    expect(screen.getByText(/^tv 4k$/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^Movies max video reduction$/i)).toBeInTheDocument();
 
-    await userEvent.click(screen.getAllByRole("button", { name: /advanced options/i })[0]);
-    expect(screen.getByLabelText(/4k handling/i)).toBeInTheDocument();
-
-    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[0], "h264");
+    await userEvent.selectOptions(screen.getByLabelText(/^Movies target video codec$/i), "h264");
     await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
 
     await waitFor(() => {
@@ -345,7 +344,9 @@ describe("Encodr UI shell", () => {
               ...processingRules().movies.current,
               target_video_codec: "h264",
             },
+            movies_4k: null,
             tv: null,
+            tv_4k: null,
           }),
         }),
       );
@@ -356,23 +357,23 @@ describe("Encodr UI shell", () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
-      { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
       { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
       { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
       {
         method: "PUT",
         path: "/api/config/setup/processing-rules",
         body: {
-          movies: {
+          movies: processingRuleset({
             profile_name: "movies-default",
             uses_defaults: false,
-            defaults: processingRules().movies.defaults,
             current: {
               ...processingRules().movies.current,
               target_video_codec: "h264",
             },
-          },
+          }),
+          movies_4k: processingRules().movies_4k,
           tv: processingRules().tv,
+          tv_4k: processingRules().tv_4k,
         },
       },
     ]);
@@ -380,8 +381,8 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/config", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
-    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[1], "av1");
-    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[0], "h264");
+    await userEvent.selectOptions(screen.getByLabelText(/^TV target video codec$/i), "av1");
+    await userEvent.selectOptions(screen.getByLabelText(/^Movies target video codec$/i), "h264");
     await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
 
     await waitFor(() => {
@@ -395,7 +396,9 @@ describe("Encodr UI shell", () => {
               ...processingRules().movies.current,
               target_video_codec: "h264",
             },
+            movies_4k: null,
             tv: null,
+            tv_4k: null,
           }),
         }),
       );
@@ -711,6 +714,8 @@ describe("Encodr UI shell", () => {
               ...jobDetail(),
               id: "job-2",
               tracked_file_id: "file-2",
+              source_filename: "Running Film (2024).mkv",
+              source_path: "/media/Movies/Running Film (2024).mkv",
               status: "completed",
               verification_status: "passed",
               replacement_status: "succeeded",
@@ -739,8 +744,9 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
     expect(screen.getByRole("list", { name: /jobs list/i })).toBeInTheDocument();
     expect(screen.getByText(/needs attention/i)).toBeInTheDocument();
-    expect(screen.getByLabelText(/create from tracked file/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/create job from tracked file/i)).toBeInTheDocument();
     expect(screen.queryByText(/ffmpeg -i input\.mkv output\.mkv/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/example film \(2024\)\.mkv/i).length).toBeGreaterThan(0);
 
     const executionToggle = screen.getByRole("button", { name: /advanced execution details/i });
     await userEvent.click(executionToggle);
@@ -754,6 +760,50 @@ describe("Encodr UI shell", () => {
         expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
       );
     });
+  });
+
+  it("shows running job progress and worker details in the jobs queue", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/files",
+        body: {
+          items: [],
+          limit: 25,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-running",
+              source_filename: "Running Film (2024).mkv",
+              source_path: "/media/Movies/Running Film (2024).mkv",
+              status: "running",
+              progress_stage: "encoding",
+              progress_percent: 42,
+              progress_out_time_seconds: 150,
+              progress_fps: 83.2,
+              progress_speed: 1.94,
+              worker_name: "worker-remote-a",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    expect((await screen.findAllByText(/running film \(2024\)\.mkv/i)).length).toBeGreaterThan(0);
+    expect(screen.getByText(/42%/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/worker-remote-a/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/83\.2 fps/i)).toBeInTheDocument();
   });
 
   it("uses tracked-file search requests instead of a fixed local picker list", async () => {
@@ -781,7 +831,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/jobs", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
-    const picker = screen.getByLabelText(/create from tracked file/i);
+    const picker = screen.getByLabelText(/create job from tracked file/i);
     await userEvent.type(picker, "F");
 
     await waitFor(() => {
@@ -1236,54 +1286,69 @@ function effectiveConfig() {
 
 function processingRules() {
   return {
-    movies: {
-      profile_name: "movies-default",
-      uses_defaults: true,
+    movies: processingRuleset({ profile_name: "movies-default" }),
+    movies_4k: processingRuleset({
+      profile_name: "movies-4k-default",
       current: {
-        target_video_codec: "hevc",
-        output_container: "mkv",
-        keep_english_audio_only: true,
-        keep_forced_subtitles: true,
-        keep_one_full_english_subtitle: true,
-        preserve_surround: true,
-        preserve_atmos: true,
-        four_k_mode: "strip_only",
+        ...processingRuleValues(),
+        handling_mode: "preserve_video",
+        max_allowed_video_reduction_percent: 20,
       },
-      defaults: {
-        target_video_codec: "hevc",
-        output_container: "mkv",
-        keep_english_audio_only: true,
-        keep_forced_subtitles: true,
-        keep_one_full_english_subtitle: true,
-        preserve_surround: true,
-        preserve_atmos: true,
-        four_k_mode: "strip_only",
-      },
-    },
-    tv: {
+    }),
+    tv: processingRuleset({
       profile_name: "tv-default",
-      uses_defaults: true,
       current: {
-        target_video_codec: "hevc",
-        output_container: "mkv",
-        keep_english_audio_only: true,
-        keep_forced_subtitles: true,
-        keep_one_full_english_subtitle: true,
-        preserve_surround: true,
-        preserve_atmos: true,
-        four_k_mode: "strip_only",
+        ...processingRuleValues(),
+        target_quality_mode: "balanced",
+        max_allowed_video_reduction_percent: 30,
       },
-      defaults: {
-        target_video_codec: "hevc",
-        output_container: "mkv",
-        keep_english_audio_only: true,
-        keep_forced_subtitles: true,
-        keep_one_full_english_subtitle: true,
-        preserve_surround: true,
-        preserve_atmos: true,
-        four_k_mode: "strip_only",
+    }),
+    tv_4k: processingRuleset({
+      profile_name: "tv-4k-default",
+      current: {
+        ...processingRuleValues(),
+        handling_mode: "strip_only",
+        max_allowed_video_reduction_percent: 15,
       },
-    },
+    }),
+  };
+}
+
+function processingRuleset({
+  profile_name,
+  uses_defaults = true,
+  current = processingRuleValues(),
+  defaults = current,
+}: {
+  profile_name: string;
+  uses_defaults?: boolean;
+  current?: ReturnType<typeof processingRuleValues>;
+  defaults?: ReturnType<typeof processingRuleValues>;
+}) {
+  return {
+    profile_name,
+    uses_defaults,
+    current,
+    defaults,
+  };
+}
+
+function processingRuleValues() {
+  return {
+    target_video_codec: "hevc",
+    output_container: "mkv",
+    preferred_audio_languages: ["eng"],
+    keep_only_preferred_audio_languages: true,
+    keep_forced_subtitles: true,
+    keep_one_full_preferred_subtitle: true,
+    drop_other_subtitles: true,
+    preserve_surround: true,
+    preserve_seven_one: true,
+    preserve_atmos: true,
+    preferred_subtitle_languages: ["eng"],
+    handling_mode: "transcode",
+    target_quality_mode: "high_quality",
+    max_allowed_video_reduction_percent: 35,
   };
 }
 
@@ -1326,11 +1391,19 @@ function jobDetail() {
     id: "job-1",
     tracked_file_id: "file-1",
     plan_snapshot_id: "plan-1",
+    source_path: "/media/Movies/Example Film (2024).mkv",
+    source_filename: "Example Film (2024).mkv",
     worker_name: "worker-local",
     status: "pending",
     attempt_count: 1,
     started_at: null,
     completed_at: null,
+    progress_stage: null,
+    progress_percent: null,
+    progress_out_time_seconds: null,
+    progress_fps: null,
+    progress_speed: null,
+    progress_updated_at: null,
     failure_message: null,
     failure_category: null,
     verification_status: "pending",
@@ -1341,6 +1414,11 @@ function jobDetail() {
     input_size_bytes: null,
     output_size_bytes: null,
     space_saved_bytes: null,
+    video_input_size_bytes: null,
+    video_output_size_bytes: null,
+    video_space_saved_bytes: null,
+    non_video_space_saved_bytes: null,
+    compression_reduction_percent: null,
     created_at: "2026-04-20T10:02:30Z",
     updated_at: "2026-04-20T10:02:30Z",
     output_path: null,

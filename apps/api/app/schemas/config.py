@@ -96,12 +96,18 @@ class LibraryRootsResponse(BaseModel):
 class ProcessingRuleValuesResponse(BaseModel):
     target_video_codec: str
     output_container: str
-    keep_english_audio_only: bool
+    preferred_audio_languages: list[str]
+    keep_only_preferred_audio_languages: bool
     keep_forced_subtitles: bool
-    keep_one_full_english_subtitle: bool
+    keep_one_full_preferred_subtitle: bool
+    drop_other_subtitles: bool
     preserve_surround: bool
+    preserve_seven_one: bool
     preserve_atmos: bool
-    four_k_mode: str
+    preferred_subtitle_languages: list[str]
+    handling_mode: str
+    target_quality_mode: str
+    max_allowed_video_reduction_percent: int
 
 
 class ProcessingRulesetResponse(BaseModel):
@@ -113,4 +119,6 @@ class ProcessingRulesetResponse(BaseModel):
 
 class ProcessingRulesResponse(BaseModel):
     movies: ProcessingRulesetResponse
+    movies_4k: ProcessingRulesetResponse
     tv: ProcessingRulesetResponse
+    tv_4k: ProcessingRulesetResponse

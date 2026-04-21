@@ -311,7 +311,12 @@ export function useUpdateProcessingRulesMutation() {
   const { apiClient } = useSession();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (payload: { movies?: ProcessingRuleValues | null; tv?: ProcessingRuleValues | null }) =>
+    mutationFn: (payload: {
+      movies?: ProcessingRuleValues | null;
+      movies_4k?: ProcessingRuleValues | null;
+      tv?: ProcessingRuleValues | null;
+      tv_4k?: ProcessingRuleValues | null;
+    }) =>
       updateProcessingRules(apiClient, payload),
     onSuccess: async () => {
       await Promise.all([

@@ -1,13 +1,21 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import WorkerAgentSettings
-from encodr_core.execution import ExecutionResult, ExecutionRunner, FFmpegBinaryNotFoundError, FFmpegProcessError
+from encodr_core.execution import (
+    ExecutionProgressUpdate,
+    ExecutionResult,
+    ExecutionRunner,
+    FFmpegBinaryNotFoundError,
+    FFmpegProcessError,
+    calculate_media_savings,
+)
 from encodr_core.media.models import MediaFile
 from encodr_core.planning import ProcessingPlan
-from encodr_core.probe import FFprobeClient
+from encodr_core.probe import FFprobeClient, ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
 
@@ -24,7 +32,14 @@ class RemoteExecutionService:
         self.runner = runner or ExecutionRunner()
         self.replacement_service = replacement_service or ReplacementService()
 
-    def execute(self, *, job_id: str, plan_payload: dict, media_payload: dict) -> ExecutionResult:
+    def execute(
+        self,
+        *,
+        job_id: str,
+        plan_payload: dict,
+        media_payload: dict,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+    ) -> ExecutionResult:
         plan = ProcessingPlan.model_validate(plan_payload)
         media_file = MediaFile.model_validate(media_payload)
         verifier = OutputVerifier(probe_client=FFprobeClient(binary_path=self.settings.ffprobe_path))
@@ -36,6 +51,8 @@ class RemoteExecutionService:
                 scratch_dir=self.settings.scratch_dir or ".",
                 ffmpeg_path=self.settings.ffmpeg_path,
                 job_id=job_id,
+                total_duration_seconds=media_file.container.duration_seconds,
+                progress_callback=progress_callback,
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
@@ -69,11 +86,20 @@ class RemoteExecutionService:
             )
 
         if result.status == "staged":
+            if progress_callback is not None:
+                progress_callback(
+                    ExecutionProgressUpdate(
+                        stage="verifying",
+                        percent=95.0,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
             result = self._verify_and_place(
                 plan=plan,
                 media_file=media_file,
                 staged_result=result,
                 verifier=verifier,
+                progress_callback=progress_callback,
             )
         return result
 
@@ -84,6 +110,7 @@ class RemoteExecutionService:
         media_file: MediaFile,
         staged_result: ExecutionResult,
         verifier: OutputVerifier,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ExecutionResult:
         completed_at = datetime.now(timezone.utc)
         if staged_result.output_path is None:
@@ -112,6 +139,8 @@ class RemoteExecutionService:
             plan=plan,
             source_media=media_file,
         )
+        metrics = self._probe_media_savings(media_file, staged_result.output_path, verifier)
+        staged_metrics = {**metrics, "output_size_bytes": file_size_or_none(staged_result.output_path)}
         if not verification.passed:
             failure_message = verification.failures[0].message if verification.failures else "Output verification failed."
             return ExecutionResult(
@@ -124,11 +153,29 @@ class RemoteExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message=failure_message,
                 failure_category="verification_failed",
-                output_size_bytes=file_size_or_none(staged_result.output_path),
+                **staged_metrics,
                 verification=verification,
                 replacement=ReplacementResult.not_required(),
                 started_at=staged_result.started_at,
                 completed_at=datetime.now(timezone.utc),
+            )
+
+        compression_failure = self._compression_safety_failure(
+            plan=plan,
+            metrics=metrics,
+            staged_result=staged_result,
+            verification=verification,
+        )
+        if compression_failure is not None:
+            return compression_failure
+
+        if progress_callback is not None:
+            progress_callback(
+                ExecutionProgressUpdate(
+                    stage="replacing",
+                    percent=98.0,
+                    updated_at=datetime.now(timezone.utc),
+                )
             )
 
         replacement = self.replacement_service.place_verified_output(
@@ -149,13 +196,17 @@ class RemoteExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message=replacement.failure_message or "Verified output placement failed.",
                 failure_category="replacement_failed",
-                output_size_bytes=file_size_or_none(staged_result.output_path),
+                **staged_metrics,
                 verification=verification,
                 replacement=replacement,
                 started_at=staged_result.started_at,
                 completed_at=datetime.now(timezone.utc),
             )
 
+        final_metrics = {
+            **metrics,
+            "output_size_bytes": file_size_or_none(replacement.final_output_path) or staged_metrics["output_size_bytes"],
+        }
         return ExecutionResult(
             mode=staged_result.mode,
             status="completed",
@@ -163,14 +214,85 @@ class RemoteExecutionService:
             output_path=staged_result.output_path,
             final_output_path=replacement.final_output_path,
             original_backup_path=replacement.original_backup_path,
-            output_size_bytes=file_size_or_none(replacement.final_output_path) or file_size_or_none(staged_result.output_path),
             stdout=staged_result.stdout,
             stderr=staged_result.stderr,
             exit_code=staged_result.exit_code,
+            **final_metrics,
             verification=verification,
             replacement=replacement,
             started_at=staged_result.started_at,
             completed_at=datetime.now(timezone.utc),
+        )
+
+    def _probe_media_savings(
+        self,
+        source_media: MediaFile,
+        output_path: Path | str,
+        verifier: OutputVerifier,
+    ) -> dict[str, float | int | None]:
+        probe_client = getattr(verifier, "probe_client", None)
+        if probe_client is None:
+            return {}
+        try:
+            output_media = probe_client.probe_file(output_path)
+        except ProbeError:
+            return {}
+        return calculate_media_savings(
+            source_media,
+            output_media,
+            ffprobe_path=getattr(probe_client, "binary_path", None),
+        )
+
+    def _compression_safety_failure(
+        self,
+        *,
+        plan: ProcessingPlan,
+        metrics: dict[str, float | int | None],
+        staged_result: ExecutionResult,
+        verification: VerificationResult,
+    ) -> ExecutionResult | None:
+        limit = plan.video.max_allowed_video_reduction_percent
+        if not plan.video.transcode_required or limit is None:
+            return None
+        reduction = metrics.get("compression_reduction_percent")
+        completed_at = datetime.now(timezone.utc)
+        if reduction is None:
+            return ExecutionResult(
+                mode=staged_result.mode,
+                status="manual_review",
+                command=staged_result.command,
+                output_path=staged_result.output_path,
+                stdout=staged_result.stdout,
+                stderr=staged_result.stderr,
+                exit_code=staged_result.exit_code,
+                failure_message="Video reduction could not be measured safely, so the output requires manual review.",
+                failure_category="compression_safety_unmeasurable",
+                verification=verification,
+                replacement=ReplacementResult.not_required(),
+                started_at=staged_result.started_at,
+                completed_at=completed_at,
+                **metrics,
+            )
+        if reduction <= limit:
+            return None
+        return ExecutionResult(
+            mode=staged_result.mode,
+            status="manual_review",
+            command=staged_result.command,
+            output_path=staged_result.output_path,
+            stdout=staged_result.stdout,
+            stderr=staged_result.stderr,
+            exit_code=staged_result.exit_code,
+            failure_message=(
+                f"Video compression reduced the picture by {reduction:.1f}% which exceeds the "
+                f"configured safety limit of {limit}%."
+            ),
+            failure_category="compression_safety_exceeded",
+            verification=verification,
+            replacement=ReplacementResult.not_required(),
+            started_at=staged_result.started_at,
+            completed_at=completed_at,
+            **metrics,
         )
 
 
