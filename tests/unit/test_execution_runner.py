@@ -16,6 +16,7 @@ from encodr_core.execution import (
     build_execution_command_plan,
     build_temp_output_path,
 )
+from encodr_core.execution.metrics import calculate_media_savings
 from encodr_core.media.models import MediaFile
 from encodr_core.planning import PlanAction, ProcessingPlan, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
@@ -227,6 +228,137 @@ def test_verification_failure_marks_job_failed_and_leaves_original_untouched(tmp
         assert staged_path.exists()
 
 
+def test_compression_safety_uses_video_reduction_only_and_blocks_excessive_loss(tmp_path: Path) -> None:
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        staged_path = tmp_path / "scratch" / "compressed-output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        output_media = media.model_copy(deep=True)
+        output_media.container.size_bytes = max((media.container.size_bytes or 0) // 3, 1)
+        output_media.video_streams[0].codec_name = "hevc"
+        output_media.video_streams[0].bit_rate = max((media.video_streams[0].bit_rate or 0) // 4, 1)
+
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        plan.video.max_allowed_video_reduction_percent = 10
+
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=PassingVerifierWithProbeClient(output_media),
+            replacement_service=ReplacementService(),
+        )
+        jobs = JobRepository(session)
+        jobs.mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed_job = session.get(Job, job.id)
+        assert result.status == "manual_review"
+        assert result.failure_category == "compression_safety_exceeded"
+        assert refreshed_job.status == JobStatus.MANUAL_REVIEW
+        assert refreshed_job.compression_reduction_percent is not None
+        assert refreshed_job.compression_reduction_percent > 10
+        assert source_path.read_text(encoding="utf-8") == "original"
+
+
+def test_non_video_savings_do_not_trip_compression_safety(tmp_path: Path) -> None:
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        staged_path = tmp_path / "scratch" / "safe-output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        output_media = media.model_copy(deep=True)
+        output_media.container.size_bytes = max((media.container.size_bytes or 0) // 2, 1)
+        output_media.video_streams[0].codec_name = "hevc"
+        output_media.audio_streams = []
+        output_media.subtitle_streams = []
+
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        plan.video.max_allowed_video_reduction_percent = 10
+
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=PassingVerifierWithProbeClient(output_media),
+            replacement_service=StaticReplacementService.succeeded(source_path),
+        )
+        jobs = JobRepository(session)
+        jobs.mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed_job = session.get(Job, job.id)
+        assert result.status == "completed"
+        assert refreshed_job.status == JobStatus.COMPLETED
+        assert refreshed_job.compression_reduction_percent == 0
+
+
+def test_packet_size_fallback_measures_video_reduction_without_stream_bitrates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = tmp_path / "source.mkv"
+    output_path = tmp_path / "output.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    output_path.write_text("output", encoding="utf-8")
+
+    source_media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+    output_media = media_at_path(parse_fixture("film_1080p.json"), output_path)
+    source_media.container.size_bytes = 1_200_000
+    output_media.container.size_bytes = 700_000
+
+    for stream in [
+        *source_media.video_streams,
+        *source_media.audio_streams,
+        *output_media.video_streams,
+        *output_media.audio_streams,
+    ]:
+        stream.bit_rate = None
+
+    packet_sizes = {
+        source_path: {
+            source_media.video_streams[0].index: 1_000_000,
+            source_media.audio_streams[0].index: 200_000,
+        },
+        output_path: {
+            output_media.video_streams[0].index: 550_000,
+            output_media.audio_streams[0].index: 150_000,
+        },
+    }
+
+    monkeypatch.setattr(
+        "encodr_core.execution.metrics.probe_packet_sizes_by_stream",
+        lambda file_path, *, ffprobe_path: packet_sizes[Path(file_path)],
+    )
+
+    metrics = calculate_media_savings(source_media, output_media, ffprobe_path="/usr/bin/ffprobe")
+
+    assert metrics["video_input_size_bytes"] == 1_000_000
+    assert metrics["video_output_size_bytes"] == 550_000
+    assert metrics["video_space_saved_bytes"] == 450_000
+    assert metrics["non_video_space_saved_bytes"] == 50_000
+    assert metrics["compression_reduction_percent"] == 45.0
+
+
 def test_worker_loop_processes_next_pending_job(tmp_path: Path) -> None:
     bundle = load_config_bundle(project_root=REPO_ROOT)
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
@@ -247,7 +379,7 @@ def test_worker_loop_processes_next_pending_job(tmp_path: Path) -> None:
         bundle,
         execution_service=WorkerExecutionService(
             runner=StagedRunner(output_path=tmp_path / "scratch" / "loop.mkv"),
-            verifier=StaticVerifier.passed(),
+            verifier=PassingVerifierWithProbeClient(media_at_path(parse_fixture("film_1080p.json"), source_path)),
             replacement_service=StaticReplacementService.succeeded(source_path),
         ),
         poll_interval_seconds=0.01,
@@ -259,6 +391,53 @@ def test_worker_loop_processes_next_pending_job(tmp_path: Path) -> None:
         assert job.status == JobStatus.COMPLETED
         assert job.verification_status == DbVerificationStatus.PASSED
         assert job.replacement_status == DbReplacementStatus.SUCCEEDED
+
+
+def test_worker_loop_commits_running_state_before_execution(tmp_path: Path) -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    database_path = tmp_path / "worker-loop.sqlite"
+    engine = create_engine(f"sqlite+pysqlite:///{database_path.as_posix()}", future=True)
+    Base.metadata.create_all(engine)
+    session_factory = sessionmaker(engine, future=True)
+
+    source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+    source_path.parent.mkdir(parents=True)
+    source_path.write_text("original", encoding="utf-8")
+
+    with session_factory() as session:
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        create_job(session, bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    class AssertingExecutionService:
+        def execute_job(self, session: Session, **kwargs):
+            del session, kwargs
+            with session_factory() as probe_session:
+                job = probe_session.query(Job).one()
+                assert job.status == JobStatus.RUNNING
+            return ExecutionResult(
+                mode="transcode",
+                status="completed",
+                command=["ffmpeg", "-i", "input.mkv", "output.mkv"],
+                output_path=tmp_path / "scratch" / "loop.mkv",
+                final_output_path=source_path,
+                original_backup_path=source_path.with_name("Example Film (2024).encodr-backup.mkv"),
+                output_size_bytes=1,
+                exit_code=0,
+                stdout="ok",
+                stderr="",
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+
+    loop = LocalWorkerLoop(
+        session_factory,
+        bundle,
+        execution_service=AssertingExecutionService(),
+        poll_interval_seconds=0.01,
+    )
+
+    assert loop.run_once() is True
 
 
 def test_temp_output_path_handling() -> None:
@@ -373,6 +552,12 @@ class StaticVerifier(OutputVerifier):
 
     def verify_output(self, **kwargs):  # type: ignore[no-untyped-def]
         return self.result
+
+
+class PassingVerifierWithProbeClient(StaticVerifier):
+    def __init__(self, media: MediaFile) -> None:
+        super().__init__(VerificationResult(status=VerificationStatus.PASSED, passed=True))
+        self.probe_client = StaticProbeClient(media)
 
 
 class StaticReplacementService(ReplacementService):

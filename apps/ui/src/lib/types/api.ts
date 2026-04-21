@@ -178,11 +178,19 @@ export type JobSummary = {
   id: string;
   tracked_file_id: string;
   plan_snapshot_id: string;
+  source_path: string | null;
+  source_filename: string | null;
   worker_name: string | null;
   status: string;
   attempt_count: number;
   started_at: string | null;
   completed_at: string | null;
+  progress_stage: string | null;
+  progress_percent: number | null;
+  progress_out_time_seconds: number | null;
+  progress_fps: number | null;
+  progress_speed: number | null;
+  progress_updated_at: string | null;
   failure_message: string | null;
   failure_category: string | null;
   verification_status: string;
@@ -193,6 +201,11 @@ export type JobSummary = {
   input_size_bytes: number | null;
   output_size_bytes: number | null;
   space_saved_bytes: number | null;
+  video_input_size_bytes: number | null;
+  video_output_size_bytes: number | null;
+  video_space_saved_bytes: number | null;
+  non_video_space_saved_bytes: number | null;
+  compression_reduction_percent: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -596,12 +609,18 @@ export type LibraryRoots = {
 export type ProcessingRuleValues = {
   target_video_codec: string;
   output_container: string;
-  keep_english_audio_only: boolean;
+  preferred_audio_languages: string[];
+  keep_only_preferred_audio_languages: boolean;
   keep_forced_subtitles: boolean;
-  keep_one_full_english_subtitle: boolean;
+  keep_one_full_preferred_subtitle: boolean;
+  drop_other_subtitles: boolean;
   preserve_surround: boolean;
+  preserve_seven_one: boolean;
   preserve_atmos: boolean;
-  four_k_mode: string;
+  preferred_subtitle_languages: string[];
+  handling_mode: string;
+  target_quality_mode: string;
+  max_allowed_video_reduction_percent: number;
 };
 
 export type ProcessingRuleset = {
@@ -613,7 +632,9 @@ export type ProcessingRuleset = {
 
 export type ProcessingRules = {
   movies: ProcessingRuleset;
+  movies_4k: ProcessingRuleset;
   tv: ProcessingRuleset;
+  tv_4k: ProcessingRuleset;
 };
 
 export type LoginPayload = {

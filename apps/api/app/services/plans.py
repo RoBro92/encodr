@@ -8,7 +8,14 @@ from sqlalchemy.orm import Session
 from app.services.files import FilesService
 from app.services.setup import SetupStateService
 from encodr_core.config import ConfigBundle
-from encodr_core.config.base import FourKMode, OutputContainer, VideoCodec, deduplicate_preserving_order
+from encodr_core.config.base import (
+    FourKMode,
+    OutputContainer,
+    RuleHandlingMode,
+    VideoCodec,
+    VideoQualityMode,
+    deduplicate_preserving_order,
+)
 from encodr_core.media.models import MediaFile
 from encodr_core.config.profiles import ProfileConfig
 from encodr_core.planning import build_processing_plan
@@ -53,32 +60,60 @@ class PlansService:
 
     def _config_bundle_for_source(self, *, source_path: str, media_file: MediaFile) -> ConfigBundle:
         setup_service = SetupStateService(config_bundle=self.config_bundle)
-        ruleset = setup_service.ruleset_for_source(source_path)
-        rules = setup_service.rules_for_source(source_path)
+        ruleset = setup_service.ruleset_for_source(source_path, is_4k=media_file.is_4k)
+        rules = setup_service.rules_for_source(source_path, is_4k=media_file.is_4k)
         if ruleset is None or rules is None:
             return self.config_bundle
 
         policy = self.config_bundle.policy
-        audio_languages = ["eng"] if rules["keep_english_audio_only"] else self._all_languages(
-            [stream.language for stream in media_file.audio_streams],
-            fallback=["und"],
+        audio_languages = rules["preferred_audio_languages"]
+        subtitle_languages = rules["preferred_subtitle_languages"]
+        forced_languages = subtitle_languages if rules["keep_forced_subtitles"] else ["und"]
+        handling_mode = RuleHandlingMode(rules["handling_mode"])
+        quality_mode = VideoQualityMode(rules["target_quality_mode"])
+        four_k_rules = policy.video.four_k.model_copy(
+            update={
+                "preferred_codec": VideoCodec(rules["target_video_codec"]),
+                "quality_mode": quality_mode,
+                "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+            }
         )
-        subtitle_languages = (
-            ["eng"]
-            if rules["keep_one_full_english_subtitle"]
-            else self._all_languages([stream.language for stream in media_file.subtitle_streams], fallback=["und"])
+        non_4k_rules = policy.video.non_4k.model_copy(
+            update={
+                "preferred_codec": VideoCodec(rules["target_video_codec"]),
+                "quality_mode": quality_mode,
+                "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+            }
         )
-        forced_languages = (
-            self._all_languages([stream.language for stream in media_file.subtitle_streams], fallback=["eng"])
-            if rules["keep_forced_subtitles"]
-            else ["und"]
-        )
+        if media_file.is_4k:
+            four_k_rules = four_k_rules.model_copy(
+                update={
+                    "mode": FourKMode.POLICY_CONTROLLED
+                    if handling_mode == RuleHandlingMode.TRANSCODE
+                    else FourKMode.STRIP_ONLY,
+                    "allow_transcode": handling_mode == RuleHandlingMode.TRANSCODE,
+                    "preserve_original_video": handling_mode != RuleHandlingMode.TRANSCODE,
+                    "remove_non_english_audio": rules["keep_only_preferred_audio_languages"],
+                    "remove_non_english_subtitles": rules["drop_other_subtitles"],
+                }
+            )
+        else:
+            non_4k_rules = non_4k_rules.model_copy(
+                update={
+                    "allow_transcode": handling_mode == RuleHandlingMode.TRANSCODE,
+                    "decision_order": ["skip", "remux"]
+                    if handling_mode != RuleHandlingMode.TRANSCODE
+                    else ["skip", "remux", "transcode"],
+                }
+            )
         next_policy = policy.model_copy(
             update={
                 "audio": policy.audio.model_copy(
                     update={
                         "keep_languages": audio_languages,
+                        "keep_only_preferred_languages": rules["keep_only_preferred_audio_languages"],
                         "preserve_best_surround": rules["preserve_surround"],
+                        "preserve_seven_one": rules["preserve_seven_one"],
                         "preserve_atmos_capable": rules["preserve_atmos"],
                     }
                 ),
@@ -86,6 +121,8 @@ class PlansService:
                     update={
                         "keep_languages": subtitle_languages,
                         "keep_forced_languages": forced_languages,
+                        "keep_one_full_preferred_subtitle": rules["keep_one_full_preferred_subtitle"],
+                        "drop_other_subtitles": rules["drop_other_subtitles"],
                     }
                 ),
                 "languages": policy.languages.model_copy(
@@ -96,12 +133,8 @@ class PlansService:
                 "video": policy.video.model_copy(
                     update={
                         "output_container": OutputContainer(rules["output_container"]),
-                        "non_4k": policy.video.non_4k.model_copy(
-                            update={"preferred_codec": VideoCodec(rules["target_video_codec"])}
-                        ),
-                        "four_k": policy.video.four_k.model_copy(
-                            update={"mode": FourKMode(rules["four_k_mode"])}
-                        ),
+                        "non_4k": non_4k_rules,
+                        "four_k": four_k_rules,
                     }
                 ),
             }
@@ -128,41 +161,76 @@ class PlansService:
         if profile.audio is not None:
             update["audio"] = profile.audio.model_copy(
                 update={
-                    "keep_languages": ["eng"] if rules["keep_english_audio_only"] else None,
+                    "keep_languages": rules["preferred_audio_languages"],
+                    "keep_only_preferred_languages": rules["keep_only_preferred_audio_languages"],
                     "preserve_best_surround": rules["preserve_surround"],
+                    "preserve_seven_one": rules["preserve_seven_one"],
                     "preserve_atmos_capable": rules["preserve_atmos"],
                 }
             )
         if profile.subtitles is not None:
             update["subtitles"] = profile.subtitles.model_copy(
                 update={
-                    "keep_languages": ["eng"] if rules["keep_one_full_english_subtitle"] else ["und"],
-                    "keep_forced_languages": ["eng"] if rules["keep_forced_subtitles"] else ["und"],
+                    "keep_languages": rules["preferred_subtitle_languages"],
+                    "keep_forced_languages": rules["preferred_subtitle_languages"] if rules["keep_forced_subtitles"] else ["und"],
+                    "keep_one_full_preferred_subtitle": rules["keep_one_full_preferred_subtitle"],
+                    "drop_other_subtitles": rules["drop_other_subtitles"],
                 }
             )
         if profile.video is not None:
             next_video = profile.video.model_copy(update={"output_container": OutputContainer(rules["output_container"])})
             if next_video.non_4k is None:
                 next_video = next_video.model_copy(
-                    update={"non_4k": {"preferred_codec": VideoCodec(rules["target_video_codec"])}}
+                    update={
+                        "non_4k": {
+                            "preferred_codec": VideoCodec(rules["target_video_codec"]),
+                            "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
+                            "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                        }
+                    }
                 )
             else:
                 next_video = next_video.model_copy(
                     update={
                         "non_4k": next_video.non_4k.model_copy(
-                            update={"preferred_codec": VideoCodec(rules["target_video_codec"])}
+                            update={
+                                "preferred_codec": VideoCodec(rules["target_video_codec"]),
+                                "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
+                                "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                            }
                         )
                     }
                 )
             if next_video.four_k is None:
                 next_video = next_video.model_copy(
-                    update={"four_k": {"mode": FourKMode(rules["four_k_mode"])}}
+                    update={
+                        "four_k": {
+                            "preferred_codec": VideoCodec(rules["target_video_codec"]),
+                            "mode": FourKMode.POLICY_CONTROLLED
+                            if RuleHandlingMode(rules["handling_mode"]) == RuleHandlingMode.TRANSCODE
+                            else FourKMode.STRIP_ONLY,
+                            "allow_transcode": RuleHandlingMode(rules["handling_mode"]) == RuleHandlingMode.TRANSCODE,
+                            "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
+                            "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                        }
+                    }
                 )
             else:
                 next_video = next_video.model_copy(
                     update={
                         "four_k": next_video.four_k.model_copy(
-                            update={"mode": FourKMode(rules["four_k_mode"])}
+                            update={
+                                "preferred_codec": VideoCodec(rules["target_video_codec"]),
+                                "mode": FourKMode.POLICY_CONTROLLED
+                                if RuleHandlingMode(rules["handling_mode"]) == RuleHandlingMode.TRANSCODE
+                                else FourKMode.STRIP_ONLY,
+                                "allow_transcode": RuleHandlingMode(rules["handling_mode"]) == RuleHandlingMode.TRANSCODE,
+                                "preserve_original_video": RuleHandlingMode(rules["handling_mode"]) != RuleHandlingMode.TRANSCODE,
+                                "remove_non_english_audio": rules["keep_only_preferred_audio_languages"],
+                                "remove_non_english_subtitles": rules["drop_other_subtitles"],
+                                "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
+                                "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                            }
                         )
                     }
                 )

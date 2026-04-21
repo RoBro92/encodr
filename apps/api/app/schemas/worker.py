@@ -237,6 +237,20 @@ class WorkerJobClaimResponse(BaseModel):
     claimed_at: datetime
 
 
+class WorkerJobProgressRequest(BaseModel):
+    stage: str
+    percent: float | None = None
+    out_time_seconds: float | None = None
+    fps: float | None = None
+    speed: float | None = None
+    runtime_summary: WorkerRuntimeSummaryResponse | None = None
+
+
+class WorkerJobProgressResponse(BaseModel):
+    job_id: str
+    updated_at: datetime
+
+
 class WorkerJobResultRequest(BaseModel):
     result_payload: dict[str, Any]
     runtime_summary: WorkerRuntimeSummaryResponse | None = None

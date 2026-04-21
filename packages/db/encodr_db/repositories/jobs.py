@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from math import floor
 
 from sqlalchemy import Select, asc, desc, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
-from encodr_core.execution import ExecutionResult
+from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
 from encodr_db.models import (
     FileLifecycleState,
     Job,
@@ -118,6 +119,12 @@ class JobRepository:
         job.status = JobStatus.RUNNING
         job.worker_name = worker_name
         job.started_at = datetime.now(timezone.utc)
+        job.progress_stage = "starting"
+        job.progress_percent = 0
+        job.progress_out_time_seconds = 0
+        job.progress_fps = None
+        job.progress_speed = None
+        job.progress_updated_at = job.started_at
         if job.tracked_file is not None:
             job.tracked_file.lifecycle_state = job.tracked_file.lifecycle_state.PROCESSING
         self.session.flush()
@@ -149,6 +156,15 @@ class JobRepository:
         job.failure_category = result.failure_category
         job.output_size_bytes = result.output_size_bytes
         job.space_saved_bytes = calculate_space_saved(job.input_size_bytes, result.output_size_bytes)
+        job.video_input_size_bytes = result.video_input_size_bytes
+        job.video_output_size_bytes = result.video_output_size_bytes
+        job.video_space_saved_bytes = result.video_space_saved_bytes
+        job.non_video_space_saved_bytes = result.non_video_space_saved_bytes
+        job.compression_reduction_percent = (
+            int(round(result.compression_reduction_percent))
+            if result.compression_reduction_percent is not None
+            else None
+        )
         job.output_path = str(result.output_path) if result.output_path is not None else None
         job.final_output_path = (
             str(result.final_output_path) if result.final_output_path is not None else None
@@ -170,7 +186,29 @@ class JobRepository:
         job.replacement_failure_message = (
             result.replacement.failure_message if result.replacement is not None else None
         )
+        job.progress_stage = "completed" if result.status == "completed" else result.status
+        job.progress_percent = 100 if result.status in {"completed", "skipped"} else job.progress_percent
+        job.progress_updated_at = result.completed_at
         job.assigned_worker_id = None
+        self.session.flush()
+        return job
+
+    def record_progress(
+        self,
+        job: Job,
+        *,
+        update: ExecutionProgressUpdate,
+    ) -> Job:
+        job.progress_stage = update.stage
+        job.progress_percent = int(floor(update.percent)) if update.percent is not None else None
+        job.progress_out_time_seconds = (
+            int(floor(update.out_time_seconds))
+            if update.out_time_seconds is not None
+            else None
+        )
+        job.progress_fps = update.fps
+        job.progress_speed = update.speed
+        job.progress_updated_at = update.updated_at
         self.session.flush()
         return job
 
@@ -183,7 +221,11 @@ class JobRepository:
         limit: int | None = None,
         offset: int | None = None,
     ) -> list[Job]:
-        query: Select[tuple[Job]] = select(Job).order_by(desc(Job.created_at))
+        query: Select[tuple[Job]] = (
+            select(Job)
+            .options(joinedload(Job.tracked_file))
+            .order_by(desc(Job.created_at))
+        )
         if status is not None:
             query = query.where(Job.status == status)
         if tracked_file_id is not None:

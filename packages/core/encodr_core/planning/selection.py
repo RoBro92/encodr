@@ -54,14 +54,15 @@ def select_audio_streams(
         for stream in media_file.audio_streams
         if stream.language in preferred_languages or (stream.language is None and "und" in preferred_languages)
     ]
+    candidate_streams = preferred_streams if audio_rules.keep_only_preferred_languages else list(media_file.audio_streams)
     commentary_removed = [
         stream.index
-        for stream in preferred_streams
+        for stream in candidate_streams
         if stream.is_commentary_candidate and not audio_rules.allow_commentary
     ]
     selectable_streams = [
         stream
-        for stream in preferred_streams
+        for stream in candidate_streams
         if audio_rules.allow_commentary or not stream.is_commentary_candidate
     ]
 
@@ -74,7 +75,7 @@ def select_audio_streams(
             )
         )
 
-    if not selectable_streams:
+    if audio_rules.keep_only_preferred_languages and not preferred_streams:
         undetermined_present = any(stream.language is None for stream in media_file.audio_streams)
         if undetermined_present and not language_rules.drop_undetermined_audio:
             warnings.append(
@@ -102,9 +103,29 @@ def select_audio_streams(
             requires_manual_review=True,
         )
 
+    if not selectable_streams:
+        reasons.append(
+            make_reason(
+                "manual_review_no_usable_audio",
+                "No acceptable audio track remained after applying the active audio rules.",
+            )
+        )
+        return AudioSelectionResult(
+            intent=AudioSelectionIntent(
+                selected_stream_indices=[],
+                dropped_stream_indices=[stream.index for stream in media_file.audio_streams],
+                commentary_removed_stream_indices=commentary_removed,
+                available_preferred_language_stream_indices=[stream.index for stream in preferred_streams],
+                missing_required_audio=True,
+            ),
+            reasons=reasons,
+            warnings=warnings,
+            requires_manual_review=True,
+        )
+
     sorted_streams = sorted(
         selectable_streams,
-        key=lambda stream: audio_stream_score(stream, audio_rules),
+        key=lambda stream: audio_stream_score(stream, audio_rules, preferred_languages),
         reverse=True,
     )
     selected: list[AudioStream] = []
@@ -113,6 +134,12 @@ def select_audio_streams(
         for stream in sorted_streams:
             if stream.is_atmos_capable and stream not in selected:
                 selected.append(stream)
+
+    if audio_rules.preserve_seven_one:
+        for stream in sorted_streams:
+            if is_seven_one_candidate(stream) and stream not in selected:
+                selected.append(stream)
+                break
 
     if audio_rules.preserve_best_surround:
         for stream in sorted_streams:
@@ -132,17 +159,17 @@ def select_audio_streams(
         stream.index for stream in media_file.audio_streams if stream.index not in selected_indices
     ]
 
-    non_english_removed = [
+    non_preferred_removed = [
         stream.index
         for stream in media_file.audio_streams
         if stream.language not in preferred_languages and stream.index in dropped_indices
     ]
-    if non_english_removed:
+    if audio_rules.keep_only_preferred_languages and non_preferred_removed:
         reasons.append(
             make_reason(
-                "non_english_audio_removed",
+                "non_preferred_audio_removed",
                 "Non-preferred-language audio tracks are not selected.",
-                stream_indices=non_english_removed,
+                stream_indices=non_preferred_removed,
             )
         )
 
@@ -166,7 +193,7 @@ def select_audio_streams(
             )
         )
 
-    if any(stream.language is None for stream in media_file.audio_streams):
+    if audio_rules.keep_only_preferred_languages and any(stream.language is None for stream in media_file.audio_streams):
         warnings.append(
             make_warning(
                 "undetermined_audio_not_selected",
@@ -197,18 +224,21 @@ def select_subtitle_streams(
     preferred_languages = set(subtitle_rules.keep_languages)
     forced_languages = set(subtitle_rules.keep_forced_languages)
 
-    forced_candidates = [
-        stream
-        for stream in media_file.subtitle_streams
-        if stream.language in forced_languages and stream.disposition.forced
-    ]
-    ambiguous_forced = [
-        stream
-        for stream in media_file.subtitle_streams
-        if stream.language in forced_languages
-        and not stream.disposition.forced
-        and contains_forced_marker(stream)
-    ]
+    forced_candidates: list[SubtitleStream] = []
+    ambiguous_forced: list[SubtitleStream] = []
+    if language_rules.preserve_forced_subtitles:
+        forced_candidates = [
+            stream
+            for stream in media_file.subtitle_streams
+            if stream.language in forced_languages and stream.disposition.forced
+        ]
+        ambiguous_forced = [
+            stream
+            for stream in media_file.subtitle_streams
+            if stream.language in forced_languages
+            and not stream.disposition.forced
+            and contains_forced_marker(stream)
+        ]
 
     if ambiguous_forced and language_rules.preserve_forced_subtitles:
         warnings.append(
@@ -249,7 +279,7 @@ def select_subtitle_streams(
     selected.extend(sorted(forced_candidates, key=subtitle_stream_score, reverse=True))
 
     main_stream: SubtitleStream | None = None
-    if main_candidates:
+    if subtitle_rules.keep_one_full_preferred_subtitle and main_candidates:
         main_stream = main_candidates[0]
         if main_stream not in selected:
             selected.append(main_stream)
@@ -261,21 +291,24 @@ def select_subtitle_streams(
         if selected_sdh not in selected:
             selected.append(selected_sdh)
 
+    if not subtitle_rules.drop_other_subtitles:
+        selected = list(media_file.subtitle_streams)
+
     selected_indices = [stream.index for stream in selected]
     dropped_indices = [
         stream.index for stream in media_file.subtitle_streams if stream.index not in selected_indices
     ]
-    removed_non_english = [
+    removed_non_preferred = [
         stream.index
         for stream in media_file.subtitle_streams
         if stream.language not in preferred_languages and stream.index in dropped_indices
     ]
-    if removed_non_english:
+    if subtitle_rules.drop_other_subtitles and removed_non_preferred:
         reasons.append(
             make_reason(
-                "non_english_subtitles_removed",
+                "non_preferred_subtitles_removed",
                 "Non-preferred-language subtitle tracks are not selected.",
-                stream_indices=removed_non_english,
+                stream_indices=removed_non_preferred,
             )
         )
 
@@ -312,10 +345,16 @@ def select_subtitle_streams(
     )
 
 
-def audio_stream_score(stream: AudioStream, audio_rules: AudioRules) -> tuple[int, int, int, int, int, int]:
+def audio_stream_score(
+    stream: AudioStream,
+    audio_rules: AudioRules,
+    preferred_languages: set[str],
+) -> tuple[int, int, int, int, int, int, int]:
     codec_preference = score_codec_preference(stream.codec_name, audio_rules.preferred_codecs)
     return (
+        1 if stream.language in preferred_languages or (stream.language is None and "und" in preferred_languages) else 0,
         1 if stream.is_atmos_capable and audio_rules.preserve_atmos_capable else 0,
+        1 if is_seven_one_candidate(stream) and audio_rules.preserve_seven_one else 0,
         1 if stream.is_surround_candidate and audio_rules.preserve_best_surround else 0,
         stream.channels or 0,
         codec_preference,
@@ -346,3 +385,8 @@ def contains_forced_marker(stream: SubtitleStream) -> bool:
     values = [stream.title or "", stream.tags.handler_name or "", *stream.tags.raw.values()]
     combined = " ".join(values).lower()
     return "forced" in combined
+
+
+def is_seven_one_candidate(stream: AudioStream) -> bool:
+    layout = (stream.channel_layout or "").lower()
+    return (stream.channels or 0) >= 8 or "7.1" in layout

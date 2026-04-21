@@ -59,16 +59,29 @@ class JobSummaryResponse(BaseModel):
     id: str
     tracked_file_id: str
     plan_snapshot_id: str
+    source_path: str | None = None
+    source_filename: str | None = None
     worker_name: str | None = None
     status: str
     attempt_count: int
     started_at: datetime | None = None
     completed_at: datetime | None = None
+    progress_stage: str | None = None
+    progress_percent: int | None = None
+    progress_out_time_seconds: int | None = None
+    progress_fps: float | None = None
+    progress_speed: float | None = None
+    progress_updated_at: datetime | None = None
     failure_message: str | None = None
     failure_category: str | None = None
     input_size_bytes: int | None = None
     output_size_bytes: int | None = None
     space_saved_bytes: int | None = None
+    video_input_size_bytes: int | None = None
+    video_output_size_bytes: int | None = None
+    video_space_saved_bytes: int | None = None
+    non_video_space_saved_bytes: int | None = None
+    compression_reduction_percent: int | None = None
     verification_status: str
     replacement_status: str
     tracked_file_is_protected: bool | None = None
@@ -86,16 +99,29 @@ class JobSummaryResponse(BaseModel):
             id=job.id,
             tracked_file_id=job.tracked_file_id,
             plan_snapshot_id=job.plan_snapshot_id,
+            source_path=job.tracked_file.source_path if job.tracked_file is not None else None,
+            source_filename=job.tracked_file.source_filename if job.tracked_file is not None else None,
             worker_name=job.worker_name,
             status=job.status.value,
             attempt_count=job.attempt_count,
             started_at=job.started_at,
             completed_at=job.completed_at,
+            progress_stage=job.progress_stage,
+            progress_percent=job.progress_percent,
+            progress_out_time_seconds=job.progress_out_time_seconds,
+            progress_fps=job.progress_fps,
+            progress_speed=job.progress_speed,
+            progress_updated_at=job.progress_updated_at,
             failure_message=job.failure_message,
             failure_category=job.failure_category,
             input_size_bytes=job.input_size_bytes,
             output_size_bytes=job.output_size_bytes,
             space_saved_bytes=job.space_saved_bytes,
+            video_input_size_bytes=job.video_input_size_bytes,
+            video_output_size_bytes=job.video_output_size_bytes,
+            video_space_saved_bytes=job.video_space_saved_bytes,
+            non_video_space_saved_bytes=job.non_video_space_saved_bytes,
+            compression_reduction_percent=job.compression_reduction_percent,
             verification_status=job.verification_status.value,
             replacement_status=job.replacement_status.value,
             tracked_file_is_protected=job.tracked_file.is_protected if job.tracked_file is not None else None,

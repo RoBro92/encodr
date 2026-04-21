@@ -334,7 +334,12 @@ export function getProcessingRules(client: ApiClient): Promise<ProcessingRules> 
 
 export function updateProcessingRules(
   client: ApiClient,
-  payload: { movies?: ProcessingRuleValues | null; tv?: ProcessingRuleValues | null },
+  payload: {
+    movies?: ProcessingRuleValues | null;
+    movies_4k?: ProcessingRuleValues | null;
+    tv?: ProcessingRuleValues | null;
+    tv_4k?: ProcessingRuleValues | null;
+  },
 ): Promise<ProcessingRules> {
   return client.request<ProcessingRules>("/config/setup/processing-rules", {
     method: "PUT",

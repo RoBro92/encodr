@@ -9,7 +9,6 @@ import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
-  useEffectiveConfigQuery,
   useLibraryRootsQuery,
   useProcessingRulesQuery,
   useRuntimeStatusQuery,
@@ -20,14 +19,14 @@ import {
 import type { ProcessingRules, ProcessingRuleset, ProcessingRuleValues } from "../../lib/types/api";
 
 type PickerTarget = "movies" | "tv" | null;
-type RulesetKey = "movies" | "tv";
+type RulesetKey = "movies" | "movies_4k" | "tv" | "tv_4k";
 
 const VIDEO_CODEC_OPTIONS = [
   { label: "H.265 / HEVC", value: "hevc" },
   { label: "H.264 / AVC", value: "h264" },
   { label: "AV1", value: "av1" },
-  { label: "MPEG-2", value: "mpeg2" },
   { label: "VP9", value: "vp9" },
+  { label: "MPEG-2", value: "mpeg2" },
 ];
 
 const CONTAINER_OPTIONS = [
@@ -35,10 +34,40 @@ const CONTAINER_OPTIONS = [
   { label: "MP4", value: "mp4" },
 ];
 
-const FOUR_K_MODE_OPTIONS = [
+const HANDLING_MODE_OPTIONS = [
+  { label: "Transcode video", value: "transcode" },
   { label: "Strip only", value: "strip_only" },
-  { label: "Policy controlled", value: "policy_controlled" },
+  { label: "Preserve video", value: "preserve_video" },
 ];
+
+const QUALITY_MODE_OPTIONS = [
+  { label: "High quality", value: "high_quality" },
+  { label: "Balanced", value: "balanced" },
+  { label: "Efficient", value: "efficient" },
+];
+
+const COMMON_LANGUAGE_OPTIONS = ["eng", "jpn", "spa", "fra", "deu", "ita"];
+
+const RULESET_ORDER: RulesetKey[] = ["movies", "movies_4k", "tv", "tv_4k"];
+
+const RULESET_META: Record<RulesetKey, { title: string; summary: string }> = {
+  movies: {
+    title: "Movies",
+    summary: "Standard film workflow for non-4K sources.",
+  },
+  movies_4k: {
+    title: "Movies 4K",
+    summary: "Separate 4K film policy with preserve-video defaults.",
+  },
+  tv: {
+    title: "TV",
+    summary: "Episode workflow for non-4K TV and anime-like series sources.",
+  },
+  tv_4k: {
+    title: "TV 4K",
+    summary: "Separate 4K TV policy for preserve or strip-only handling.",
+  },
+};
 
 export function ConfigPage() {
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null);
@@ -46,7 +75,6 @@ export function ConfigPage() {
   const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
   const rootsQuery = useLibraryRootsQuery();
   const rulesQuery = useProcessingRulesQuery();
-  const effectiveConfigQuery = useEffectiveConfigQuery();
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
   const updateRootsMutation = useUpdateLibraryRootsMutation();
@@ -59,18 +87,9 @@ export function ConfigPage() {
     }
   }, [rulesQuery.data]);
 
-  const error =
-    rootsQuery.error ??
-    rulesQuery.error ??
-    effectiveConfigQuery.error ??
-    runtimeQuery.error ??
-    storageQuery.error;
+  const error = rootsQuery.error ?? rulesQuery.error ?? runtimeQuery.error ?? storageQuery.error;
   const loading =
-    rootsQuery.isLoading ||
-    rulesQuery.isLoading ||
-    effectiveConfigQuery.isLoading ||
-    runtimeQuery.isLoading ||
-    storageQuery.isLoading;
+    rootsQuery.isLoading || rulesQuery.isLoading || runtimeQuery.isLoading || storageQuery.isLoading;
 
   if (loading) {
     return <LoadingBlock label="Loading settings" />;
@@ -82,10 +101,9 @@ export function ConfigPage() {
 
   const roots = rootsQuery.data;
   const rules = rulesDraft;
-  const effectiveConfig = effectiveConfigQuery.data;
   const runtime = runtimeQuery.data;
   const storage = storageQuery.data;
-  if (!roots || !runtime || !storage || !effectiveConfig || !rules) {
+  if (!roots || !runtime || !storage || !rules) {
     return <ErrorPanel title="Settings are unavailable" message="The API did not return settings information." />;
   }
 
@@ -95,10 +113,10 @@ export function ConfigPage() {
     if (!baseline) {
       throw new Error("Processing rules are unavailable.");
     }
-    return {
-      movies: target === "movies" ? nextValues : baseline.movies.uses_defaults ? null : baseline.movies.current,
-      tv: target === "tv" ? nextValues : baseline.tv.uses_defaults ? null : baseline.tv.current,
-    };
+    return RULESET_ORDER.reduce<Record<RulesetKey, ProcessingRuleValues | null>>((payload, key) => {
+      payload[key] = key === target ? nextValues : baseline[key].uses_defaults ? null : baseline[key].current;
+      return payload;
+    }, { movies: null, movies_4k: null, tv: null, tv_4k: null });
   };
 
   return (
@@ -106,7 +124,7 @@ export function ConfigPage() {
       <PageHeader
         eyebrow="Settings"
         title="Settings"
-        description="Choose your library roots, adjust processing rules, and confirm storage is ready."
+        description="Choose library roots, set processing rules, and confirm runtime health."
       />
 
       {updateRootsMutation.error instanceof Error ? (
@@ -117,7 +135,7 @@ export function ConfigPage() {
       ) : null}
 
       <section className="dashboard-grid">
-        <SectionCard title="Library folders" subtitle="Choose the main folders you want to work from.">
+        <SectionCard title="Library folders" subtitle="Choose the main folders you want Encodr to use.">
           <div className="list-stack">
             <div className="list-row">
               <div>
@@ -144,7 +162,7 @@ export function ConfigPage() {
           </div>
         </SectionCard>
 
-        <SectionCard title="Storage" subtitle="Check your library and scratch paths before running jobs.">
+        <SectionCard title="Storage" subtitle="Check your media and scratch paths before you run jobs.">
           <KeyValueList
             items={[
               { label: "Media root", value: storage.standard_media_root },
@@ -165,7 +183,7 @@ export function ConfigPage() {
         </SectionCard>
       </section>
 
-      <SectionCard title="Runtime" subtitle="A short view of the live setup.">
+      <SectionCard title="Runtime" subtitle="A concise view of the live runtime.">
         <KeyValueList
           items={[
             { label: "Environment", value: runtime.environment },
@@ -176,76 +194,50 @@ export function ConfigPage() {
         />
       </SectionCard>
 
-      <SectionCard title="Processing rules" subtitle="Set separate defaults for films and episodes.">
-        <div className="settings-rules-grid">
-          <RulesetEditor
-            label="Movies rules"
-            rulesetKey="movies"
-            ruleset={rules.movies}
-            onChange={(nextValues) => {
-              setRulesDraft((current) => current ? { ...current, movies: { ...current.movies, current: nextValues, uses_defaults: false } } : current);
-            }}
-            onSave={() => {
-              if (!rulesDraft) {
-                return;
-              }
-              updateRulesMutation.mutate(
-                buildRulesPayload("movies", rulesDraft.movies.current),
-                {
+      <SectionCard
+        title="Processing rules"
+        subtitle="Set separate defaults for Movies, TV, and 4K handling without editing raw config files."
+      >
+        <div className="settings-rules-grid settings-rules-grid-four">
+          {RULESET_ORDER.map((rulesetKey) => (
+            <RulesetEditor
+              key={rulesetKey}
+              rulesetKey={rulesetKey}
+              label={RULESET_META[rulesetKey].title}
+              description={RULESET_META[rulesetKey].summary}
+              ruleset={rules[rulesetKey]}
+              onChange={(nextValues) => {
+                setRulesDraft((current) =>
+                  current
+                    ? {
+                        ...current,
+                        [rulesetKey]: { ...current[rulesetKey], current: nextValues, uses_defaults: false },
+                      }
+                    : current,
+                );
+              }}
+              onSave={() => {
+                if (!rulesDraft) {
+                  return;
+                }
+                updateRulesMutation.mutate(buildRulesPayload(rulesetKey, rulesDraft[rulesetKey].current), {
                   onSuccess: (data) => {
                     setPersistedRules(data);
                     setRulesDraft(data);
                   },
-                },
-              );
-            }}
-            onUseDefaults={() => {
-              updateRulesMutation.mutate(
-                buildRulesPayload("movies", null),
-                {
+                });
+              }}
+              onUseDefaults={() => {
+                updateRulesMutation.mutate(buildRulesPayload(rulesetKey, null), {
                   onSuccess: (data) => {
                     setPersistedRules(data);
                     setRulesDraft(data);
                   },
-                },
-              );
-            }}
-            saving={updateRulesMutation.isPending}
-          />
-          <RulesetEditor
-            label="TV rules"
-            rulesetKey="tv"
-            ruleset={rules.tv}
-            onChange={(nextValues) => {
-              setRulesDraft((current) => current ? { ...current, tv: { ...current.tv, current: nextValues, uses_defaults: false } } : current);
-            }}
-            onSave={() => {
-              if (!rulesDraft) {
-                return;
-              }
-              updateRulesMutation.mutate(
-                buildRulesPayload("tv", rulesDraft.tv.current),
-                {
-                  onSuccess: (data) => {
-                    setPersistedRules(data);
-                    setRulesDraft(data);
-                  },
-                },
-              );
-            }}
-            onUseDefaults={() => {
-              updateRulesMutation.mutate(
-                buildRulesPayload("tv", null),
-                {
-                  onSuccess: (data) => {
-                    setPersistedRules(data);
-                    setRulesDraft(data);
-                  },
-                },
-              );
-            }}
-            saving={updateRulesMutation.isPending}
-          />
+                });
+              }}
+              saving={updateRulesMutation.isPending}
+            />
+          ))}
         </div>
       </SectionCard>
 
@@ -270,6 +262,7 @@ export function ConfigPage() {
 
 function RulesetEditor({
   label,
+  description,
   rulesetKey,
   ruleset,
   onChange,
@@ -278,6 +271,7 @@ function RulesetEditor({
   saving,
 }: {
   label: string;
+  description: string;
   rulesetKey: RulesetKey;
   ruleset: ProcessingRuleset;
   onChange: (values: ProcessingRuleValues) => void;
@@ -289,23 +283,48 @@ function RulesetEditor({
     () => JSON.stringify(ruleset.current) !== JSON.stringify(ruleset.defaults) || !ruleset.uses_defaults,
     [ruleset],
   );
+  const summary = summariseRuleset(ruleset.current);
+  const transcodeEnabled = ruleset.current.handling_mode === "transcode";
 
   return (
     <div className="settings-rules-card">
       <div className="settings-rules-header">
-        <div>
+        <div className="settings-rules-heading">
           <span className="metric-label">{label}</span>
-          <strong>{ruleset.profile_name ?? "Default rules"}</strong>
+          <strong>{ruleset.profile_name ?? "Built-in defaults"}</strong>
+          <p>{description}</p>
         </div>
         <div className="badge-row">
           {ruleset.uses_defaults ? <StatusBadge value="default" /> : <StatusBadge value="custom" />}
+          {isFourKRuleset(rulesetKey) ? <StatusBadge value="4k" /> : <StatusBadge value="standard" />}
         </div>
       </div>
 
-      <div className="settings-rules-fields">
+      <div className="info-strip settings-rule-summary">
+        <strong>{summary.title}</strong>
+        <span>{summary.body}</span>
+      </div>
+
+      <div className="settings-rules-fields settings-rules-fields-compact">
+        <label className="field">
+          <span>Handling mode</span>
+          <select
+            aria-label={`${label} handling mode`}
+            value={ruleset.current.handling_mode}
+            onChange={(event) => onChange({ ...ruleset.current, handling_mode: event.target.value })}
+          >
+            {HANDLING_MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
         <label className="field">
           <span>Target video codec</span>
           <select
+            aria-label={`${label} target video codec`}
             value={ruleset.current.target_video_codec}
             onChange={(event) => onChange({ ...ruleset.current, target_video_codec: event.target.value })}
           >
@@ -320,6 +339,7 @@ function RulesetEditor({
         <label className="field">
           <span>Output container</span>
           <select
+            aria-label={`${label} output container`}
             value={ruleset.current.output_container}
             onChange={(event) => onChange({ ...ruleset.current, output_container: event.target.value })}
           >
@@ -330,13 +350,59 @@ function RulesetEditor({
             ))}
           </select>
         </label>
+
+        <label className="field">
+          <span>Quality mode</span>
+          <select
+            aria-label={`${label} quality mode`}
+            value={ruleset.current.target_quality_mode}
+            onChange={(event) => onChange({ ...ruleset.current, target_quality_mode: event.target.value })}
+            disabled={!transcodeEnabled}
+          >
+            {QUALITY_MODE_OPTIONS.map((option) => (
+              <option key={option.value} value={option.value}>
+                {option.label}
+              </option>
+            ))}
+          </select>
+        </label>
+
+        <label className="field">
+          <span>Max video reduction (%)</span>
+          <input
+            aria-label={`${label} max video reduction`}
+            type="number"
+            min={0}
+            max={100}
+            value={ruleset.current.max_allowed_video_reduction_percent}
+            onChange={(event) =>
+              onChange({
+                ...ruleset.current,
+                max_allowed_video_reduction_percent: clampPercentage(event.target.value, ruleset.current.max_allowed_video_reduction_percent),
+              })}
+            disabled={!transcodeEnabled}
+          />
+        </label>
+      </div>
+
+      <div className="settings-rules-fields">
+        <LanguageListField
+          label="Preferred audio languages"
+          value={ruleset.current.preferred_audio_languages}
+          onChange={(languages) => onChange({ ...ruleset.current, preferred_audio_languages: languages })}
+        />
+        <LanguageListField
+          label="Preferred subtitle languages"
+          value={ruleset.current.preferred_subtitle_languages}
+          onChange={(languages) => onChange({ ...ruleset.current, preferred_subtitle_languages: languages })}
+        />
       </div>
 
       <div className="settings-rules-toggles">
         <ToggleField
-          label="Keep English audio only"
-          checked={ruleset.current.keep_english_audio_only}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_english_audio_only: checked })}
+          label="Keep only preferred audio languages"
+          checked={ruleset.current.keep_only_preferred_audio_languages}
+          onChange={(checked) => onChange({ ...ruleset.current, keep_only_preferred_audio_languages: checked })}
         />
         <ToggleField
           label="Keep forced subtitles"
@@ -344,37 +410,34 @@ function RulesetEditor({
           onChange={(checked) => onChange({ ...ruleset.current, keep_forced_subtitles: checked })}
         />
         <ToggleField
-          label="Keep one full English subtitle"
-          checked={ruleset.current.keep_one_full_english_subtitle}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_one_full_english_subtitle: checked })}
+          label="Keep one full preferred subtitle"
+          checked={ruleset.current.keep_one_full_preferred_subtitle}
+          onChange={(checked) => onChange({ ...ruleset.current, keep_one_full_preferred_subtitle: checked })}
         />
         <ToggleField
-          label="Preserve surround"
-          checked={ruleset.current.preserve_surround}
-          onChange={(checked) => onChange({ ...ruleset.current, preserve_surround: checked })}
+          label="Drop other subtitles"
+          checked={ruleset.current.drop_other_subtitles}
+          onChange={(checked) => onChange({ ...ruleset.current, drop_other_subtitles: checked })}
         />
       </div>
 
-      <CollapsibleSection title="Advanced options" subtitle="Only change these if you need different handling.">
-        <div className="settings-rules-fields">
+      <CollapsibleSection title="Advanced options" subtitle="Preservation controls for higher-end audio and stricter subtitle handling.">
+        <div className="settings-rules-toggles">
           <ToggleField
-            label="Preserve Atmos"
+            label="Preserve surround audio"
+            checked={ruleset.current.preserve_surround}
+            onChange={(checked) => onChange({ ...ruleset.current, preserve_surround: checked })}
+          />
+          <ToggleField
+            label="Preserve 7.1 audio"
+            checked={ruleset.current.preserve_seven_one}
+            onChange={(checked) => onChange({ ...ruleset.current, preserve_seven_one: checked })}
+          />
+          <ToggleField
+            label="Preserve Atmos-capable audio"
             checked={ruleset.current.preserve_atmos}
             onChange={(checked) => onChange({ ...ruleset.current, preserve_atmos: checked })}
           />
-          <label className="field">
-            <span>4K handling</span>
-            <select
-              value={ruleset.current.four_k_mode}
-              onChange={(event) => onChange({ ...ruleset.current, four_k_mode: event.target.value })}
-            >
-              {FOUR_K_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
         </div>
       </CollapsibleSection>
 
@@ -383,10 +446,60 @@ function RulesetEditor({
           Use defaults
         </button>
         <button className="button button-primary button-small" type="button" onClick={onSave} disabled={saving || !isDirty}>
-          {saving ? "Saving…" : `Save ${rulesetKey === "movies" ? "movies" : "TV"} rules`}
+          {saving ? "Saving…" : `Save ${label.toLowerCase()} rules`}
         </button>
       </div>
     </div>
+  );
+}
+
+function LanguageListField({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: string[];
+  onChange: (value: string[]) => void;
+}) {
+  return (
+    <label className="field">
+      <span>{label}</span>
+      <input
+        aria-label={label}
+        value={value.join(", ")}
+        onChange={(event) => onChange(parseLanguageList(event.target.value))}
+        placeholder="eng, jpn"
+      />
+      <div className="settings-language-pills" aria-hidden="true">
+        {(value.length > 0 ? value : ["None selected"]).map((item) => (
+          <span key={item} className="settings-language-pill">
+            {item}
+          </span>
+        ))}
+      </div>
+      <div className="settings-language-shortcuts">
+        {COMMON_LANGUAGE_OPTIONS.map((language) => {
+          const active = value.includes(language);
+          return (
+            <button
+              key={language}
+              className={`button button-small ${active ? "button-primary" : "button-secondary"}`}
+              type="button"
+              onClick={() => {
+                if (active) {
+                  onChange(value.filter((item) => item !== language));
+                  return;
+                }
+                onChange([...value, language]);
+              }}
+            >
+              {language}
+            </button>
+          );
+        })}
+      </div>
+    </label>
   );
 }
 
@@ -405,4 +518,72 @@ function ToggleField({
       <span>{label}</span>
     </label>
   );
+}
+
+function isFourKRuleset(rulesetKey: RulesetKey) {
+  return rulesetKey === "movies_4k" || rulesetKey === "tv_4k";
+}
+
+function parseLanguageList(raw: string) {
+  return raw
+    .split(",")
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean);
+}
+
+function clampPercentage(raw: string, fallback: number) {
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.min(100, Math.round(parsed)));
+}
+
+function summariseRuleset(values: ProcessingRuleValues) {
+  const audioSummary = values.keep_only_preferred_audio_languages
+    ? `${formatLanguageList(values.preferred_audio_languages)} audio only`
+    : `Keep ${formatLanguageList(values.preferred_audio_languages)} plus others`;
+  const subtitleSummary = values.drop_other_subtitles
+    ? `${values.keep_forced_subtitles ? "forced" : "no forced"} + ${values.keep_one_full_preferred_subtitle ? "one preferred full subtitle" : "no preferred full subtitle"}`
+    : "Keep additional subtitles";
+  const videoSummary =
+    values.handling_mode === "transcode"
+      ? `${formatQualityMode(values.target_quality_mode)} transcode, max ${values.max_allowed_video_reduction_percent}% video reduction`
+      : values.handling_mode === "strip_only"
+        ? "Strip bloat only, keep video untouched"
+        : "Preserve video stream";
+
+  return {
+    title: `${formatHandlingMode(values.handling_mode)} • ${values.target_video_codec.toUpperCase()} / ${values.output_container.toUpperCase()}`,
+    body: `${audioSummary}. Subtitles: ${subtitleSummary}. ${videoSummary}.`,
+  };
+}
+
+function formatLanguageList(value: string[]) {
+  if (value.length === 0) {
+    return "preferred";
+  }
+  return value.join(", ");
+}
+
+function formatHandlingMode(value: string) {
+  switch (value) {
+    case "strip_only":
+      return "Strip only";
+    case "preserve_video":
+      return "Preserve video";
+    default:
+      return "Transcode";
+  }
+}
+
+function formatQualityMode(value: string) {
+  switch (value) {
+    case "efficient":
+      return "Efficient";
+    case "balanced":
+      return "Balanced";
+    default:
+      return "High-quality";
+  }
 }

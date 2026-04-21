@@ -59,9 +59,21 @@ class VideoCodec(StrEnum):
     VP9 = "vp9"
 
 
+class VideoQualityMode(StrEnum):
+    HIGH_QUALITY = "high_quality"
+    BALANCED = "balanced"
+    EFFICIENT = "efficient"
+
+
 class FourKMode(StrEnum):
     STRIP_ONLY = "strip_only"
     POLICY_CONTROLLED = "policy_controlled"
+
+
+class RuleHandlingMode(StrEnum):
+    TRANSCODE = "transcode"
+    STRIP_ONLY = "strip_only"
+    PRESERVE_VIDEO = "preserve_video"
 
 
 class WorkerType(StrEnum):

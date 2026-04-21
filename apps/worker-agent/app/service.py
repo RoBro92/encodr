@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import inspect
 import stat
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
 
 from app.capabilities import (
@@ -112,11 +114,18 @@ class WorkerAgentService:
 
         job = assignment["job"]
         self.api_client.claim_job(worker_token=session.worker_token, job_id=str(job["job_id"]))
-        result = self.execution_service.execute(
+        progress_reporter = self._build_progress_reporter(
+            worker_token=session.worker_token,
             job_id=str(job["job_id"]),
-            plan_payload=dict(job["plan_payload"]),
-            media_payload=dict(job["media_payload"]),
         )
+        execute_kwargs = {
+            "job_id": str(job["job_id"]),
+            "plan_payload": dict(job["plan_payload"]),
+            "media_payload": dict(job["media_payload"]),
+        }
+        if "progress_callback" in inspect.signature(self.execution_service.execute).parameters:
+            execute_kwargs["progress_callback"] = progress_reporter
+        result = self.execution_service.execute(**execute_kwargs)
         response = self.api_client.submit_job_result(
             worker_token=session.worker_token,
             job_id=str(job["job_id"]),
@@ -126,3 +135,38 @@ class WorkerAgentService:
             },
         )
         return response
+
+    def _build_progress_reporter(self, *, worker_token: str, job_id: str):
+        last_sent_at: datetime | None = None
+        last_percent: int | None = None
+
+        def report(update) -> None:
+            nonlocal last_sent_at, last_percent
+            now = datetime.now(timezone.utc)
+            current_percent = int(update.percent) if update.percent is not None else None
+            should_send = (
+                last_sent_at is None
+                or update.stage != "encoding"
+                or current_percent is None
+                or last_percent is None
+                or current_percent >= last_percent + 2
+                or (now - last_sent_at).total_seconds() >= 2
+            )
+            if not should_send:
+                return
+            self.api_client.report_job_progress(
+                worker_token=worker_token,
+                job_id=job_id,
+                payload={
+                    "stage": update.stage,
+                    "percent": update.percent,
+                    "out_time_seconds": update.out_time_seconds,
+                    "fps": update.fps,
+                    "speed": update.speed,
+                    "runtime_summary": build_runtime_summary(self.settings),
+                },
+            )
+            last_sent_at = now
+            last_percent = current_percent
+
+        return report

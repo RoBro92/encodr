@@ -11,11 +11,13 @@ from encodr_core.config.base import (
     FourKMode,
     LanguageCode,
     LanguageListModel,
+    NonNegativeInt,
     NonEmptyString,
     OutputContainer,
     PolicyDecision,
     PositiveInt,
     VideoCodec,
+    VideoQualityMode,
 )
 from encodr_core.config.errors import ConfigError, ConfigErrorDetail
 from encodr_core.config.policy import PolicyConfig
@@ -26,11 +28,15 @@ class ProfileSubtitleRules(LanguageListModel):
     keep_forced_languages: list[LanguageCode] | None = None
     keep_commentary: bool | None = None
     keep_hearing_impaired: bool | None = None
+    keep_one_full_preferred_subtitle: bool | None = None
+    drop_other_subtitles: bool | None = None
 
 
 class ProfileAudioRules(LanguageListModel):
     keep_languages: list[LanguageCode] | None = None
+    keep_only_preferred_languages: bool | None = None
     preserve_best_surround: bool | None = None
+    preserve_seven_one: bool | None = None
     preserve_atmos_capable: bool | None = None
     preferred_codecs: list[NonEmptyString] | None = None
     allow_commentary: bool | None = None
@@ -41,15 +47,20 @@ class ProfileNonFourKVideoRules(ConfigModel):
     decision_order: list[PolicyDecision] | None = None
     preferred_codec: VideoCodec | None = None
     allow_transcode: bool | None = None
+    quality_mode: VideoQualityMode | None = None
+    max_video_reduction_percent: NonNegativeInt | None = None
     max_video_bitrate_mbps: PositiveInt | None = None
     max_width: PositiveInt | None = None
 
 
 class ProfileFourKVideoRules(ConfigModel):
     mode: FourKMode | None = None
+    preferred_codec: VideoCodec | None = None
     preserve_original_video: bool | None = None
     preserve_original_audio: bool | None = None
     allow_transcode: bool | None = None
+    quality_mode: VideoQualityMode | None = None
+    max_video_reduction_percent: NonNegativeInt | None = None
     remove_non_english_audio: bool | None = None
     remove_non_english_subtitles: bool | None = None
 
@@ -109,4 +120,3 @@ def validate_policy_profile_references(
             "Policy references profile names that are not defined in the profiles directory.",
             details=missing_details,
         )
-

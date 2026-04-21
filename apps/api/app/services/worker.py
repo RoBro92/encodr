@@ -13,7 +13,7 @@ from app.schemas.worker import HealthStatus
 from app.services.audit import AuditService
 from app.services.errors import ApiAuthenticationError, ApiConflictError, ApiNotFoundError
 from encodr_core.config import ConfigBundle
-from encodr_core.execution import ExecutionResult
+from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
 from encodr_core.planning import ProcessingPlan
 from encodr_db.models import (
     AuditEventType,
@@ -523,6 +523,45 @@ class WorkerService:
             "job_id": job.id,
             "final_status": job.status.value,
             "completed_at": job.completed_at,
+        }
+
+    def report_job_progress(
+        self,
+        session: Session,
+        *,
+        worker: Worker,
+        job_id: str,
+        stage: str,
+        percent: float | None,
+        out_time_seconds: float | None,
+        fps: float | None,
+        speed: float | None,
+        runtime_summary: dict | None,
+    ) -> dict[str, object]:
+        repository = JobRepository(session)
+        job = repository.get_by_id(job_id)
+        if job is None:
+            raise ApiNotFoundError("Job could not be found.")
+        if job.assigned_worker_id != worker.id:
+            raise ApiConflictError("Job is not assigned to this worker.")
+        if job.status != JobStatus.RUNNING:
+            raise ApiConflictError("Only running jobs can report progress.")
+        repository.record_progress(
+            job,
+            update=ExecutionProgressUpdate(
+                stage=stage,
+                percent=percent,
+                out_time_seconds=out_time_seconds,
+                fps=fps,
+                speed=speed,
+                updated_at=datetime.now(timezone.utc),
+            ),
+        )
+        if runtime_summary is not None:
+            worker.runtime_payload = runtime_summary
+        return {
+            "job_id": job.id,
+            "updated_at": job.progress_updated_at or datetime.now(timezone.utc),
         }
 
     def list_worker_inventory(

@@ -63,6 +63,8 @@ class VideoPlan(ConfigModel):
     preserve_original: bool
     target_codec: str | None = None
     transcode_required: bool = False
+    quality_mode: str | None = None
+    max_allowed_video_reduction_percent: int | None = None
 
 
 class ContainerPlan(ConfigModel):
@@ -118,4 +120,3 @@ class ProcessingPlan(ConfigModel):
     confidence: ConfidenceLevel
     is_already_compliant: bool
     should_treat_as_protected: bool
-

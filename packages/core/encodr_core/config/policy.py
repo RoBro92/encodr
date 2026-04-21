@@ -9,11 +9,13 @@ from encodr_core.config.base import (
     FourKMode,
     LanguageCode,
     LanguageListModel,
+    NonNegativeInt,
     NonEmptyString,
     OutputContainer,
     PolicyDecision,
     PositiveInt,
     VideoCodec,
+    VideoQualityMode,
     deduplicate_preserving_order,
 )
 
@@ -36,6 +38,8 @@ class SubtitleRules(LanguageListModel):
     keep_forced_languages: list[LanguageCode] = Field(min_length=1)
     keep_commentary: bool = False
     keep_hearing_impaired: bool = True
+    keep_one_full_preferred_subtitle: bool = True
+    drop_other_subtitles: bool = True
 
     @field_validator("keep_languages", "keep_forced_languages")
     @classmethod
@@ -45,7 +49,9 @@ class SubtitleRules(LanguageListModel):
 
 class AudioRules(LanguageListModel):
     keep_languages: list[LanguageCode] = Field(min_length=1)
+    keep_only_preferred_languages: bool = True
     preserve_best_surround: bool = True
+    preserve_seven_one: bool = True
     preserve_atmos_capable: bool = True
     preferred_codecs: list[NonEmptyString] = Field(min_length=1)
     allow_commentary: bool = False
@@ -61,6 +67,8 @@ class NonFourKVideoRules(ConfigModel):
     decision_order: list[PolicyDecision] = Field(min_length=1)
     preferred_codec: VideoCodec = VideoCodec.HEVC
     allow_transcode: bool = True
+    quality_mode: VideoQualityMode = VideoQualityMode.HIGH_QUALITY
+    max_video_reduction_percent: NonNegativeInt = 35
     max_video_bitrate_mbps: PositiveInt
     max_width: PositiveInt
 
@@ -83,9 +91,12 @@ class NonFourKVideoRules(ConfigModel):
 
 class FourKVideoRules(ConfigModel):
     mode: FourKMode = FourKMode.STRIP_ONLY
+    preferred_codec: VideoCodec = VideoCodec.HEVC
     preserve_original_video: bool = True
     preserve_original_audio: bool = True
     allow_transcode: bool = False
+    quality_mode: VideoQualityMode = VideoQualityMode.HIGH_QUALITY
+    max_video_reduction_percent: NonNegativeInt = 20
     remove_non_english_audio: bool = True
     remove_non_english_subtitles: bool = True
 
@@ -168,4 +179,3 @@ class PolicyConfig(ConfigModel):
         if isinstance(value, str):
             return value.strip()
         return value
-
