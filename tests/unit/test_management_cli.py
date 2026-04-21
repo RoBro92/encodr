@@ -448,6 +448,9 @@ def test_local_checkout_uses_compose_override_for_dev_data_volumes(repo_root: Pa
 def test_encodr_wrapper_prefers_managed_cli_venv(repo_root: Path) -> None:
     wrapper = (repo_root / "encodr").read_text(encoding="utf-8")
 
+    assert 'while [[ -L "${SCRIPT_PATH}" ]]; do' in wrapper
+    assert 'SCRIPT_PATH="$(readlink "${SCRIPT_PATH}")"' in wrapper
+    assert 'ROOT_DIR="$(cd "$(dirname "${SCRIPT_PATH}")" && pwd)"' in wrapper
     assert 'CLI_VENV_PYTHON="${ROOT_DIR}/.runtime/cli-venv/bin/python"' in wrapper
     assert 'if [[ -x "${CLI_VENV_PYTHON}" ]]; then' in wrapper
     assert 'exec "${CLI_VENV_PYTHON}" "${ROOT_DIR}/encodr_cli.py" "$@"' in wrapper
