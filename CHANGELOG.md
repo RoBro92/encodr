@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.2 - 2026-04-21
+
+This release focuses on intelligent processing policy, progress visibility, and worker execution truth.
+
+- expanded processing rules into four real persisted rulesets:
+  - Movies
+  - Movies 4K
+  - TV
+  - TV 4K
+- added richer rules controls for:
+  - preferred audio and subtitle languages
+  - surround / 7.1 / Atmos preservation
+  - handling mode
+  - codec and container
+  - video-only compression safety thresholds
+- made compression safety depend on video reduction only, excluding savings from stripping audio and subtitles
+- added real per-job ffmpeg progress capture and surfaced it through the Jobs API and UI
+- added job progress and savings persistence fields plus the supporting database migration
+- improved local and remote worker execution parity so both paths report video-only savings consistently
+- hardened worker execution/runtime reporting and capability truth around progress, failure reporting, and hardware-path checks
+- validated the worker and planning flows with a local-only scenario-driven media harness covering:
+  - dry run
+  - planning
+  - local execution
+  - remote execution
+  - manual review
+  - corruption and odd-metadata failure handling
+  - compression-threshold safety behaviour
+
 ## Unreleased / Internal `0.3.0`
 
 Initial internal release line covering:
