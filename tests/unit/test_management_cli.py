@@ -260,6 +260,55 @@ def test_command_mount_setup_validation_mode_checks_target_directory(
     assert "Readable from LXC: yes" in output
 
 
+def test_command_addhost_updates_env_and_recreates_stack(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / ".env").write_text(
+        "PROJECT_NAME=encodr\nENCODR_UI_ALLOWED_HOSTS=localhost,127.0.0.1\n",
+        encoding="utf-8",
+    )
+
+    recorded: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs):
+        recorded.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = encodr_cli.command_addhost(
+        argparse.Namespace(project_root=str(project_root), host="encodr.stonewallmedia.co.uk"),
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert "Added encodr.stonewallmedia.co.uk to ENCODR_UI_ALLOWED_HOSTS." in output
+    env_contents = (project_root / ".env").read_text(encoding="utf-8")
+    assert "ENCODR_UI_ALLOWED_HOSTS=localhost,127.0.0.1,encodr.stonewallmedia.co.uk" in env_contents
+    assert recorded == [["docker", "compose", "up", "-d", "--force-recreate"]]
+
+
+def test_command_addhost_rejects_invalid_host(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = encodr_cli.command_addhost(
+        argparse.Namespace(project_root=str(project_root), host="https://encodr.example.com"),
+    )
+
+    output = capsys.readouterr().out
+    assert result == 1
+    assert "Host names must not include a scheme, spaces, or commas." in output
+
+
 def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> None:
     install_script = (repo_root / "install.sh").read_text(encoding="utf-8")
 

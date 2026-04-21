@@ -5,6 +5,7 @@ import getpass
 import importlib
 import json
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -111,6 +112,16 @@ def build_parser() -> argparse.ArgumentParser:
     mount_parser.add_argument("--create-dirs", action="store_true", help="Create the target directory inside the LXC if missing.")
     mount_parser.add_argument("--validate-only", action="store_true", help="Only validate current mounted paths.")
     mount_parser.set_defaults(func=command_mount_setup)
+
+    addhost_parser = subparsers.add_parser(
+        "addhost",
+        help="Allow an additional UI host name and recreate the stack.",
+    )
+    addhost_parser.add_argument(
+        "host",
+        help="Host name to allow, for example encodr.example.com.",
+    )
+    addhost_parser.set_defaults(func=command_addhost)
 
     return parser
 
@@ -390,6 +401,40 @@ def command_mount_setup(args: argparse.Namespace) -> int:
     return 0 if readable else 1
 
 
+def command_addhost(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    env_path = project_root / ".env"
+
+    if not env_path.exists():
+        print(f"Encodr environment file was not found at {env_path}.")
+        return 1
+
+    host = normalise_allowed_host(args.host)
+    if host is None:
+        print("Host names must not include a scheme, spaces, or commas.")
+        return 1
+
+    updated_hosts, changed = add_allowed_host_to_env(env_path, host)
+    if not changed:
+        print(f"{host} is already allowed.")
+    else:
+        print(f"Added {host} to ENCODR_UI_ALLOWED_HOSTS.")
+
+    print("Recreating the Encodr stack to apply the updated UI host allowlist...")
+    result = subprocess.run(
+        compose_command(project_root, "up", "-d", "--force-recreate"),
+        cwd=project_root,
+        env=compose_env(project_root),
+        check=False,
+    )
+    if result.returncode != 0:
+        print("Failed to recreate the Encodr stack after updating the host allowlist.")
+        return int(result.returncode)
+
+    print(f"Allowed UI hosts: {', '.join(updated_hosts) if updated_hosts != ['*'] else '*'}")
+    return 0
+
+
 def load_bundle(project_root: str | Path) -> ConfigBundle:
     return load_config_bundle(project_root=Path(project_root).resolve())
 
@@ -412,6 +457,72 @@ def compose_env(project_root: Path) -> dict[str, str]:
     env.setdefault("ENCODR_MEDIA_HOST_PATH", str(media_root))
     env.setdefault("ENCODR_TEMP_HOST_PATH", str(temp_root))
     return env
+
+
+def normalise_allowed_host(value: str) -> str | None:
+    host = value.strip()
+    if not host or "://" in host or "," in host or any(char.isspace() for char in host):
+        return None
+    if host != "*" and not re.fullmatch(r"[A-Za-z0-9._-]+", host):
+        return None
+    return host
+
+
+def add_allowed_host_to_env(env_path: Path, host: str) -> tuple[list[str], bool]:
+    lines = env_path.read_text(encoding="utf-8").splitlines()
+    key = "ENCODR_UI_ALLOWED_HOSTS"
+    current_hosts = ["localhost", "127.0.0.1"]
+    existing_index: int | None = None
+
+    for index, line in enumerate(lines):
+        stripped = line.strip()
+        if stripped.startswith("#") or "=" not in line:
+            continue
+        name, raw_value = line.split("=", 1)
+        if name.strip() != key:
+            continue
+        existing_index = index
+        current_hosts = parse_allowed_hosts(raw_value)
+        break
+
+    updated_hosts = current_hosts if "*" in current_hosts else unique_hosts([*current_hosts, host])
+    updated_line = f"{key}={','.join(updated_hosts)}"
+
+    if existing_index is None:
+        if lines and lines[-1] != "":
+            lines.append("")
+        lines.append(updated_line)
+        env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+        return updated_hosts, True
+
+    if lines[existing_index] == updated_line:
+        return updated_hosts, False
+
+    lines[existing_index] = updated_line
+    env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return updated_hosts, True
+
+
+def parse_allowed_hosts(raw_value: str) -> list[str]:
+    stripped = raw_value.strip()
+    if not stripped:
+        return ["localhost", "127.0.0.1"]
+    if stripped == "*":
+        return ["*"]
+    return unique_hosts(
+        [host.strip() for host in stripped.split(",") if host.strip()],
+    ) or ["localhost", "127.0.0.1"]
+
+
+def unique_hosts(hosts: list[str]) -> list[str]:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for host in hosts:
+        if host in seen:
+            continue
+        seen.add(host)
+        ordered.append(host)
+    return ordered
 
 
 def run_compose(args: argparse.Namespace, compose_args: list[str]) -> int:

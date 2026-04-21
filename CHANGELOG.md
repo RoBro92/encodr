@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased / Internal `0.1.9`
+## Unreleased / Internal `0.2.0`
 
 Initial internal release line covering:
 
@@ -23,6 +23,9 @@ Initial internal release line covering:
 - dry-run planning for single files, selected files, and whole folders
 - folder scan summaries and batch planning/job creation for library paths
 - cleaner setup, dashboard, and navigation copy for day-to-day operator use
+- configurable UI host allowlisting for operator FQDNs
+- `encodr addhost <fqdn>` host-side helper to update `.env` and recreate the stack
+- dedicated UI asset folders for future icons and images
 
 Known important limitations:
 
