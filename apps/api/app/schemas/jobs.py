@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from encodr_db.models import Job
 
@@ -18,6 +18,41 @@ class CreateJobRequest(BaseModel):
         if sum(provided) != 1:
             raise ValueError("Exactly one of tracked_file_id or plan_snapshot_id must be provided.")
         return self
+
+
+class CreateBatchJobsRequest(BaseModel):
+    source_path: str | None = None
+    folder_path: str | None = None
+    selected_paths: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "CreateBatchJobsRequest":
+        provided = sum(
+            bool(value)
+            for value in [
+                self.source_path,
+                self.folder_path,
+                self.selected_paths,
+            ]
+        )
+        if provided != 1:
+            raise ValueError("Provide exactly one of source_path, folder_path, or selected_paths.")
+        return self
+
+
+class BatchJobItemResponse(BaseModel):
+    source_path: str
+    status: str
+    message: str | None = None
+    job: "JobDetailResponse | None" = None
+
+
+class BatchJobCreateResponse(BaseModel):
+    scope: str
+    total_files: int
+    created_count: int
+    blocked_count: int
+    items: list[BatchJobItemResponse]
 
 
 class JobSummaryResponse(BaseModel):
@@ -114,3 +149,6 @@ class JobListResponse(BaseModel):
     items: list[JobSummaryResponse]
     limit: int | None = None
     offset: int = 0
+
+
+BatchJobItemResponse.model_rebuild()

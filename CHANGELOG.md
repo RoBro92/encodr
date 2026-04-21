@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased / Internal `0.1.8`
+## Unreleased / Internal `0.1.9`
 
 Initial internal release line covering:
 
@@ -19,6 +19,10 @@ Initial internal release line covering:
 - fresh-install cleanup now removes Encodr Docker containers, networks, local images, and volumes
 - `/temp` mount support for transcode scratch storage
 - storage health now warns when `/media` or `/temp` do not look like real mounted storage
+- folder-first library browsing and mounted root-path selection for Movies and TV
+- dry-run planning for single files, selected files, and whole folders
+- folder scan summaries and batch planning/job creation for library paths
+- cleaner setup, dashboard, and navigation copy for day-to-day operator use
 
 Known important limitations:
 

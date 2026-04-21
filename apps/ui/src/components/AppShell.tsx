@@ -6,11 +6,10 @@ import { APP_ROUTES } from "../lib/utils/routes";
 
 const navigation = [
   { label: "Dashboard", to: APP_ROUTES.dashboard },
-  { label: "Files", to: APP_ROUTES.files },
+  { label: "Library", to: APP_ROUTES.files },
   { label: "Jobs", to: APP_ROUTES.jobs },
-  { label: "Workers", to: APP_ROUTES.workers },
   { label: "Manual Review", to: APP_ROUTES.review },
-  { label: "Reports", to: APP_ROUTES.reports },
+  { label: "Workers", to: APP_ROUTES.workers },
   { label: "System", to: APP_ROUTES.system },
   { label: "Config", to: APP_ROUTES.config },
 ];
@@ -32,10 +31,8 @@ export function AppShell() {
       <aside className="sidebar">
         <div className="brand-panel">
           <p className="section-eyebrow">Encodr</p>
-          <h1 className="brand-title">Operator console</h1>
-          <p className="sidebar-copy">
-            Probe, plan, review, and run jobs with a conservative, auditable workflow.
-          </p>
+          <h1 className="brand-title">Media workflow</h1>
+          <p className="sidebar-copy">Browse folders, review plans, and run jobs.</p>
         </div>
         <nav className="nav-list" aria-label="Primary">
           {navigation.map((item) => (
@@ -60,8 +57,8 @@ export function AppShell() {
       <div className="content-shell">
         <header className="topbar">
           <div>
-            <span className="topbar-title">Operational UI</span>
-            <span className="topbar-subtitle">Internal-only control surface</span>
+            <span className="topbar-title">Encodr</span>
+            <span className="topbar-subtitle">Library, jobs, and review</span>
           </div>
           <div className="topbar-meta">
             <span className="topbar-version">
@@ -107,7 +104,7 @@ export function AppShell() {
         </main>
         <footer className="app-footer">
           <span>Encodr v{runtimeQuery.data?.version ?? __ENCODR_VERSION__}</span>
-          <span>Local operator release line</span>
+          <span>Installed release</span>
         </footer>
       </div>
     </div>

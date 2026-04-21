@@ -111,6 +111,69 @@ export type PlanFileResponse = {
   latest_plan_snapshot: PlanSnapshotDetail;
 };
 
+export type FolderBrowseEntry = {
+  name: string;
+  path: string;
+  entry_type: string;
+  is_video: boolean;
+};
+
+export type FolderBrowseResponse = {
+  root_path: string;
+  current_path: string;
+  parent_path: string | null;
+  entries: FolderBrowseEntry[];
+};
+
+export type FolderScanSummary = {
+  folder_path: string;
+  root_path: string;
+  directory_count: number;
+  direct_directory_count: number;
+  video_file_count: number;
+  likely_show_count: number;
+  likely_season_count: number;
+  likely_episode_count: number;
+  likely_film_count: number;
+  files: FolderBrowseEntry[];
+};
+
+export type DryRunItem = {
+  source_path: string;
+  file_name: string;
+  action: string;
+  confidence: string;
+  requires_review: boolean;
+  is_protected: boolean;
+  reason_codes: string[];
+  warning_codes: string[];
+  selected_audio_stream_indices: number[];
+  selected_subtitle_stream_indices: number[];
+};
+
+export type DryRunBatchResponse = {
+  mode: string;
+  scope: string;
+  total_files: number;
+  protected_count: number;
+  review_count: number;
+  actions: CountByValue[];
+  items: DryRunItem[];
+};
+
+export type BatchPlanItem = {
+  tracked_file: FileSummary;
+  latest_probe_snapshot: ProbeSnapshotDetail;
+  latest_plan_snapshot: PlanSnapshotDetail;
+};
+
+export type BatchPlanResponse = {
+  scope: string;
+  total_files: number;
+  actions: CountByValue[];
+  items: BatchPlanItem[];
+};
+
 export type JobSummary = {
   id: string;
   tracked_file_id: string;
@@ -154,6 +217,21 @@ export type JobListResponse = {
   items: JobSummary[];
   limit: number | null;
   offset: number;
+};
+
+export type BatchJobItem = {
+  source_path: string;
+  status: string;
+  message: string | null;
+  job: JobDetail | null;
+};
+
+export type BatchJobCreateResponse = {
+  scope: string;
+  total_files: number;
+  created_count: number;
+  blocked_count: number;
+  items: BatchJobItem[];
 };
 
 export type BinaryStatus = {
@@ -507,6 +585,12 @@ export type EffectiveConfig = {
   sources: Record<string, ConfigSourceFile>;
 };
 
+export type LibraryRoots = {
+  media_root: string;
+  movies_root: string | null;
+  tv_root: string | null;
+};
+
 export type LoginPayload = {
   username: string;
   password: string;
@@ -516,10 +600,18 @@ export type ProbeOrPlanPayload = {
   source_path: string;
 };
 
+export type FileSelectionPayload = {
+  source_path?: string;
+  folder_path?: string;
+  selected_paths?: string[];
+};
+
 export type CreateJobPayload = {
   tracked_file_id?: string;
   plan_snapshot_id?: string;
 };
+
+export type CreateBatchJobsPayload = FileSelectionPayload;
 
 export type CountByValue = {
   value: string;

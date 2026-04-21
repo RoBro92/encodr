@@ -49,7 +49,8 @@ def create_test_api_context(
     *,
     repo_root: Path,
     session_factory: sessionmaker,
-    auth_secret: str = "test-auth-secret-with-sufficient-length",
+    auth_secret: str | None = None,
+    worker_registration_secret: str | None = None,
     bundle: ConfigBundle | None = None,
     worker_execution_service: Any | None = None,
 ) -> ApiTestContext:
@@ -58,8 +59,19 @@ def create_test_api_context(
 
     import os
 
+    resolved_auth_secret = auth_secret or os.environ.get(
+        "ENCODR_AUTH_SECRET",
+        "test-auth-secret-with-sufficient-length",
+    )
+    resolved_worker_secret = worker_registration_secret or os.environ.get(
+        "ENCODR_WORKER_REGISTRATION_SECRET",
+        "test-worker-registration-secret-with-sufficient-length",
+    )
+
     old_secret = os.environ.get("ENCODR_AUTH_SECRET")
-    os.environ["ENCODR_AUTH_SECRET"] = auth_secret
+    old_worker_secret = os.environ.get("ENCODR_WORKER_REGISTRATION_SECRET")
+    os.environ["ENCODR_AUTH_SECRET"] = resolved_auth_secret
+    os.environ["ENCODR_WORKER_REGISTRATION_SECRET"] = resolved_worker_secret
     try:
         with import_api_module("app.main") as app_main:
             app = app_main.create_app(
@@ -73,6 +85,10 @@ def create_test_api_context(
             os.environ.pop("ENCODR_AUTH_SECRET", None)
         else:
             os.environ["ENCODR_AUTH_SECRET"] = old_secret
+        if old_worker_secret is None:
+            os.environ.pop("ENCODR_WORKER_REGISTRATION_SECRET", None)
+        else:
+            os.environ["ENCODR_WORKER_REGISTRATION_SECRET"] = old_worker_secret
 
     return ApiTestContext(client=client, session_factory=session_factory, bundle=bundle, app=app)
 

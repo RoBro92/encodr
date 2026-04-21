@@ -315,6 +315,9 @@ def test_bootstrap_script_creates_runtime_data_and_temp_subdir(repo_root: Path) 
     assert 'mkdir -p /temp /media' in bootstrap_script
     assert '$ROOT_DIR/.runtime/temp' in bootstrap_script
     assert '$ROOT_DIR/.runtime/media' in bootstrap_script
+    assert "set_local_dev_defaults" in bootstrap_script
+    assert 'replace_line(env_path, "ENCODR_ENV", "development")' in bootstrap_script
+    assert 'replace_line(app_config_path, "environment", "development")' in bootstrap_script
 
 
 def test_docker_compose_mounts_temp_workspace_into_api_and_worker(repo_root: Path) -> None:
@@ -339,8 +342,10 @@ def test_example_configs_use_temp_for_transcode_scratch(repo_root: Path) -> None
     worker_config = (repo_root / "config" / "workers.example.yaml").read_text(encoding="utf-8")
     env_example = (repo_root / ".env.example").read_text(encoding="utf-8")
 
+    assert "environment: production" in app_config
     assert "scratch_dir: /temp" in app_config
     assert "scratch_dir: /temp" in worker_config
+    assert "ENCODR_ENV=production" in env_example
     assert "ENCODR_TEMP_HOST_PATH=/temp" in env_example
 
 

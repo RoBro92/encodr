@@ -4,7 +4,6 @@ import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
-import { PathActionForm } from "../../components/PathActionForm";
 import { SectionCard } from "../../components/SectionCard";
 import { StatCard } from "../../components/StatCard";
 import { StatusBadge } from "../../components/StatusBadge";
@@ -25,8 +24,6 @@ export function DashboardPage() {
   const workerQuery = useWorkerStatusQuery();
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
-  const probeMutation = useProbeFileMutation();
-  const planMutation = usePlanFileMutation();
   const runOnceMutation = useRunWorkerOnceMutation();
 
   const error =
@@ -66,8 +63,8 @@ export function DashboardPage() {
     <div className="page-stack">
       <PageHeader
         eyebrow="Dashboard"
-        title="Operational overview"
-        description="A concise summary of tracked files, persisted outcomes, local worker state, and runtime health."
+        title="Dashboard"
+        description="A quick view of files, jobs, review items, and storage."
         actions={
           <button
             className="button button-primary"
@@ -80,12 +77,6 @@ export function DashboardPage() {
         }
       />
 
-      {probeMutation.error instanceof Error ? (
-        <ErrorPanel title="Probe request failed" message={probeMutation.error.message} />
-      ) : null}
-      {planMutation.error instanceof Error ? (
-        <ErrorPanel title="Plan request failed" message={planMutation.error.message} />
-      ) : null}
       {runOnceMutation.error instanceof Error ? (
         <ErrorPanel title="Worker run failed" message={runOnceMutation.error.message} />
       ) : null}
@@ -100,40 +91,30 @@ export function DashboardPage() {
       </section>
 
       <section className="dashboard-grid">
-        <SectionCard title="Quick actions" subtitle="Operator-friendly entry points for common tasks.">
-          <div className="card-stack">
-            <PathActionForm
-              label="Probe source path"
-              placeholder="/media/Movies/Example Film (2024).mkv"
-              submitLabel="Probe file"
-              submittingLabel="Probing…"
-              onSubmit={async (sourcePath) => {
-                await probeMutation.mutateAsync({ source_path: sourcePath });
-              }}
-            />
-            <PathActionForm
-              label="Plan source path"
-              placeholder="/media/TV/Example Show/Season 01/Example S01E01.mkv"
-              submitLabel="Plan file"
-              submittingLabel="Planning…"
-              onSubmit={async (sourcePath) => {
-                await planMutation.mutateAsync({ source_path: sourcePath });
-              }}
-            />
-            {runOnceMutation.data ? (
-              <div className="info-strip">
-                <StatusBadge value={runOnceMutation.data.final_status ?? "idle"} />
-                <span>
-                  {runOnceMutation.data.processed_job
-                    ? `Processed job ${runOnceMutation.data.job_id ?? "unknown"}`
-                    : "No pending job was available."}
-                </span>
+        <SectionCard title="Start here" subtitle="Pick the next step.">
+          <div className="list-stack">
+            <Link className="list-row" to={APP_ROUTES.files}>
+              <div>
+                <strong>Open Library</strong>
+                <p>Browse folders, scan a location, and run a dry run.</p>
               </div>
-            ) : null}
+            </Link>
+            <Link className="list-row" to={APP_ROUTES.review}>
+              <div>
+                <strong>Check Manual Review</strong>
+                <p>Approve or hold files that need attention.</p>
+              </div>
+            </Link>
+            <Link className="list-row" to={APP_ROUTES.config}>
+              <div>
+                <strong>Check Setup</strong>
+                <p>Confirm your Movies and TV roots and storage status.</p>
+              </div>
+            </Link>
           </div>
         </SectionCard>
 
-        <SectionCard title="Outcome breakdown" subtitle="Current job and plan outcomes from persisted history.">
+        <SectionCard title="Outcomes" subtitle="Current job and plan results.">
           {analytics ? (
             <div className="card-stack">
               <div className="badge-list">
@@ -152,16 +133,14 @@ export function DashboardPage() {
                   </div>
                 ))}
               </div>
-              <Link className="text-link" to={APP_ROUTES.reports}>
-                Open reporting view
-              </Link>
+              <Link className="text-link" to={APP_ROUTES.reports}>Open reports</Link>
             </div>
           ) : (
             <EmptyState title="No analytics yet" message="Run probe, planning, and jobs to build reporting history." />
           )}
         </SectionCard>
 
-        <SectionCard title="Storage savings" subtitle="Measured output sizes from completed jobs only.">
+        <SectionCard title="Space saved" subtitle="Measured completed jobs only.">
           {analytics ? (
             <div className="card-stack">
               <p className="metric-lead">{formatBytes(analytics.storage.total_space_saved_bytes)} saved</p>
@@ -182,7 +161,7 @@ export function DashboardPage() {
           ) : null}
         </SectionCard>
 
-        <SectionCard title="Local worker" subtitle="Current local-only worker state.">
+        <SectionCard title="Worker" subtitle="Current worker state.">
           {worker ? (
             <div className="card-stack">
               <div className="info-strip">
@@ -205,7 +184,7 @@ export function DashboardPage() {
           )}
         </SectionCard>
 
-        <SectionCard title="Runtime" subtitle="Conservative operational checks from the current API.">
+        <SectionCard title="System" subtitle="Runtime and storage status.">
           {runtime && storage ? (
             <div className="card-stack">
               <div className="info-strip">
@@ -216,7 +195,7 @@ export function DashboardPage() {
                 <div className="info-strip" role="note">
                   <strong>Storage still needs setup.</strong>
                   <span>
-                    Encodr expects your media library at <code>{storage.standard_media_root}</code>. You can sign in and explore the app now, then mount storage when ready.
+                    Encodr expects your media library at <code>{storage.standard_media_root}</code>. You can keep setting up the app, then mount storage when ready.
                   </span>
                 </div>
               ) : null}
@@ -230,7 +209,7 @@ export function DashboardPage() {
           ) : null}
         </SectionCard>
 
-        <SectionCard title="Recent activity" subtitle="Latest completed and failed outcomes from persisted history.">
+        <SectionCard title="Recent activity" subtitle="Latest completed and failed jobs.">
           {recentItems.length > 0 ? (
             <div className="list-stack">
               {recentItems.map((item) => (
@@ -251,7 +230,7 @@ export function DashboardPage() {
           )}
         </SectionCard>
 
-        <SectionCard title="Media policy summary" subtitle="Current insight from latest probe and plan snapshots.">
+        <SectionCard title="Media summary" subtitle="A quick view from recent probe and plan data.">
           {analytics ? (
             <div className="metric-grid">
               <div className="metric-panel">

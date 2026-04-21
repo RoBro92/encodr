@@ -86,6 +86,13 @@ class FilesService:
         probe_snapshot = ProbeSnapshotRepository(session).add_probe_snapshot(tracked_file, media_file)
         return tracked_file, probe_snapshot
 
+    def resolve_source_file(self, source_path: str) -> Path:
+        return self._resolve_source_file(source_path)
+
+    def probe_source_file(self, source_path: str) -> MediaFile:
+        resolved_path = self._resolve_source_file(source_path)
+        return self._probe_media_file(resolved_path)
+
     def _resolve_source_file(self, source_path: str) -> Path:
         raw_path = Path(source_path).expanduser()
         if not raw_path.exists():

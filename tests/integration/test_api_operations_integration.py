@@ -290,6 +290,148 @@ def test_invalid_source_path_handling_is_clear_and_safe(
     assert "does not exist" in response.json()["detail"]
 
 
+def test_folder_browse_and_root_selection_workflows_are_constrained_to_media_mounts(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _, layout, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    movies_dir = layout.source_dir / "Movies"
+    tv_dir = layout.source_dir / "TV"
+    movies_dir.mkdir(parents=True, exist_ok=True)
+    tv_dir.mkdir(parents=True, exist_ok=True)
+    layout.create_source_file("Movies/Example Film (2024).mkv", contents="film")
+
+    browse_response = context.client.get("/api/files/browse", headers=auth.headers)
+    assert browse_response.status_code == 200
+    browse_payload = browse_response.json()
+    assert browse_payload["root_path"] == layout.source_dir.resolve().as_posix()
+    assert {item["name"] for item in browse_payload["entries"]} >= {"Movies", "TV"}
+
+    update_response = context.client.put(
+        "/api/config/setup/library-roots",
+        json={
+            "movies_root": movies_dir.as_posix(),
+            "tv_root": tv_dir.as_posix(),
+        },
+        headers=auth.headers,
+    )
+    assert update_response.status_code == 200
+    assert update_response.json()["movies_root"] == movies_dir.resolve().as_posix()
+    assert update_response.json()["tv_root"] == tv_dir.resolve().as_posix()
+
+    reject_response = context.client.put(
+        "/api/config/setup/library-roots",
+        json={"movies_root": tmp_path.as_posix()},
+        headers=auth.headers,
+    )
+    assert reject_response.status_code == 400
+    assert "configured media mount" in reject_response.json()["detail"]
+
+
+def test_scan_and_dry_run_folder_workflows_return_clear_summary_data(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    episode_path = layout.create_source_file("TV/Example Show/Season 01/Example Show S01E01.mkv", contents="episode")
+    film_path = layout.create_source_file("TV/Example Show/Specials/Bonus Feature.mkv", contents="bonus")
+    media = media_at_path(parse_fixture("tv_episode.json"), episode_path)
+    context.app.state.probe_client_factory = lambda: StaticProbeClient(media)
+
+    scan_response = context.client.post(
+        "/api/files/scan",
+        json={"source_path": (layout.source_dir / "TV").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert scan_response.status_code == 200
+    scan_payload = scan_response.json()
+    assert scan_payload["video_file_count"] == 2
+    assert scan_payload["likely_show_count"] == 1
+    assert scan_payload["likely_season_count"] == 1
+    assert scan_payload["likely_episode_count"] == 1
+    assert {item["path"] for item in scan_payload["files"]} == {episode_path.as_posix(), film_path.as_posix()}
+
+    dry_run_response = context.client.post(
+        "/api/files/dry-run",
+        json={"folder_path": (layout.source_dir / "TV").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert dry_run_response.status_code == 200
+    dry_run_payload = dry_run_response.json()
+    assert dry_run_payload["mode"] == "dry_run"
+    assert dry_run_payload["scope"] == "folder"
+    assert dry_run_payload["total_files"] == 2
+    assert all(item["action"] == "skip" for item in dry_run_payload["items"])
+
+    with session_factory() as session:
+        assert session.query(TrackedFile).count() == 0
+        assert session.query(ProbeSnapshot).count() == 0
+        assert session.query(PlanSnapshot).count() == 0
+
+
+def test_batch_plan_and_job_creation_from_folder_persist_results_without_bypassing_review(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    film_path = layout.create_source_file("Movies/Example Film (2024).mkv", contents="film")
+    review_path = layout.create_source_file("Movies/Needs Review (2024).mkv", contents="review")
+
+    class MappingProbeClient:
+        def __init__(self) -> None:
+            self.media_map = {
+                film_path.as_posix(): media_at_path(parse_fixture("non4k_remux_languages.json"), film_path),
+                review_path.as_posix(): media_at_path(parse_fixture("no_english_audio.json"), review_path),
+            }
+
+        def probe_file(self, file_path):  # type: ignore[no-untyped-def]
+            return self.media_map[Path(file_path).as_posix()]
+
+    context.app.state.probe_client_factory = lambda: MappingProbeClient()
+
+    plan_response = context.client.post(
+        "/api/files/batch-plan",
+        json={"folder_path": (layout.source_dir / "Movies").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert plan_response.status_code == 200
+    plan_payload = plan_response.json()
+    assert plan_payload["scope"] == "folder"
+    assert plan_payload["total_files"] == 2
+    assert {item["latest_plan_snapshot"]["action"] for item in plan_payload["items"]} == {"manual_review", "remux"}
+
+    job_response = context.client.post(
+        "/api/jobs/batch",
+        json={"folder_path": (layout.source_dir / "Movies").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert job_response.status_code == 201
+    job_payload = job_response.json()
+    assert job_payload["scope"] == "folder"
+    assert job_payload["total_files"] == 2
+    assert job_payload["created_count"] == 1
+    assert job_payload["blocked_count"] == 1
+    assert {item["status"] for item in job_payload["items"]} == {"created", "blocked"}
+
+    with session_factory() as session:
+        assert session.query(TrackedFile).count() == 2
+        assert session.query(PlanSnapshot).count() >= 2
+        assert session.query(Job).count() == 1
+
+
 def build_context(
     tmp_path: Path,
     repo_root: Path,

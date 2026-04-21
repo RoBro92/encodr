@@ -1,6 +1,6 @@
 app:
   name: encodr
-  environment: development
+  environment: production
   log_level: INFO
   timezone: Europe/London
   data_dir: /data

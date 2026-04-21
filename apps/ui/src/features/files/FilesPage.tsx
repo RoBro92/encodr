@@ -1,252 +1,367 @@
-import { Link, useParams } from "react-router-dom";
-import { useMemo, useState } from "react";
+import { useState } from "react";
+import { Link } from "react-router-dom";
 
-import { DataTable } from "../../components/DataTable";
+import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
-import { KeyValueList } from "../../components/KeyValueList";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
-import { PathActionForm } from "../../components/PathActionForm";
-import { PayloadViewer } from "../../components/PayloadViewer";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
-import { useCreateJobMutation, useFileDetailQuery, useFilesQuery, useLatestPlanQuery, useLatestProbeQuery, usePlanFileMutation, useProbeFileMutation } from "../../lib/api/hooks";
-import { formatBytes, formatDateTime, formatRelativeBoolean } from "../../lib/utils/format";
+import {
+  useBatchPlanMutation,
+  useCreateBatchJobsMutation,
+  useDryRunMutation,
+  useLibraryRootsQuery,
+  useScanFolderMutation,
+} from "../../lib/api/hooks";
 import { APP_ROUTES } from "../../lib/utils/routes";
+import { titleCase } from "../../lib/utils/format";
 
 export function FilesPage() {
-  const { fileId } = useParams();
-  const [lifecycleState, setLifecycleState] = useState("");
-  const [complianceState, setComplianceState] = useState("");
-  const [pathSearch, setPathSearch] = useState("");
-  const [protectedOnly, setProtectedOnly] = useState("");
-  const [is4k, setIs4k] = useState("");
+  const [pickerOpen, setPickerOpen] = useState(false);
+  const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
+  const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
 
-  const filters = useMemo(
-    () => ({
-      lifecycle_state: lifecycleState || undefined,
-      compliance_state: complianceState || undefined,
-      path_search: pathSearch || undefined,
-      protected_only: protectedOnly === "" ? undefined : protectedOnly === "true",
-      is_4k: is4k === "" ? undefined : is4k === "true",
-      limit: 100,
-    }),
-    [complianceState, is4k, lifecycleState, pathSearch, protectedOnly],
-  );
+  const rootsQuery = useLibraryRootsQuery();
+  const scanMutation = useScanFolderMutation();
+  const dryRunMutation = useDryRunMutation();
+  const batchPlanMutation = useBatchPlanMutation();
+  const batchJobsMutation = useCreateBatchJobsMutation();
 
-  const filesQuery = useFilesQuery(filters);
-  const detailQuery = useFileDetailQuery(fileId);
-  const latestProbeQuery = useLatestProbeQuery(detailQuery.data?.latest_probe_snapshot_id ? fileId : undefined);
-  const latestPlanQuery = useLatestPlanQuery(detailQuery.data?.latest_plan_snapshot_id ? fileId : undefined);
-  const probeMutation = useProbeFileMutation();
-  const planMutation = usePlanFileMutation();
-  const createJobMutation = useCreateJobMutation();
-
-  const queryError =
-    filesQuery.error ?? detailQuery.error ?? latestProbeQuery.error ?? latestPlanQuery.error;
-
-  if (filesQuery.isLoading) {
-    return <LoadingBlock label="Loading files" />;
+  if (rootsQuery.isLoading) {
+    return <LoadingBlock label="Loading library" />;
   }
 
-  if (queryError instanceof Error) {
-    return <ErrorPanel title="Unable to load files" message={queryError.message} />;
+  if (rootsQuery.error instanceof Error) {
+    return <ErrorPanel title="Unable to load the library" message={rootsQuery.error.message} />;
   }
 
-  const files = filesQuery.data?.items ?? [];
-  const detail = detailQuery.data;
-  const latestProbe = latestProbeQuery.data;
-  const latestPlan = latestPlanQuery.data;
+  const roots = rootsQuery.data;
+  if (!roots) {
+    return <ErrorPanel title="Library is unavailable" message="The API did not return library roots." />;
+  }
+
+  const scanResult = scanMutation.data;
+  const selectedSet = new Set(selectedPaths);
+  const allSelected = Boolean(scanResult && scanResult.files.length > 0 && selectedPaths.length === scanResult.files.length);
+
+  const activeSelection =
+    selectedPaths.length > 0
+      ? { selected_paths: selectedPaths }
+      : selectedFolder
+        ? { folder_path: selectedFolder }
+        : undefined;
+
+  function togglePath(path: string) {
+    setSelectedPaths((current) =>
+      current.includes(path) ? current.filter((item) => item !== path) : [...current, path],
+    );
+  }
+
+  function selectAllVisible() {
+    if (!scanResult) {
+      return;
+    }
+    setSelectedPaths(scanResult.files.map((item) => item.path));
+  }
+
+  function clearSelection() {
+    setSelectedPaths([]);
+  }
+
+  async function runScan(path: string) {
+    setSelectedFolder(path);
+    setSelectedPaths([]);
+    await scanMutation.mutateAsync({ source_path: path });
+  }
 
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="Files"
-        title="Tracked files"
-        description="Inspect tracked files, filter by current state, and trigger probe or plan tasks by source path."
+        eyebrow="Library"
+        title="Library"
+        description="Browse your mounted folders, scan a location, run a dry run, or create jobs in batches."
       />
 
-      {probeMutation.error instanceof Error ? (
-        <ErrorPanel title="Probe request failed" message={probeMutation.error.message} />
+      {scanMutation.error instanceof Error ? (
+        <ErrorPanel title="Scan failed" message={scanMutation.error.message} />
       ) : null}
-      {planMutation.error instanceof Error ? (
-        <ErrorPanel title="Plan request failed" message={planMutation.error.message} />
+      {dryRunMutation.error instanceof Error ? (
+        <ErrorPanel title="Dry run failed" message={dryRunMutation.error.message} />
       ) : null}
-      {createJobMutation.error instanceof Error ? (
-        <ErrorPanel title="Job creation failed" message={createJobMutation.error.message} />
+      {batchPlanMutation.error instanceof Error ? (
+        <ErrorPanel title="Batch plan failed" message={batchPlanMutation.error.message} />
+      ) : null}
+      {batchJobsMutation.error instanceof Error ? (
+        <ErrorPanel title="Batch job creation failed" message={batchJobsMutation.error.message} />
       ) : null}
 
       <section className="dashboard-grid">
-        <SectionCard title="Probe or plan" subtitle="Submit explicit operator actions by source path.">
-          <div className="card-stack">
-            <PathActionForm
-              label="Probe source path"
-              placeholder="/media/Movies/Example Film (2024).mkv"
-              submitLabel="Probe file"
-              submittingLabel="Probing…"
-              onSubmit={async (sourcePath) => {
-                await probeMutation.mutateAsync({ source_path: sourcePath });
-              }}
-            />
-            <PathActionForm
-              label="Plan source path"
-              placeholder="/media/TV/Example Show/Season 01/Example S01E01.mkv"
-              submitLabel="Plan file"
-              submittingLabel="Planning…"
-              onSubmit={async (sourcePath) => {
-                await planMutation.mutateAsync({ source_path: sourcePath });
-              }}
-            />
+        <SectionCard title="Library roots" subtitle="Use your saved roots or choose another folder under /media.">
+          <div className="list-stack">
+            <div className="list-row">
+              <div>
+                <strong>Movies</strong>
+                <p>{roots.movies_root ?? "Choose this on the Config page."}</p>
+              </div>
+              <div className="section-card-actions">
+                {roots.movies_root ? (
+                  <button className="button button-primary button-small" type="button" onClick={() => void runScan(roots.movies_root!)}>
+                    Scan
+                  </button>
+                ) : (
+                  <Link className="button button-secondary button-small" to={APP_ROUTES.config}>
+                    Set folder
+                  </Link>
+                )}
+              </div>
+            </div>
+            <div className="list-row">
+              <div>
+                <strong>TV</strong>
+                <p>{roots.tv_root ?? "Choose this on the Config page."}</p>
+              </div>
+              <div className="section-card-actions">
+                {roots.tv_root ? (
+                  <button className="button button-primary button-small" type="button" onClick={() => void runScan(roots.tv_root!)}>
+                    Scan
+                  </button>
+                ) : (
+                  <Link className="button button-secondary button-small" to={APP_ROUTES.config}>
+                    Set folder
+                  </Link>
+                )}
+              </div>
+            </div>
+            <div className="section-card-actions">
+              <button className="button button-secondary button-small" type="button" onClick={() => setPickerOpen(true)}>
+                Browse folders
+              </button>
+            </div>
           </div>
         </SectionCard>
 
-        <SectionCard title="Filters" subtitle="Narrow the list using current file state.">
-          <div className="filter-grid">
-            <label className="field">
-              <span>Lifecycle state</span>
-              <input value={lifecycleState} onChange={(event) => setLifecycleState(event.target.value)} placeholder="queued" />
-            </label>
-            <label className="field">
-              <span>Compliance state</span>
-              <input value={complianceState} onChange={(event) => setComplianceState(event.target.value)} placeholder="compliant" />
-            </label>
-            <label className="field">
-              <span>Path search</span>
-              <input value={pathSearch} onChange={(event) => setPathSearch(event.target.value)} placeholder="Example Film" />
-            </label>
-            <label className="field">
-              <span>Protected</span>
-              <select value={protectedOnly} onChange={(event) => setProtectedOnly(event.target.value)}>
-                <option value="">Any</option>
-                <option value="true">Protected only</option>
-                <option value="false">Unprotected only</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>4K</span>
-              <select value={is4k} onChange={(event) => setIs4k(event.target.value)}>
-                <option value="">Any</option>
-                <option value="true">4K only</option>
-                <option value="false">Non-4K only</option>
-              </select>
-            </label>
+        <SectionCard title="Workflow" subtitle="Dry run stays read-only. Batch planning and jobs persist real state.">
+          <div className="card-stack">
+            <div className="metric-grid">
+              <div className="metric-panel">
+                <span className="metric-label">Dry run</span>
+                <strong>Plan only</strong>
+                <span className="metric-subtle">No output files or replacements.</span>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Batch plan</span>
+                <strong>Persist plans</strong>
+                <span className="metric-subtle">Creates tracked file and plan history.</span>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Create jobs</span>
+                <strong>Queue work</strong>
+                <span className="metric-subtle">Manual review still blocks protected items.</span>
+              </div>
+            </div>
           </div>
         </SectionCard>
       </section>
 
-      <section className="two-column-layout">
-        <SectionCard title="Tracked files" subtitle={`${files.length} result${files.length === 1 ? "" : "s"}`}>
-          <DataTable
-            items={files}
-            rowKey={(item) => item.id}
-            empty={<EmptyState title="No tracked files" message="Use probe or plan to create the first tracked file records." />}
-            columns={[
-              {
-                key: "file",
-                header: "File",
-                render: (item) => (
-                  <Link className="table-link" to={APP_ROUTES.fileDetail(item.id)}>
-                    <strong>{item.source_filename}</strong>
-                    <span>{item.source_directory}</span>
-                    {item.requires_review ? (
-                      <span className="badge-row">
-                        <StatusBadge value={item.review_status ?? "open"} />
-                        <span>Open in Manual Review</span>
-                      </span>
-                    ) : null}
-                  </Link>
-                ),
-              },
-              {
-                key: "lifecycle",
-                header: "Lifecycle",
-                render: (item) => <StatusBadge value={item.lifecycle_state} />,
-              },
-              {
-                key: "compliance",
-                header: "Compliance",
-                render: (item) => <StatusBadge value={item.compliance_state} />,
-              },
-              {
-                key: "protection",
-                header: "Protected",
-                render: (item) => (item.is_protected ? "Yes" : "No"),
-              },
-              {
-                key: "updated",
-                header: "Updated",
-                render: (item) => formatDateTime(item.updated_at),
-              },
-            ]}
-          />
-        </SectionCard>
+      <SectionCard
+        title="Scan results"
+        subtitle={scanResult ? scanResult.folder_path : "Choose a folder to scan."}
+        actions={
+          <div className="section-card-actions">
+            <button className="button button-secondary button-small" type="button" onClick={() => setPickerOpen(true)}>
+              Choose folder
+            </button>
+            <Link className="button button-secondary button-small" to={APP_ROUTES.config}>
+              Set roots
+            </Link>
+          </div>
+        }
+      >
+        {scanMutation.isPending ? (
+          <LoadingBlock label="Scanning folder" />
+        ) : scanResult ? (
+          <div className="card-stack">
+            <div className="metric-grid">
+              <div className="metric-panel">
+                <span className="metric-label">Folders</span>
+                <strong>{scanResult.directory_count}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Video files</span>
+                <strong>{scanResult.video_file_count}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Likely films</span>
+                <strong>{scanResult.likely_film_count}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Likely episodes</span>
+                <strong>{scanResult.likely_episode_count}</strong>
+              </div>
+            </div>
 
-        <SectionCard
-          title="File detail"
-          subtitle={detail ? detail.source_filename : "Select a file to inspect its latest probe and plan state."}
-          actions={
-            detail ? (
+            <div className="section-card-actions">
+              <button className="button button-secondary button-small" type="button" onClick={allSelected ? clearSelection : selectAllVisible}>
+                {allSelected ? "Clear selection" : "Select all files"}
+              </button>
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={() => activeSelection && dryRunMutation.mutate(activeSelection)}
+                disabled={!activeSelection || dryRunMutation.isPending}
+              >
+                {dryRunMutation.isPending ? "Running dry run…" : selectedPaths.length > 0 ? "Dry run selected" : "Dry run folder"}
+              </button>
+              <button
+                className="button button-secondary button-small"
+                type="button"
+                onClick={() => activeSelection && batchPlanMutation.mutate(activeSelection)}
+                disabled={!activeSelection || batchPlanMutation.isPending}
+              >
+                {batchPlanMutation.isPending ? "Planning…" : selectedPaths.length > 0 ? "Plan selected" : "Plan folder"}
+              </button>
               <button
                 className="button button-primary button-small"
                 type="button"
-                onClick={() => createJobMutation.mutate({ tracked_file_id: detail.id })}
-                disabled={createJobMutation.isPending}
+                onClick={() => activeSelection && batchJobsMutation.mutate(activeSelection)}
+                disabled={!activeSelection || batchJobsMutation.isPending}
               >
-                {createJobMutation.isPending ? "Creating…" : "Create job from latest plan"}
+                {batchJobsMutation.isPending ? "Creating jobs…" : selectedPaths.length > 0 ? "Create jobs for selected" : "Create jobs for folder"}
               </button>
-            ) : null
-          }
-        >
-          {fileId && detailQuery.isLoading ? (
-            <LoadingBlock label="Loading file detail" />
-          ) : detail ? (
-            <div className="card-stack">
-              <KeyValueList
-                items={[
-                  { label: "Source path", value: detail.source_path },
-                  { label: "Lifecycle state", value: <StatusBadge value={detail.lifecycle_state} /> },
-                  { label: "Compliance state", value: <StatusBadge value={detail.compliance_state} /> },
-                  { label: "Protected", value: formatRelativeBoolean(detail.is_protected) },
-                  { label: "Protected source", value: detail.protected_source ?? "None" },
-                  { label: "Manual review", value: detail.requires_review ? <Link to={APP_ROUTES.reviewDetail(detail.id)}><StatusBadge value={detail.review_status ?? "open"} /></Link> : "Not required" },
-                  { label: "4K", value: formatRelativeBoolean(detail.is_4k) },
-                  { label: "Last observed size", value: formatBytes(detail.last_observed_size) },
-                  { label: "Updated", value: formatDateTime(detail.updated_at) },
-                ]}
-              />
-              {latestPlan ? (
-                <SectionCard title="Latest plan" subtitle={`Action: ${latestPlan.action}`}>
-                  <KeyValueList
-                    items={[
-                      { label: "Action", value: <StatusBadge value={latestPlan.action} /> },
-                      { label: "Confidence", value: <StatusBadge value={latestPlan.confidence} /> },
-                      { label: "Policy version", value: latestPlan.policy_version },
-                      { label: "Profile", value: latestPlan.profile_name ?? "Default policy" },
-                    ]}
-                  />
-                  <PayloadViewer payload={latestPlan.payload} />
-                </SectionCard>
-              ) : null}
-              {latestProbe ? (
-                <SectionCard title="Latest probe" subtitle={latestProbe.format_name ?? "Probe snapshot"}>
-                  <KeyValueList
-                    items={[
-                      { label: "Video streams", value: latestProbe.video_stream_count },
-                      { label: "Audio streams", value: latestProbe.audio_stream_count },
-                      { label: "Subtitle streams", value: latestProbe.subtitle_stream_count },
-                      { label: "4K", value: formatRelativeBoolean(latestProbe.is_4k) },
-                    ]}
-                  />
-                  <PayloadViewer payload={latestProbe.payload} />
-                </SectionCard>
-              ) : null}
             </div>
-          ) : (
-            <EmptyState title="No file selected" message="Choose a file from the list to inspect its latest snapshots." />
-          )}
+
+            <div className="selection-list">
+              {scanResult.files.map((file) => (
+                <label key={file.path} className="selection-row">
+                  <input type="checkbox" checked={selectedSet.has(file.path)} onChange={() => togglePath(file.path)} />
+                  <div>
+                    <strong>{file.name}</strong>
+                    <p>{file.path}</p>
+                  </div>
+                </label>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <EmptyState title="No folder scanned yet" message="Pick a folder from your library roots or browse under /media." />
+        )}
+      </SectionCard>
+
+      {dryRunMutation.data ? (
+        <SectionCard title="Dry run" subtitle="Read-only preview of what Encodr would do.">
+          <div className="card-stack">
+            <div className="metric-grid">
+              <div className="metric-panel">
+                <span className="metric-label">Files</span>
+                <strong>{dryRunMutation.data.total_files}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Review</span>
+                <strong>{dryRunMutation.data.review_count}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Protected</span>
+                <strong>{dryRunMutation.data.protected_count}</strong>
+              </div>
+            </div>
+            <div className="badge-list">
+              {dryRunMutation.data.actions.map((item) => (
+                <div key={item.value} className="metric-pill">
+                  <StatusBadge value={String(item.value)} />
+                  <strong>{item.count}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="list-stack">
+              {dryRunMutation.data.items.map((item) => (
+                <div key={item.source_path} className="list-row">
+                  <div>
+                    <strong>{item.file_name}</strong>
+                    <p>{item.source_path}</p>
+                  </div>
+                  <div className="list-row-meta">
+                    <StatusBadge value={item.action} />
+                    {item.requires_review ? <StatusBadge value="manual_review" /> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
         </SectionCard>
-      </section>
+      ) : null}
+
+      {batchPlanMutation.data ? (
+        <SectionCard title="Saved plans" subtitle="These plans were written to Encodr’s history.">
+          <div className="card-stack">
+            <div className="badge-list">
+              {batchPlanMutation.data.actions.map((item) => (
+                <div key={item.value} className="metric-pill">
+                  <StatusBadge value={String(item.value)} />
+                  <strong>{item.count}</strong>
+                </div>
+              ))}
+            </div>
+            <div className="list-stack">
+              {batchPlanMutation.data.items.map((item) => (
+                <Link key={item.tracked_file.id} className="list-row" to={APP_ROUTES.fileDetail(item.tracked_file.id)}>
+                  <div>
+                    <strong>{item.tracked_file.source_filename}</strong>
+                    <p>{item.tracked_file.source_path}</p>
+                  </div>
+                  <div className="list-row-meta">
+                    <StatusBadge value={item.latest_plan_snapshot.action} />
+                    <span>{titleCase(item.latest_plan_snapshot.confidence)}</span>
+                  </div>
+                </Link>
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+      ) : null}
+
+      {batchJobsMutation.data ? (
+        <SectionCard title="Batch jobs" subtitle="Created jobs are queued. Blocked items still need review or protection approval.">
+          <div className="card-stack">
+            <div className="metric-grid">
+              <div className="metric-panel">
+                <span className="metric-label">Created</span>
+                <strong>{batchJobsMutation.data.created_count}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Blocked</span>
+                <strong>{batchJobsMutation.data.blocked_count}</strong>
+              </div>
+            </div>
+            <div className="list-stack">
+              {batchJobsMutation.data.items.map((item) => (
+                <div key={item.source_path} className="list-row">
+                  <div>
+                    <strong>{item.source_path.split("/").pop()}</strong>
+                    <p>{item.message ?? item.source_path}</p>
+                  </div>
+                  <div className="list-row-meta">
+                    <StatusBadge value={item.status} />
+                    {item.job ? <Link className="text-link" to={APP_ROUTES.jobDetail(item.job.id)}>Open job</Link> : null}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+      ) : null}
+
+      <FolderPickerModal
+        open={pickerOpen}
+        title="Browse library folders"
+        initialPath={roots.movies_root ?? roots.tv_root ?? roots.media_root}
+        onClose={() => setPickerOpen(false)}
+        onSelect={(path) => {
+          setPickerOpen(false);
+          void runScan(path);
+        }}
+      />
     </div>
   );
 }

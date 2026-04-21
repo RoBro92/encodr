@@ -9,19 +9,27 @@ import type {
   AnalyticsStorage,
   AuthTokens,
   BootstrapStatus,
+  BatchPlanResponse,
+  BatchJobCreateResponse,
   CreateJobPayload,
+  CreateBatchJobsPayload,
   CurrentUser,
   EffectiveConfig,
   FileDetail,
   FileListResponse,
+  FileSelectionPayload,
+  FolderBrowseResponse,
+  FolderScanSummary,
   JobDetail,
   JobListResponse,
+  LibraryRoots,
   LoginPayload,
   PlanFileResponse,
   PlanSnapshotDetail,
   ProbeFileResponse,
   ProbeOrPlanPayload,
   ProbeSnapshotDetail,
+  DryRunBatchResponse,
   RecentAnalytics,
   RuntimeStatus,
   StorageStatus,
@@ -103,6 +111,32 @@ export function probeFile(client: ApiClient, payload: ProbeOrPlanPayload): Promi
 
 export function planFile(client: ApiClient, payload: ProbeOrPlanPayload): Promise<PlanFileResponse> {
   return client.request<PlanFileResponse>("/files/plan", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function browseFolder(client: ApiClient, path?: string): Promise<FolderBrowseResponse> {
+  const suffix = path ? `?path=${encodeURIComponent(path)}` : "";
+  return client.request<FolderBrowseResponse>(`/files/browse${suffix}`);
+}
+
+export function scanFolder(client: ApiClient, payload: ProbeOrPlanPayload): Promise<FolderScanSummary> {
+  return client.request<FolderScanSummary>("/files/scan", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function dryRunSelection(client: ApiClient, payload: FileSelectionPayload): Promise<DryRunBatchResponse> {
+  return client.request<DryRunBatchResponse>("/files/dry-run", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function batchPlan(client: ApiClient, payload: FileSelectionPayload): Promise<BatchPlanResponse> {
+  return client.request<BatchPlanResponse>("/files/batch-plan", {
     method: "POST",
     body: JSON.stringify(payload),
   });
@@ -235,6 +269,13 @@ export function createJob(client: ApiClient, payload: CreateJobPayload): Promise
   });
 }
 
+export function createBatchJobs(client: ApiClient, payload: CreateBatchJobsPayload): Promise<BatchJobCreateResponse> {
+  return client.request<BatchJobCreateResponse>("/jobs/batch", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function retryJob(client: ApiClient, jobId: string): Promise<JobDetail> {
   return client.request<JobDetail>(`/jobs/${jobId}/retry`, { method: "POST" });
 }
@@ -269,6 +310,20 @@ export function checkUpdateStatus(client: ApiClient): Promise<UpdateStatus> {
 
 export function getEffectiveConfig(client: ApiClient): Promise<EffectiveConfig> {
   return client.request<EffectiveConfig>("/config/effective");
+}
+
+export function getLibraryRoots(client: ApiClient): Promise<LibraryRoots> {
+  return client.request<LibraryRoots>("/config/setup/library-roots");
+}
+
+export function updateLibraryRoots(
+  client: ApiClient,
+  payload: { movies_root?: string | null; tv_root?: string | null },
+): Promise<LibraryRoots> {
+  return client.request<LibraryRoots>("/config/setup/library-roots", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function getAnalyticsOverview(client: ApiClient): Promise<AnalyticsOverview> {

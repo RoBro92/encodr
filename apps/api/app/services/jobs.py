@@ -72,6 +72,35 @@ class JobsService:
             attempt_count=original_job.attempt_count + 1,
         )
 
+    def create_batch_jobs(
+        self,
+        session: Session,
+        *,
+        planned_targets: list[tuple[str, TrackedFile, PlanSnapshot]],
+    ) -> list[dict[str, object]]:
+        results: list[dict[str, object]] = []
+        for source_path, tracked_file, plan_snapshot in planned_targets:
+            try:
+                job = self.create_job(
+                    session,
+                    tracked_file_id=tracked_file.id,
+                    plan_snapshot_id=plan_snapshot.id,
+                )
+                results.append({
+                    "source_path": source_path,
+                    "status": "created",
+                    "message": None,
+                    "job": job,
+                })
+            except ApiConflictError as error:
+                results.append({
+                    "source_path": source_path,
+                    "status": "blocked",
+                    "message": str(error),
+                    "job": None,
+                })
+        return results
+
     def _resolve_target(
         self,
         session: Session,

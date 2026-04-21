@@ -2,9 +2,12 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import {
   approveReviewItem,
+  batchPlan,
+  browseFolder,
   bootstrapAdmin,
   checkUpdateStatus,
   clearReviewItemProtected,
+  createBatchJobs,
   createJobFromReviewItem,
   disableWorker,
   getAnalyticsDashboard,
@@ -18,6 +21,7 @@ import {
   getBootstrapStatus,
   getEffectiveConfig,
   getFile,
+  getLibraryRoots,
   getJob,
   getLatestPlanSnapshot,
   getLatestProbeSnapshot,
@@ -39,13 +43,16 @@ import {
   logout,
   planFile,
   probeFile,
+  dryRunSelection,
   rejectReviewItem,
   retryJob,
   runWorkerOnce,
+  scanFolder,
   enableWorker,
+  updateLibraryRoots,
 } from "./endpoints";
 import { useSession } from "../../features/auth/AuthProvider";
-import type { CreateJobPayload, LoginPayload, ProbeOrPlanPayload, ReviewDecisionPayload } from "../types/api";
+import type { CreateBatchJobsPayload, CreateJobPayload, FileSelectionPayload, LoginPayload, ProbeOrPlanPayload, ReviewDecisionPayload } from "../types/api";
 
 export function useBootstrapStatusQuery(enabled = true) {
   const { apiClient } = useSession();
@@ -81,6 +88,24 @@ export function useFileDetailQuery(fileId?: string) {
     queryKey: ["files", "detail", fileId],
     queryFn: () => getFile(apiClient, fileId as string),
     enabled: isAuthenticated && Boolean(fileId),
+  });
+}
+
+export function useBrowseFolderQuery(path?: string) {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["library", "browse", path ?? "__root__"],
+    queryFn: () => browseFolder(apiClient, path),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useLibraryRootsQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["config", "library-roots"],
+    queryFn: () => getLibraryRoots(apiClient),
+    enabled: isAuthenticated,
   });
 }
 
@@ -257,6 +282,20 @@ export function useEffectiveConfigQuery() {
   });
 }
 
+export function useUpdateLibraryRootsMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { movies_root?: string | null; tv_root?: string | null }) => updateLibraryRoots(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["config"] }),
+        queryClient.invalidateQueries({ queryKey: ["system"] }),
+      ]);
+    },
+  });
+}
+
 export function useAnalyticsOverviewQuery() {
   const { apiClient, isAuthenticated } = useSession();
   return useQuery({
@@ -345,6 +384,49 @@ export function useCreateJobMutation() {
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
       await queryClient.invalidateQueries({ queryKey: ["files"] });
       await queryClient.invalidateQueries({ queryKey: ["review"] });
+    },
+  });
+}
+
+export function useScanFolderMutation() {
+  const { apiClient } = useSession();
+  return useMutation({
+    mutationFn: (payload: ProbeOrPlanPayload) => scanFolder(apiClient, payload),
+  });
+}
+
+export function useDryRunMutation() {
+  const { apiClient } = useSession();
+  return useMutation({
+    mutationFn: (payload: FileSelectionPayload) => dryRunSelection(apiClient, payload),
+  });
+}
+
+export function useBatchPlanMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: FileSelectionPayload) => batchPlan(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["files"] }),
+        queryClient.invalidateQueries({ queryKey: ["review"] }),
+      ]);
+    },
+  });
+}
+
+export function useCreateBatchJobsMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateBatchJobsPayload) => createBatchJobs(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["files"] }),
+        queryClient.invalidateQueries({ queryKey: ["review"] }),
+      ]);
     },
   });
 }

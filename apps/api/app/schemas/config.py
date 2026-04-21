@@ -85,3 +85,9 @@ class EffectiveConfigResponse(BaseModel):
     workers: list[WorkerDefinitionSummaryResponse]
     profiles: list[ProfileSummaryResponse]
     sources: dict[str, ConfigSourceFileResponse]
+
+
+class LibraryRootsResponse(BaseModel):
+    media_root: str
+    movies_root: str | None = None
+    tv_root: str | None = None

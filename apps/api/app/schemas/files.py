@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.plans import PlanSnapshotDetailResponse, ProbeSnapshotDetailResponse
 from encodr_db.models import TrackedFile
@@ -18,6 +18,89 @@ class FilePathRequest(BaseModel):
         if not cleaned:
             raise ValueError("source_path must not be empty.")
         return cleaned
+
+
+class FileSelectionRequest(BaseModel):
+    source_path: str | None = None
+    folder_path: str | None = None
+    selected_paths: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="after")
+    def validate_scope(self) -> "FileSelectionRequest":
+        provided = sum(
+            bool(value)
+            for value in [
+                self.source_path and self.source_path.strip(),
+                self.folder_path and self.folder_path.strip(),
+                self.selected_paths,
+            ]
+        )
+        if provided != 1:
+            raise ValueError("Provide exactly one of source_path, folder_path, or selected_paths.")
+        return self
+
+
+class FolderBrowseEntryResponse(BaseModel):
+    name: str
+    path: str
+    entry_type: str
+    is_video: bool
+
+
+class FolderBrowseResponse(BaseModel):
+    root_path: str
+    current_path: str
+    parent_path: str | None = None
+    entries: list[FolderBrowseEntryResponse]
+
+
+class FolderScanSummaryResponse(BaseModel):
+    folder_path: str
+    root_path: str
+    directory_count: int
+    direct_directory_count: int
+    video_file_count: int
+    likely_show_count: int
+    likely_season_count: int
+    likely_episode_count: int
+    likely_film_count: int
+    files: list[FolderBrowseEntryResponse]
+
+
+class DryRunItemResponse(BaseModel):
+    source_path: str
+    file_name: str
+    action: str
+    confidence: str
+    requires_review: bool
+    is_protected: bool
+    reason_codes: list[str]
+    warning_codes: list[str]
+    selected_audio_stream_indices: list[int]
+    selected_subtitle_stream_indices: list[int]
+
+
+class DryRunBatchResponse(BaseModel):
+    mode: str = "dry_run"
+    scope: str
+    total_files: int
+    protected_count: int
+    review_count: int
+    actions: list[dict[str, int | str]]
+    items: list[DryRunItemResponse]
+
+
+class BatchPlanItemResponse(BaseModel):
+    tracked_file: TrackedFileSummaryResponse
+    latest_probe_snapshot: ProbeSnapshotDetailResponse
+    latest_plan_snapshot: PlanSnapshotDetailResponse
+
+
+class BatchPlanResponse(BaseModel):
+    scope: str
+    total_files: int
+    actions: list[dict[str, int | str]]
+    items: list[BatchPlanItemResponse]
 
 
 class TrackedFileSummaryResponse(BaseModel):
@@ -106,3 +189,6 @@ class PlanFileResponse(BaseModel):
     tracked_file: TrackedFileSummaryResponse
     latest_probe_snapshot: ProbeSnapshotDetailResponse
     latest_plan_snapshot: PlanSnapshotDetailResponse
+
+
+BatchPlanItemResponse.model_rebuild()

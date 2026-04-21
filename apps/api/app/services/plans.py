@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 from sqlalchemy.orm import Session
 
 from app.services.files import FilesService
@@ -35,3 +37,12 @@ class PlansService:
         )
         TrackedFileRepository(session).update_file_state_from_plan_result(tracked_file, plan)
         return tracked_file, probe_snapshot, plan_snapshot
+
+    def dry_run_file(self, *, source_path: str):
+        media_file = self.files_service.probe_source_file(source_path)
+        plan = build_processing_plan(
+            media_file,
+            self.config_bundle,
+            source_path=Path(source_path).resolve().as_posix(),
+        )
+        return media_file, plan
