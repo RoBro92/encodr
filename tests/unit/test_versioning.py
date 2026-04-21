@@ -4,6 +4,7 @@ from pathlib import Path
 
 import pytest
 
+from encodr_core.config.app import UpdateSettings
 from encodr_shared.update import UpdateCheckSettings, UpdateChecker
 from encodr_shared.versioning import find_project_root, is_version_newer, parse_version, read_version
 
@@ -85,6 +86,36 @@ def test_update_checker_reports_available_update() -> None:
     assert result.download_url == f"https://downloads.example.invalid/encodr-{latest_version}.tar.gz"
 
 
+def test_update_checker_understands_github_release_payload() -> None:
+    latest_version = next_patch_version(CURRENT_VERSION)
+    checker = UpdateChecker(
+        current_version=CURRENT_VERSION,
+        settings=UpdateCheckSettings(
+            enabled=True,
+            metadata_url="https://api.github.com/repos/RoBro92/encodr/releases/latest",
+            channel="internal",
+            timeout_seconds=2,
+        ),
+        fetcher=lambda _url, _timeout: {
+            "tag_name": f"v{latest_version}",
+            "name": f"Encodr v{latest_version}",
+            "body": "Bug fixes for the installer.\nImproved update handling.\nUI polish.",
+            "tarball_url": f"https://api.github.com/repos/RoBro92/encodr/tarball/v{latest_version}",
+            "html_url": f"https://github.com/RoBro92/encodr/releases/tag/v{latest_version}",
+        },
+    )
+
+    result = checker.check_now()
+
+    assert result.status == "ok"
+    assert result.latest_version == latest_version
+    assert result.update_available is True
+    assert result.release_name == f"Encodr v{latest_version}"
+    assert result.release_summary == "Bug fixes for the installer.\nImproved update handling.\nUI polish."
+    assert result.download_url == f"https://api.github.com/repos/RoBro92/encodr/tarball/v{latest_version}"
+    assert result.release_notes_url == f"https://github.com/RoBro92/encodr/releases/tag/v{latest_version}"
+
+
 def test_update_checker_reports_upstream_error() -> None:
     checker = UpdateChecker(
         current_version=CURRENT_VERSION,
@@ -102,3 +133,10 @@ def test_update_checker_reports_upstream_error() -> None:
     assert result.status == "error"
     assert result.update_available is False
     assert result.error == "metadata unavailable"
+
+
+def test_update_settings_migrate_legacy_disabled_defaults() -> None:
+    settings = UpdateSettings(enabled=False, metadata_url=None, channel="internal", check_timeout_seconds=5)
+
+    assert settings.enabled is True
+    assert str(settings.metadata_url) == "https://api.github.com/repos/RoBro92/encodr/releases/latest"

@@ -479,6 +479,9 @@ def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
     assert "--abort-if-exists" in install_script
     assert "specific tagged release instead of the default latest tagged release" in install_script
     assert "Unknown installer option" in install_script
+    assert 'detect_network_ip_addresses()' in install_script
+    assert 'ensure_ui_allowed_hosts_for_network_ips' in install_script
+    assert 'hostname -I' not in install_script
 
 
 def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
@@ -527,6 +530,48 @@ def test_install_script_normalises_host_config_paths_in_env(
     assert f"ENCODR_APP_CONFIG_FILE={tmp_path}/config/app.yaml" in result.stdout
     assert f"ENCODR_POLICY_CONFIG_FILE={tmp_path}/config/policy.yaml" in result.stdout
     assert f"ENCODR_WORKERS_CONFIG_FILE={tmp_path}/config/workers.yaml" in result.stdout
+
+
+def test_install_script_adds_detected_network_ips_to_ui_allowlist(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text(
+        "PROJECT_NAME=encodr\nENCODR_UI_ALLOWED_HOSTS=localhost,127.0.0.1\n",
+        encoding="utf-8",
+    )
+
+    result = run_install_shell(
+        repo_root,
+        (
+            "detect_network_ip_addresses() { printf '192.168.70.34\\n10.0.0.25\\n'; }; "
+            f"INSTALL_ROOT='{tmp_path}'; "
+            "ensure_ui_allowed_hosts_for_network_ips; "
+            f"cat '{env_file}'"
+        ),
+    )
+
+    assert result.returncode == 0
+    assert "ENCODR_UI_ALLOWED_HOSTS=localhost,127.0.0.1,192.168.70.34,10.0.0.25" in result.stdout
+
+
+def test_install_script_summary_uses_filtered_network_ips(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    result = run_install_shell(
+        repo_root,
+        (
+            "detect_network_ip_addresses() { printf '192.168.70.34\\n'; }; "
+            f"INSTALL_ROOT='{tmp_path}'; "
+            "API_PORT=8000 UI_PORT=5173 show_urls"
+        ),
+    )
+
+    assert result.returncode == 0
+    assert "Detected network IP address(es): 192.168.70.34" in result.stdout
+    assert "UI on the network: http://192.168.70.34:5173" in result.stdout
 
 
 def test_install_script_help_works_when_piped_into_bash(repo_root: Path) -> None:

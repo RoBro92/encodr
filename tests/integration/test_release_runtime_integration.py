@@ -70,6 +70,8 @@ def test_update_status_endpoint_returns_current_and_latest_versions(
         fetcher=lambda _url, _timeout: {
             "latest_version": latest_version,
             "channel": "internal",
+            "release_name": f"Encodr v{latest_version}",
+            "release_summary": "Improved updater behaviour.",
             "download_url": f"https://downloads.example.invalid/encodr-{latest_version}.tar.gz",
             "release_notes_url": f"https://downloads.example.invalid/encodr-{latest_version}-notes",
         },
@@ -82,6 +84,8 @@ def test_update_status_endpoint_returns_current_and_latest_versions(
     assert payload["current_version"] == CURRENT_VERSION
     assert payload["latest_version"] == latest_version
     assert payload["update_available"] is True
+    assert payload["release_name"] == f"Encodr v{latest_version}"
+    assert payload["release_summary"] == "Improved updater behaviour."
 
 
 def test_update_check_endpoint_reports_upstream_error(

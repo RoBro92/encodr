@@ -34,7 +34,7 @@ app:
     recent_job_limit: 25
     analytics_window_days: 30
   update:
-    enabled: false
-    metadata_url: null
+    enabled: true
+    metadata_url: https://api.github.com/repos/RoBro92/encodr/releases/latest
     channel: internal
     check_timeout_seconds: 5

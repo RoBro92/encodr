@@ -381,6 +381,8 @@ class SystemService:
             "update_available": result.update_available,
             "channel": result.channel,
             "status": result.status,
+            "release_name": result.release_name,
+            "release_summary": result.release_summary,
             "checked_at": result.checked_at.isoformat() if result.checked_at else None,
             "error": result.error,
             "download_url": result.download_url,

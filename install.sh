@@ -736,6 +736,113 @@ load_env() {
   done < "${env_file}"
 }
 
+detect_network_ip_addresses() {
+  python3 - <<'PY'
+import ipaddress
+import re
+import subprocess
+
+try:
+    output = subprocess.check_output(
+        ["ip", "-o", "-4", "addr", "show", "up", "scope", "global"],
+        text=True,
+        stderr=subprocess.DEVNULL,
+    )
+except Exception:
+    raise SystemExit(0)
+
+ignored_interface_patterns = (
+    re.compile(r"^docker\d+$"),
+    re.compile(r"^br-.+"),
+    re.compile(r"^veth.+"),
+    re.compile(r"^lo$"),
+)
+
+addresses: list[str] = []
+seen: set[str] = set()
+
+for raw_line in output.splitlines():
+    parts = raw_line.split()
+    if len(parts) < 4:
+        continue
+    interface_name = parts[1]
+    if any(pattern.match(interface_name) for pattern in ignored_interface_patterns):
+        continue
+    cidr = parts[3]
+    address_text = cidr.split("/", 1)[0]
+    try:
+        address = ipaddress.ip_address(address_text)
+    except ValueError:
+        continue
+    if address.is_loopback or address.is_link_local:
+        continue
+    if address_text in seen:
+        continue
+    seen.add(address_text)
+    addresses.append(address_text)
+
+for address in addresses:
+    print(address)
+PY
+}
+
+ensure_ui_allowed_hosts_for_network_ips() {
+  local env_file="${INSTALL_ROOT}/.env"
+  [[ -f "${env_file}" ]] || return 0
+
+  local network_addresses=()
+  local address=""
+  while IFS= read -r address; do
+    [[ -n "${address}" ]] || continue
+    network_addresses+=("${address}")
+  done < <(detect_network_ip_addresses)
+  [[ "${#network_addresses[@]}" -gt 0 ]] || return 0
+
+  python3 - "${env_file}" "${network_addresses[@]}" <<'PY'
+from pathlib import Path
+import sys
+
+env_path = Path(sys.argv[1])
+additional_hosts = [value.strip() for value in sys.argv[2:] if value.strip()]
+key = "ENCODR_UI_ALLOWED_HOSTS"
+
+lines = env_path.read_text(encoding="utf-8").splitlines()
+existing_index = None
+existing_hosts: list[str] = []
+
+for index, raw_line in enumerate(lines):
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    if line.startswith("export "):
+        line = line[7:].strip()
+    if "=" not in line:
+        continue
+    current_key, value = line.split("=", 1)
+    if current_key.strip() != key:
+        continue
+    existing_index = index
+    existing_hosts = [item.strip() for item in value.split(",") if item.strip()]
+    break
+
+merged_hosts: list[str] = []
+seen: set[str] = set()
+for host in [*existing_hosts, *additional_hosts]:
+    if host in seen:
+        continue
+    seen.add(host)
+    merged_hosts.append(host)
+
+updated_line = f"{key}={','.join(merged_hosts)}"
+if existing_index is None:
+    lines.append(updated_line)
+else:
+    lines[existing_index] = updated_line
+
+env_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+PY
+}
+
 wait_for_health() {
   local api_port="${API_PORT:-8000}"
   local url="http://127.0.0.1:${api_port}${API_HEALTH_PATH}"
@@ -755,16 +862,20 @@ wait_for_health() {
 show_urls() {
   local api_port="${API_PORT:-8000}"
   local ui_port="${UI_PORT:-5173}"
-  local addresses
-  addresses="$(hostname -I 2>/dev/null || true)"
+  local network_addresses=()
+  local address=""
+  while IFS= read -r address; do
+    [[ -n "${address}" ]] || continue
+    network_addresses+=("${address}")
+  done < <(detect_network_ip_addresses)
 
   section "Encodr is ready"
   printf '%s%s%s\n' "${BOLD}" "Web UI" "${RESET}: http://127.0.0.1:${ui_port}"
   printf '%s%s%s\n' "${BOLD}" "API health" "${RESET}: http://127.0.0.1:${api_port}${API_HEALTH_PATH}"
 
-  if [[ -n "${addresses// }" ]]; then
-    info "Detected container IP address(es): ${addresses}"
-    for address in ${addresses}; do
+  if [[ "${#network_addresses[@]}" -gt 0 ]]; then
+    info "Detected network IP address(es): ${network_addresses[*]}"
+    for address in "${network_addresses[@]}"; do
       info "UI on the network: http://${address}:${ui_port}"
     done
   fi
@@ -794,6 +905,7 @@ main() {
   normalise_host_config_paths_in_env
   ensure_secret "ENCODR_AUTH_SECRET"
   ensure_secret "ENCODR_WORKER_REGISTRATION_SECRET"
+  ensure_ui_allowed_hosts_for_network_ips
   prepare_management_cli_runtime
 
   mkdir -p /usr/local/bin

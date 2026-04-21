@@ -68,6 +68,8 @@ Apply an update:
 encodr update --apply
 ```
 
+When a newer release is available, Encodr also shows a dashboard notice with a short summary and the command to run.
+
 ## Storage
 
 Encodr uses `/media` as the standard media path.

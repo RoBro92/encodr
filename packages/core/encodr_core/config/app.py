@@ -12,6 +12,7 @@ from encodr_core.config.base import (
     SessionMode,
     OutputContainer,
 )
+from encodr_shared.update import DEFAULT_RELEASE_METADATA_URL
 
 
 class AppOutputSettings(ConfigModel):
@@ -59,10 +60,17 @@ class DashboardSettings(ConfigModel):
 
 
 class UpdateSettings(ConfigModel):
-    enabled: bool = False
-    metadata_url: AnyUrl | None = None
+    enabled: bool = True
+    metadata_url: AnyUrl | None = Field(default=DEFAULT_RELEASE_METADATA_URL)
     channel: NonEmptyString = "internal"
     check_timeout_seconds: PositiveInt = 5
+
+    @model_validator(mode="after")
+    def migrate_legacy_defaults(self) -> "UpdateSettings":
+        if self.enabled is False and self.metadata_url is None and self.channel == "internal":
+            self.enabled = True
+            self.metadata_url = DEFAULT_RELEASE_METADATA_URL
+        return self
 
 
 class AppConfig(ConfigModel):

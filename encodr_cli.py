@@ -719,11 +719,16 @@ def print_update_status(status) -> None:
     print(f"Channel: {status.channel}")
     if status.latest_version:
         print(f"Latest version: {status.latest_version}")
+    if getattr(status, "release_name", None):
+        print(f"Release: {status.release_name}")
     print(f"Update available: {'yes' if status.update_available else 'no'}")
     if status.checked_at:
         print(f"Checked at: {status.checked_at.isoformat()}")
     if status.error:
         print(f"Error: {status.error}")
+    if getattr(status, "release_summary", None):
+        print("Summary:")
+        print(status.release_summary)
     if status.download_url:
         print(f"Download URL: {status.download_url}")
 

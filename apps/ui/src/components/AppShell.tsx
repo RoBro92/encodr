@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { NavLink, Outlet, useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/AuthProvider";
@@ -14,16 +15,79 @@ const navigation = [
   { label: "Config", to: APP_ROUTES.config },
 ];
 
+const UPDATE_HIDE_KEY = "encodr:update:hide-until";
+const UPDATE_SKIP_KEY = "encodr:update:skip-version";
+
+type HiddenUpdateState = {
+  version: string;
+  until: string;
+};
+
 export function AppShell() {
   const navigate = useNavigate();
   const { logout, user } = useSession();
   const runtimeQuery = useRuntimeStatusQuery();
   const updateQuery = useUpdateStatusQuery();
   const checkUpdateMutation = useCheckUpdateStatusMutation();
+  const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
+  const [isUpdateModalOpen, setIsUpdateModalOpen] = useState(false);
+
+  const updateStatus = updateQuery.data;
+  const latestVersion = updateStatus?.latest_version ?? null;
+  const updateAvailable = updateStatus?.update_available === true && Boolean(latestVersion);
+
+  useEffect(() => {
+    if (!updateAvailable || !latestVersion) {
+      setIsUpdateModalOpen(false);
+      return;
+    }
+
+    if (dismissedVersion === latestVersion) {
+      setIsUpdateModalOpen(false);
+      return;
+    }
+
+    const hiddenState = readHiddenUpdateState();
+    if (hiddenState && hiddenState.version === latestVersion && Date.parse(hiddenState.until) > Date.now()) {
+      setIsUpdateModalOpen(false);
+      return;
+    }
+
+    if (readSkippedUpdateVersion() === latestVersion) {
+      setIsUpdateModalOpen(false);
+      return;
+    }
+
+    setIsUpdateModalOpen(true);
+  }, [dismissedVersion, latestVersion, updateAvailable]);
 
   async function handleLogout() {
     await logout();
     navigate(APP_ROUTES.login, { replace: true });
+  }
+
+  function closeUpdateModal() {
+    setDismissedVersion(latestVersion);
+    setIsUpdateModalOpen(false);
+  }
+
+  function hideUpdateFor24Hours() {
+    if (!latestVersion) {
+      return;
+    }
+    writeHiddenUpdateState({
+      version: latestVersion,
+      until: new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString(),
+    });
+    setIsUpdateModalOpen(false);
+  }
+
+  function skipCurrentUpdate() {
+    if (!latestVersion) {
+      return;
+    }
+    writeSkippedUpdateVersion(latestVersion);
+    setIsUpdateModalOpen(false);
   }
 
   return (
@@ -61,34 +125,22 @@ export function AppShell() {
             <span className="topbar-subtitle">Library, jobs, and review</span>
           </div>
           <div className="topbar-meta">
+            {updateAvailable ? (
+              <button
+                className="update-pill"
+                type="button"
+                onClick={() => {
+                  setIsUpdateModalOpen(true);
+                }}
+              >
+                Update {latestVersion} available
+              </button>
+            ) : null}
             <span className="topbar-version">
               v{runtimeQuery.data?.version ?? __ENCODR_VERSION__}
             </span>
           </div>
         </header>
-        {updateQuery.data?.update_available ? (
-          <section className="update-banner" role="status" aria-live="polite">
-            <div>
-              <strong>Update available</strong>
-              <p>
-                Encodr {updateQuery.data.latest_version} is available. Current version is{" "}
-                {updateQuery.data.current_version}.
-              </p>
-            </div>
-            <div className="section-card-actions">
-              <button
-                className="button button-secondary"
-                type="button"
-                onClick={() => {
-                  checkUpdateMutation.mutate();
-                }}
-                disabled={checkUpdateMutation.isPending}
-              >
-                {checkUpdateMutation.isPending ? "Checking…" : "Check again"}
-              </button>
-            </div>
-          </section>
-        ) : null}
         {runtimeQuery.data?.storage_setup_incomplete ? (
           <div className="info-strip" role="note">
             <strong>Storage is not configured yet.</strong>
@@ -104,9 +156,99 @@ export function AppShell() {
         </main>
         <footer className="app-footer">
           <span>Encodr v{runtimeQuery.data?.version ?? __ENCODR_VERSION__}</span>
-          <span>Installed release</span>
+          <span>
+            {updateAvailable ? `Update ${latestVersion} available` : "Installed release"}
+          </span>
         </footer>
       </div>
+      {isUpdateModalOpen && updateStatus ? (
+        <div className="modal-backdrop" role="presentation">
+          <section className="modal-panel update-modal" role="dialog" aria-modal="true" aria-labelledby="update-modal-title">
+            <div className="update-modal-header">
+              <div>
+                <p className="section-eyebrow">Update available</p>
+                <h2 id="update-modal-title">
+                  Encodr {updateStatus.latest_version} is ready to install
+                </h2>
+              </div>
+              <button className="button button-secondary" type="button" onClick={closeUpdateModal}>
+                Close
+              </button>
+            </div>
+            <p className="update-modal-copy">
+              Current version: <strong>{updateStatus.current_version}</strong>
+            </p>
+            {updateStatus.release_name ? (
+              <p className="update-modal-copy">
+                Release: <strong>{updateStatus.release_name}</strong>
+              </p>
+            ) : null}
+            <div className="update-summary-card">
+              <strong>What changed</strong>
+              <p>{updateStatus.release_summary ?? "A newer Encodr release is available for this install."}</p>
+            </div>
+            <div className="update-command-card">
+              <strong>Run this in the root console</strong>
+              <pre>encodr update --apply</pre>
+            </div>
+            <div className="section-card-actions">
+              <button className="button button-secondary" type="button" onClick={closeUpdateModal}>
+                Close
+              </button>
+              <button className="button button-secondary" type="button" onClick={hideUpdateFor24Hours}>
+                Hide for 24h
+              </button>
+              <button className="button button-secondary" type="button" onClick={skipCurrentUpdate}>
+                Skip update
+              </button>
+              {updateStatus.release_notes_url ? (
+                <a className="button button-primary" href={updateStatus.release_notes_url} target="_blank" rel="noreferrer">
+                  View release notes
+                </a>
+              ) : (
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => {
+                    checkUpdateMutation.mutate();
+                  }}
+                  disabled={checkUpdateMutation.isPending}
+                >
+                  {checkUpdateMutation.isPending ? "Checking…" : "Check again"}
+                </button>
+              )}
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
+}
+
+function readHiddenUpdateState(): HiddenUpdateState | null {
+  try {
+    const raw = window.localStorage.getItem(UPDATE_HIDE_KEY);
+    if (!raw) {
+      return null;
+    }
+    const parsed = JSON.parse(raw) as HiddenUpdateState;
+    if (typeof parsed.version !== "string" || typeof parsed.until !== "string") {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function writeHiddenUpdateState(value: HiddenUpdateState) {
+  window.localStorage.setItem(UPDATE_HIDE_KEY, JSON.stringify(value));
+}
+
+function readSkippedUpdateVersion(): string | null {
+  return window.localStorage.getItem(UPDATE_SKIP_KEY);
+}
+
+function writeSkippedUpdateVersion(version: string) {
+  window.localStorage.setItem(UPDATE_SKIP_KEY, version);
 }

@@ -71,6 +71,8 @@ export function mockFetchRoutes(routes: MockRoute[]) {
           update_available: false,
           channel: "internal",
           status: "disabled",
+          release_name: null,
+          release_summary: null,
           checked_at: null,
           error: null,
           download_url: null,

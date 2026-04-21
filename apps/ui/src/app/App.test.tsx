@@ -163,6 +163,8 @@ describe("Encodr UI shell", () => {
           update_available: true,
           channel: "internal",
           status: "ok",
+          release_name: `Encodr v${nextPatchVersion(CURRENT_VERSION)}`,
+          release_summary: "Installer fixes and update improvements.",
           checked_at: "2026-04-20T12:30:00Z",
           error: null,
           download_url: "https://example.invalid/encodr.tar.gz",
@@ -173,8 +175,48 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/", initialSession: makeSession() });
 
-    expect(await screen.findByText(/update available/i)).toBeInTheDocument();
-    expect(screen.getByText(new RegExp(`encodr ${nextPatchVersion(CURRENT_VERSION)} is available`, "i"))).toBeInTheDocument();
+    expect(await screen.findByRole("dialog")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: new RegExp(`encodr ${nextPatchVersion(CURRENT_VERSION)} is ready to install`, "i") })).toBeInTheDocument();
+    expect(screen.getByText(/installer fixes and update improvements/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/encodr update --apply/i)[0]).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: new RegExp(`update ${nextPatchVersion(CURRENT_VERSION)} available`, "i") })).toBeInTheDocument();
+  });
+
+  it("lets an operator skip the current update while keeping a subtle indicator", async () => {
+    const latestVersion = nextPatchVersion(CURRENT_VERSION);
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      {
+        method: "GET",
+        path: "/api/system/update",
+        body: {
+          current_version: CURRENT_VERSION,
+          latest_version: latestVersion,
+          update_available: true,
+          channel: "internal",
+          status: "ok",
+          release_name: `Encodr v${latestVersion}`,
+          release_summary: "Installer fixes and update improvements.",
+          checked_at: "2026-04-20T12:30:00Z",
+          error: null,
+          download_url: "https://example.invalid/encodr.tar.gz",
+          release_notes_url: "https://example.invalid/encodr-notes",
+        },
+      },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    await userEvent.click(await screen.findByRole("button", { name: /skip update/i }));
+
+    await waitFor(() => {
+      expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+    });
+    expect(window.localStorage.getItem("encodr:update:skip-version")).toBe(latestVersion);
+    expect(screen.getByRole("button", { name: new RegExp(`update ${latestVersion} available`, "i") })).toBeInTheDocument();
   });
 
   it("lets an operator choose Movies and TV folders from the config page", async () => {

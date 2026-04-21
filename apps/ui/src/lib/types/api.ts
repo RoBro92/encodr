@@ -347,6 +347,8 @@ export type UpdateStatus = {
   update_available: boolean;
   channel: string;
   status: string;
+  release_name: string | null;
+  release_summary: string | null;
   checked_at: string | null;
   error: string | null;
   download_url: string | null;

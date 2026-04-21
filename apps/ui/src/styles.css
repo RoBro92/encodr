@@ -189,6 +189,18 @@ pre {
   gap: 10px;
 }
 
+.update-pill {
+  display: inline-flex;
+  align-items: center;
+  border-radius: 999px;
+  padding: 7px 12px;
+  border: 1px solid rgba(167, 103, 31, 0.22);
+  background: rgba(255, 244, 229, 0.92);
+  color: #7b4a12;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
 .topbar-version {
   display: inline-flex;
   align-items: center;
@@ -199,24 +211,6 @@ pre {
   color: var(--brand-strong);
   font-size: 0.88rem;
   font-weight: 600;
-}
-
-.update-banner {
-  margin-top: 18px;
-  border-radius: 18px;
-  border: 1px solid rgba(167, 103, 31, 0.2);
-  background: rgba(255, 244, 229, 0.92);
-  box-shadow: var(--shadow);
-  padding: 16px 18px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 18px;
-}
-
-.update-banner p {
-  margin: 6px 0 0;
-  color: var(--text-muted);
 }
 
 .modal-backdrop {
@@ -239,6 +233,46 @@ pre {
   background: var(--bg-panel-strong);
   box-shadow: 0 28px 80px rgba(24, 38, 31, 0.22);
   padding: 22px;
+}
+
+.update-modal {
+  width: min(640px, 100%);
+  display: grid;
+  gap: 16px;
+}
+
+.update-modal-header {
+  display: flex;
+  align-items: start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.update-modal-header h2 {
+  margin: 4px 0 0;
+}
+
+.update-modal-copy {
+  margin: 0;
+  color: var(--text-muted);
+}
+
+.update-summary-card,
+.update-command-card {
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  background: rgba(255, 252, 247, 0.86);
+  padding: 16px;
+}
+
+.update-summary-card p {
+  margin: 8px 0 0;
+  white-space: pre-line;
+  color: var(--text-muted);
+}
+
+.update-command-card pre {
+  margin-top: 10px;
 }
 
 .page-shell {
@@ -790,7 +824,7 @@ pre {
     align-items: stretch;
   }
 
-  .update-banner,
+  .update-modal-header,
   .app-footer {
     flex-direction: column;
     align-items: flex-start;

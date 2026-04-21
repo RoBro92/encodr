@@ -63,6 +63,8 @@ class UpdateStatusResponse(BaseModel):
     update_available: bool
     channel: str
     status: str
+    release_name: str | None = None
+    release_summary: str | None = None
     checked_at: str | None = None
     error: str | None = None
     download_url: str | None = None
