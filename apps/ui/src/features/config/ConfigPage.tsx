@@ -43,6 +43,7 @@ const FOUR_K_MODE_OPTIONS = [
 export function ConfigPage() {
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null);
   const [rulesDraft, setRulesDraft] = useState<ProcessingRules | null>(null);
+  const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
   const rootsQuery = useLibraryRootsQuery();
   const rulesQuery = useProcessingRulesQuery();
   const effectiveConfigQuery = useEffectiveConfigQuery();
@@ -54,6 +55,7 @@ export function ConfigPage() {
   useEffect(() => {
     if (rulesQuery.data) {
       setRulesDraft(rulesQuery.data);
+      setPersistedRules(rulesQuery.data);
     }
   }, [rulesQuery.data]);
 
@@ -88,6 +90,16 @@ export function ConfigPage() {
   }
 
   const selectedRoot = pickerTarget === "movies" ? roots.movies_root : roots.tv_root;
+  const buildRulesPayload = (target: RulesetKey, nextValues: ProcessingRuleValues | null) => {
+    const baseline = persistedRules ?? rulesQuery.data;
+    if (!baseline) {
+      throw new Error("Processing rules are unavailable.");
+    }
+    return {
+      movies: target === "movies" ? nextValues : baseline.movies.uses_defaults ? null : baseline.movies.current,
+      tv: target === "tv" ? nextValues : baseline.tv.uses_defaults ? null : baseline.tv.current,
+    };
+  };
 
   return (
     <div className="page-stack">
@@ -177,16 +189,26 @@ export function ConfigPage() {
               if (!rulesDraft) {
                 return;
               }
-              updateRulesMutation.mutate({
-                movies: rulesDraft.movies.current,
-                tv: rulesDraft.tv.uses_defaults ? null : rulesDraft.tv.current,
-              });
+              updateRulesMutation.mutate(
+                buildRulesPayload("movies", rulesDraft.movies.current),
+                {
+                  onSuccess: (data) => {
+                    setPersistedRules(data);
+                    setRulesDraft(data);
+                  },
+                },
+              );
             }}
             onUseDefaults={() => {
-              updateRulesMutation.mutate({
-                movies: null,
-                tv: rules.tv.uses_defaults ? null : rules.tv.current,
-              });
+              updateRulesMutation.mutate(
+                buildRulesPayload("movies", null),
+                {
+                  onSuccess: (data) => {
+                    setPersistedRules(data);
+                    setRulesDraft(data);
+                  },
+                },
+              );
             }}
             saving={updateRulesMutation.isPending}
           />
@@ -201,16 +223,26 @@ export function ConfigPage() {
               if (!rulesDraft) {
                 return;
               }
-              updateRulesMutation.mutate({
-                movies: rulesDraft.movies.uses_defaults ? null : rulesDraft.movies.current,
-                tv: rulesDraft.tv.current,
-              });
+              updateRulesMutation.mutate(
+                buildRulesPayload("tv", rulesDraft.tv.current),
+                {
+                  onSuccess: (data) => {
+                    setPersistedRules(data);
+                    setRulesDraft(data);
+                  },
+                },
+              );
             }}
             onUseDefaults={() => {
-              updateRulesMutation.mutate({
-                movies: rules.movies.uses_defaults ? null : rules.movies.current,
-                tv: null,
-              });
+              updateRulesMutation.mutate(
+                buildRulesPayload("tv", null),
+                {
+                  onSuccess: (data) => {
+                    setPersistedRules(data);
+                    setRulesDraft(data);
+                  },
+                },
+              );
             }}
             saving={updateRulesMutation.isPending}
           />

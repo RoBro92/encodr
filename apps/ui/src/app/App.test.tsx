@@ -352,6 +352,56 @@ describe("Encodr UI shell", () => {
     });
   });
 
+  it("does not save unsaved TV rule edits when only movie rules are submitted", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      {
+        method: "PUT",
+        path: "/api/config/setup/processing-rules",
+        body: {
+          movies: {
+            profile_name: "movies-default",
+            uses_defaults: false,
+            defaults: processingRules().movies.defaults,
+            current: {
+              ...processingRules().movies.current,
+              target_video_codec: "h264",
+            },
+          },
+          tv: processingRules().tv,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[1], "av1");
+    await userEvent.selectOptions(screen.getAllByLabelText(/target video codec/i)[0], "h264");
+    await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/config/setup/processing-rules"),
+        expect.objectContaining({
+          method: "PUT",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            movies: {
+              ...processingRules().movies.current,
+              target_video_codec: "h264",
+            },
+            tv: null,
+          }),
+        }),
+      );
+    });
+  });
+
   it("renders the redesigned library workspace and lets tabs switch cleanly", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
@@ -703,6 +753,43 @@ describe("Encodr UI shell", () => {
         expect.stringContaining("/api/jobs/job-1/retry"),
         expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
       );
+    });
+  });
+
+  it("uses tracked-file search requests instead of a fixed local picker list", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: /\/api\/files\?.*limit=25/,
+        body: {
+          items: [],
+          limit: 25,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    const picker = screen.getByLabelText(/create from tracked file/i);
+    await userEvent.type(picker, "F");
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([url]) =>
+          typeof url === "string" && url.includes("/api/files?path_search=F&limit=25"),
+        ),
+      ).toBe(true);
     });
   });
 

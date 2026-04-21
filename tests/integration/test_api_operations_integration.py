@@ -388,6 +388,117 @@ def test_processing_rules_can_be_updated_and_are_used_for_planning(
     assert dry_run_payload["items"][0]["action"] == "remux"
 
 
+def test_processing_rules_use_the_most_specific_matching_root(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _, layout, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    tv_root = layout.source_dir / "TV"
+    tv_root.mkdir(parents=True, exist_ok=True)
+    source_path = layout.create_source_file("TV/Example Show/Season 01/Example Show S01E01.mkv", contents="episode")
+    media = media_at_path(parse_fixture("tv_episode.json"), source_path)
+    context.app.state.probe_client_factory = lambda: StaticProbeClient(media)
+
+    roots_response = context.client.put(
+        "/api/config/setup/library-roots",
+        json={
+            "movies_root": layout.source_dir.as_posix(),
+            "tv_root": tv_root.as_posix(),
+        },
+        headers=auth.headers,
+    )
+    assert roots_response.status_code == 200
+
+    update_rules_response = context.client.put(
+        "/api/config/setup/processing-rules",
+        json={
+            "movies": {
+                "target_video_codec": "hevc",
+                "output_container": "mp4",
+                "keep_english_audio_only": True,
+                "keep_forced_subtitles": True,
+                "keep_one_full_english_subtitle": True,
+                "preserve_surround": True,
+                "preserve_atmos": True,
+                "four_k_mode": "strip_only",
+            },
+            "tv": None,
+        },
+        headers=auth.headers,
+    )
+    assert update_rules_response.status_code == 200
+
+    plan_response = context.client.post(
+        "/api/files/plan",
+        json={"source_path": source_path.as_posix()},
+        headers=auth.headers,
+    )
+    assert plan_response.status_code == 200
+    assert plan_response.json()["latest_plan_snapshot"]["action"] == "skip"
+
+
+def test_processing_rules_allow_undetermined_audio_when_english_only_is_disabled(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _, layout, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    movies_dir = layout.source_dir / "Movies"
+    movies_dir.mkdir(parents=True, exist_ok=True)
+    source_path = layout.create_source_file("Movies/Undetermined Audio Film (2024).mkv", contents="rules")
+    base_media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+    media = base_media.model_copy(
+        update={
+            "audio_streams": [
+                stream.model_copy(update={"tags": stream.tags.model_copy(update={"language": None})})
+                for stream in base_media.audio_streams
+            ],
+            "has_english_audio": False,
+        }
+    )
+    context.app.state.probe_client_factory = lambda: StaticProbeClient(media)
+
+    roots_response = context.client.put(
+        "/api/config/setup/library-roots",
+        json={"movies_root": movies_dir.as_posix()},
+        headers=auth.headers,
+    )
+    assert roots_response.status_code == 200
+
+    update_rules_response = context.client.put(
+        "/api/config/setup/processing-rules",
+        json={
+            "movies": {
+                "target_video_codec": "hevc",
+                "output_container": "mkv",
+                "keep_english_audio_only": False,
+                "keep_forced_subtitles": True,
+                "keep_one_full_english_subtitle": True,
+                "preserve_surround": True,
+                "preserve_atmos": True,
+                "four_k_mode": "strip_only",
+            },
+            "tv": None,
+        },
+        headers=auth.headers,
+    )
+    assert update_rules_response.status_code == 200
+
+    dry_run_response = context.client.post(
+        "/api/files/dry-run",
+        json={"source_path": source_path.as_posix()},
+        headers=auth.headers,
+    )
+    assert dry_run_response.status_code == 200
+    item = dry_run_response.json()["items"][0]
+    assert "manual_review_missing_english_audio" not in item["reason_codes"]
+
+
 def test_scan_and_dry_run_folder_workflows_return_clear_summary_data(
     tmp_path: Path,
     repo_root: Path,

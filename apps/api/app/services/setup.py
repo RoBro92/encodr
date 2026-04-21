@@ -260,13 +260,17 @@ class SetupStateService:
         movies_root: str | None,
         tv_root: str | None,
     ) -> RulesetName | None:
+        matches: list[tuple[int, RulesetName]] = []
         for ruleset, configured_root in (("movies", movies_root), ("tv", tv_root)):
             if not configured_root:
                 continue
             root = Path(configured_root).resolve()
             try:
                 source_path.relative_to(root)
-                return ruleset
+                matches.append((len(root.as_posix()), ruleset))
             except ValueError:
                 continue
-        return None
+        if not matches:
+            return None
+        matches.sort(reverse=True)
+        return matches[0][1]

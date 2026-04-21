@@ -41,15 +41,22 @@ export function JobsPage() {
     [fileId, status],
   );
 
-  const filesQuery = useFilesQuery({ limit: 100 });
+  const filterFilesQuery = useFilesQuery({
+    path_search: fileSearch.trim() || undefined,
+    limit: 25,
+  });
+  const createFilesQuery = useFilesQuery({
+    path_search: createFileSearch.trim() || undefined,
+    limit: 25,
+  });
   const jobsQuery = useJobsQuery(filters);
   const detailQuery = useJobDetailQuery(jobId);
   const retryMutation = useRetryJobMutation();
   const createJobMutation = useCreateJobMutation();
   const runOnceMutation = useRunWorkerOnceMutation();
 
-  const error = filesQuery.error ?? jobsQuery.error ?? detailQuery.error;
-  if (jobsQuery.isLoading || filesQuery.isLoading) {
+  const error = filterFilesQuery.error ?? createFilesQuery.error ?? jobsQuery.error ?? detailQuery.error;
+  if (jobsQuery.isLoading || filterFilesQuery.isLoading || createFilesQuery.isLoading) {
     return <LoadingBlock label="Loading jobs" />;
   }
 
@@ -57,7 +64,9 @@ export function JobsPage() {
     return <ErrorPanel title="Unable to load jobs" message={error.message} />;
   }
 
-  const files = filesQuery.data?.items ?? [];
+  const filterFiles = filterFilesQuery.data?.items ?? [];
+  const createFiles = createFilesQuery.data?.items ?? [];
+  const files = deduplicateTrackedFiles([...filterFiles, ...createFiles]);
   const jobs = jobsQuery.data?.items ?? [];
   const detail = detailQuery.data;
   const metrics = summariseJobs(jobs);
@@ -381,7 +390,6 @@ function TrackedFilePicker({
   onClear: () => void;
 }) {
   const [open, setOpen] = useState(false);
-  const selectedItem = items.find((item) => item.id === selectedId) ?? null;
   const matches = useMemo(() => {
     const search = query.trim().toLowerCase();
     if (!search) {
@@ -413,7 +421,7 @@ function TrackedFilePicker({
           }}
           onChange={(event) => onQueryChange(event.target.value)}
         />
-        {selectedItem ? (
+        {selectedId ? (
           <button className="button button-secondary button-small" type="button" onClick={onClear}>
             Clear
           </button>
@@ -447,6 +455,17 @@ function TrackedFilePicker({
       </div>
     </label>
   );
+}
+
+function deduplicateTrackedFiles(items: FileSummary[]) {
+  const seen = new Set<string>();
+  return items.filter((item) => {
+    if (seen.has(item.id)) {
+      return false;
+    }
+    seen.add(item.id);
+    return true;
+  });
 }
 
 function formatTrackedFileOption(file: FileSummary) {

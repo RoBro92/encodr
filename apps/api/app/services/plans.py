@@ -60,7 +60,8 @@ class PlansService:
 
         policy = self.config_bundle.policy
         audio_languages = ["eng"] if rules["keep_english_audio_only"] else self._all_languages(
-            [stream.language for stream in media_file.audio_streams]
+            [stream.language for stream in media_file.audio_streams],
+            fallback=["und"],
         )
         subtitle_languages = (
             ["eng"]
