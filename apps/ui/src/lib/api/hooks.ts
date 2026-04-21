@@ -22,6 +22,7 @@ import {
   getEffectiveConfig,
   getFile,
   getLibraryRoots,
+  getProcessingRules,
   getJob,
   getLatestPlanSnapshot,
   getLatestProbeSnapshot,
@@ -50,9 +51,10 @@ import {
   scanFolder,
   enableWorker,
   updateLibraryRoots,
+  updateProcessingRules,
 } from "./endpoints";
 import { useSession } from "../../features/auth/AuthProvider";
-import type { CreateBatchJobsPayload, CreateJobPayload, FileSelectionPayload, LoginPayload, ProbeOrPlanPayload, ReviewDecisionPayload } from "../types/api";
+import type { CreateBatchJobsPayload, CreateJobPayload, FileSelectionPayload, LoginPayload, ProbeOrPlanPayload, ProcessingRuleValues, ReviewDecisionPayload } from "../types/api";
 
 export function useBootstrapStatusQuery(enabled = true) {
   const { apiClient } = useSession();
@@ -291,6 +293,32 @@ export function useUpdateLibraryRootsMutation() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["config"] }),
         queryClient.invalidateQueries({ queryKey: ["system"] }),
+      ]);
+    },
+  });
+}
+
+export function useProcessingRulesQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["config", "processing-rules"],
+    queryFn: () => getProcessingRules(apiClient),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useUpdateProcessingRulesMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: { movies?: ProcessingRuleValues | null; tv?: ProcessingRuleValues | null }) =>
+      updateProcessingRules(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["config"] }),
+        queryClient.invalidateQueries({ queryKey: ["files"] }),
+        queryClient.invalidateQueries({ queryKey: ["review"] }),
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
       ]);
     },
   });

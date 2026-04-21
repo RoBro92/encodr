@@ -31,6 +31,13 @@ export function SystemPage() {
   const worker = workerQuery.data;
   const runtime = runtimeQuery.data;
   const storage = storageQuery.data;
+  const combinedWarnings = [
+    ...(runtime?.warnings ?? []),
+    ...(storage?.warnings ?? []),
+    ...([storage?.scratch, storage?.data_dir, ...(storage?.media_mounts ?? [])]
+      .filter((pathStatus) => pathStatus && pathStatus.status !== "healthy")
+      .map((pathStatus) => `${pathStatus!.display_name}: ${pathStatus!.message}`)),
+  ];
 
   async function refreshHealth() {
     await Promise.all([
@@ -44,8 +51,8 @@ export function SystemPage() {
     <div className="page-stack">
       <PageHeader
         eyebrow="System"
-        title="Worker and storage health"
-        description="Operational diagnostics for the local worker, runtime dependencies, queue health, and configured storage paths."
+        title="System"
+        description="Worker, runtime, queue, and storage status."
         actions={
           <div className="page-actions">
             <button
@@ -84,7 +91,20 @@ export function SystemPage() {
         <ErrorPanel title="Worker self-test failed" message={selfTestMutation.error.message} />
       ) : null}
 
-      <section className="stats-grid">
+      {combinedWarnings.length > 0 ? (
+        <SectionCard title="Warnings" subtitle="Address these before relying on automation.">
+          <div className="list-stack">
+            {combinedWarnings.map((warning) => (
+              <div key={warning} className="info-strip info-strip-warning" role="note">
+                <StatusBadge value="degraded" />
+                <span>{warning}</span>
+              </div>
+            ))}
+          </div>
+        </SectionCard>
+      ) : null}
+
+      <section className="stats-grid stats-grid-compact">
         <HealthStatCard label="Worker" status={worker?.status} value={worker?.summary ?? "Not available"} />
         <HealthStatCard label="Runtime" status={runtime?.status} value={runtime?.summary ?? "Not available"} />
         <HealthStatCard label="Storage" status={storage?.status} value={storage?.summary ?? "Not available"} />
@@ -96,18 +116,14 @@ export function SystemPage() {
       </section>
 
       <section className="dashboard-grid">
-        <SectionCard title="Worker health" subtitle="Local-only worker state, binary availability, and queue diagnostics.">
+        <SectionCard title="Worker" subtitle="Local worker, binaries, and queue status.">
           {worker ? (
             <div className="card-stack">
               <div className="info-strip">
                 <StatusBadge value={worker.status} />
-                <span>{worker.summary}</span>
-              </div>
-              <div className="metric-grid">
-                <HealthMetric label="Mode" value={worker.mode} />
-                <HealthMetric label="Queue" value={worker.local_worker_queue} />
-                <HealthMetric label="Available" value={formatRelativeBoolean(worker.available)} />
-                <HealthMetric label="Processed jobs" value={String(worker.processed_jobs)} />
+                <span>
+                  {worker.mode} • {worker.local_worker_queue} • available {worker.available ? "yes" : "no"} • {worker.processed_jobs} processed
+                </span>
               </div>
               <div className="status-grid">
                 <BinaryCard title="FFmpeg" item={worker.ffmpeg} />
@@ -118,20 +134,19 @@ export function SystemPage() {
           ) : null}
         </SectionCard>
 
-        <SectionCard title="Runtime health" subtitle="Runtime dependencies, auth baseline, and config source visibility.">
+        <SectionCard title="Runtime" subtitle="Live checks and active configuration sources.">
           {runtime ? (
             <div className="card-stack">
               <div className="info-strip">
                 <StatusBadge value={runtime.status} />
-                <span>{runtime.summary}</span>
+                <span>Version {runtime.version} • {runtime.environment} • auth {runtime.auth_enabled ? "on" : "off"}</span>
               </div>
-              <div className="metric-grid">
-                <HealthMetric label="Version" value={runtime.version} />
-                <HealthMetric label="Environment" value={runtime.environment} />
+              <div className="metric-grid metric-grid-compact">
                 <HealthMetric label="DB reachable" value={formatRelativeBoolean(runtime.db_reachable)} />
                 <HealthMetric label="Schema reachable" value={formatRelativeBoolean(runtime.schema_reachable)} />
-                <HealthMetric label="Auth enabled" value={formatRelativeBoolean(runtime.auth_enabled)} />
                 <HealthMetric label="User count" value={runtime.user_count == null ? "Not available" : String(runtime.user_count)} />
+                <HealthMetric label="Scratch path" value={runtime.scratch_dir} />
+                <HealthMetric label="Data path" value={runtime.data_dir} />
               </div>
               <div className="card-stack">
                 <strong>Config sources</strong>
@@ -144,38 +159,26 @@ export function SystemPage() {
                   ))}
                 </dl>
               </div>
-              {runtime.warnings.length > 0 ? (
-                <div className="card-stack">
-                  <strong>Warnings</strong>
-                  <div className="list-stack">
-                    {runtime.warnings.map((warning) => (
-                      <div key={warning} className="list-row">
-                        <span>{warning}</span>
-                        <StatusBadge value="degraded" />
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              ) : null}
             </div>
           ) : null}
         </SectionCard>
       </section>
 
-      <SectionCard title="Storage health" subtitle="Configured scratch, data, and media paths with free-space and access diagnostics.">
+      <SectionCard title="Storage" subtitle="Scratch, data, and media paths.">
         {storage ? (
           <div className="card-stack">
             <div className="info-strip">
               <StatusBadge value={storage.status} />
-              <span>{storage.summary}</span>
+              <span>{storage.standard_media_root}</span>
             </div>
-            <p className="muted-copy">
-              Encodr expects your media library at <strong>{storage.standard_media_root}</strong>.
-              If you are using Proxmox, mount the share on the host first and then pass it into the LXC before Docker starts.
-            </p>
             <div className="status-grid">
               {[storage.scratch, storage.data_dir, ...storage.media_mounts].map((pathStatus) => (
-                <article key={pathStatus.role + pathStatus.path} className="status-card">
+                <article
+                  key={pathStatus.role + pathStatus.path}
+                  className={`status-card ${
+                    pathStatus.status === "degraded" || pathStatus.status === "failed" ? "status-card-alert" : ""
+                  }`}
+                >
                   <div className="badge-row">
                     <StatusBadge value={pathStatus.status} />
                     <strong>{pathStatus.display_name}</strong>
@@ -188,7 +191,7 @@ export function SystemPage() {
                       <span>{pathStatus.recommended_action}</span>
                     </div>
                   ) : null}
-                  <div className="metric-grid">
+                  <div className="metric-grid metric-grid-compact">
                     <HealthMetric label="Readable" value={formatRelativeBoolean(pathStatus.readable)} />
                     <HealthMetric label="Writable" value={formatRelativeBoolean(pathStatus.writable)} />
                     <HealthMetric label="Free space" value={formatBytes(pathStatus.free_space_bytes)} />
@@ -197,25 +200,12 @@ export function SystemPage() {
                 </article>
               ))}
             </div>
-            {storage.warnings.length > 0 ? (
-              <div className="card-stack">
-                <strong>Storage warnings</strong>
-                <div className="list-stack">
-                  {storage.warnings.map((warning) => (
-                    <div key={warning} className="list-row">
-                      <span>{warning}</span>
-                      <StatusBadge value="degraded" />
-                    </div>
-                  ))}
-                </div>
-              </div>
-            ) : null}
           </div>
         ) : null}
       </SectionCard>
 
       {selfTestMutation.data ? (
-        <SectionCard title="Latest self-test" subtitle="Lightweight worker diagnostics against binaries, scratch, DB, and local service wiring.">
+        <SectionCard title="Latest self-test" subtitle="Binary, scratch, database, and service checks.">
           <div className="card-stack">
             <div className="info-strip">
               <StatusBadge value={selfTestMutation.data.status} />
@@ -256,7 +246,7 @@ function BinaryCard({
   };
 }) {
   return (
-    <article className="status-card">
+    <article className={`status-card ${item.status === "degraded" || item.status === "failed" ? "status-card-alert" : ""}`}>
       <div className="badge-row">
         <StatusBadge value={item.status} />
         <strong>{title}</strong>
@@ -342,7 +332,7 @@ function HealthStatCard({
   value: string | number;
 }) {
   return (
-    <article className="stat-card">
+    <article className={`stat-card ${status === "degraded" || status === "failed" ? "stat-card-danger" : ""}`}>
       <span className="stat-label">{label}</span>
       <strong className="stat-value health-stat-value">{value}</strong>
       <StatusBadge value={status} />

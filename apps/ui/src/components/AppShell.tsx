@@ -9,10 +9,10 @@ const navigation = [
   { label: "Dashboard", to: APP_ROUTES.dashboard },
   { label: "Library", to: APP_ROUTES.files },
   { label: "Jobs", to: APP_ROUTES.jobs },
-  { label: "Manual Review", to: APP_ROUTES.review },
+  { label: "Review", to: APP_ROUTES.review },
   { label: "Workers", to: APP_ROUTES.workers },
   { label: "System", to: APP_ROUTES.system },
-  { label: "Config", to: APP_ROUTES.config },
+  { label: "Settings", to: APP_ROUTES.config },
 ];
 
 const UPDATE_HIDE_KEY = "encodr:update:hide-until";
@@ -95,8 +95,8 @@ export function AppShell() {
       <aside className="sidebar">
         <div className="brand-panel">
           <p className="section-eyebrow">Encodr</p>
-          <h1 className="brand-title">Media workflow</h1>
-          <p className="sidebar-copy">Browse folders, review plans, and run jobs.</p>
+          <h1 className="brand-title">Operator</h1>
+          <p className="sidebar-copy">Library, jobs, and review.</p>
         </div>
         <nav className="nav-list" aria-label="Primary">
           {navigation.map((item) => (
@@ -122,7 +122,7 @@ export function AppShell() {
         <header className="topbar">
           <div>
             <span className="topbar-title">Encodr</span>
-            <span className="topbar-subtitle">Library, jobs, and review</span>
+            <span className="topbar-subtitle">Operator console</span>
           </div>
           <div className="topbar-meta">
             {updateAvailable ? (
@@ -143,10 +143,9 @@ export function AppShell() {
         </header>
         {runtimeQuery.data?.storage_setup_incomplete ? (
           <div className="info-strip" role="note">
-            <strong>Storage is not configured yet.</strong>
+            <strong>Storage needs attention.</strong>
             <span>
-              Encodr expects your media library at{" "}
-              <code>{runtimeQuery.data.standard_media_root}</code>. Open the System page or run{" "}
+              Check <code>{runtimeQuery.data.standard_media_root}</code> in System, or run{" "}
               <code>encodr mount-setup --validate-only</code>.
             </span>
           </div>
@@ -155,9 +154,9 @@ export function AppShell() {
           <Outlet />
         </main>
         <footer className="app-footer">
-          <span>Encodr v{runtimeQuery.data?.version ?? __ENCODR_VERSION__}</span>
+          <span>v{runtimeQuery.data?.version ?? __ENCODR_VERSION__}</span>
           <span>
-            {updateAvailable ? `Update ${latestVersion} available` : "Installed release"}
+            {updateAvailable ? `Update ${latestVersion} available` : "Up to date"}
           </span>
         </footer>
       </div>

@@ -17,15 +17,15 @@ from encodr_core.config import (
 REPO_ROOT = Path(__file__).resolve().parents[2]
 
 
-def test_loads_example_config_bundle_from_repository_root() -> None:
+def test_loads_repository_root_config_bundle() -> None:
     bundle = load_config_bundle(project_root=REPO_ROOT)
 
     assert bundle.app.name == "encodr"
     assert bundle.policy.name == "default-policy"
     assert bundle.workers.local.id == "worker-local"
-    assert bundle.paths.app.used_example_fallback is True
-    assert bundle.paths.policy.used_example_fallback is True
-    assert bundle.paths.workers.used_example_fallback is True
+    assert bundle.paths.app.used_example_fallback is False
+    assert bundle.paths.policy.used_example_fallback is False
+    assert bundle.paths.workers.used_example_fallback is False
     assert "movies-default" in bundle.profiles
     assert "tv-default" in bundle.profiles
 

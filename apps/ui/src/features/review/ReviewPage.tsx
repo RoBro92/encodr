@@ -1,7 +1,7 @@
 import { Link, useParams } from "react-router-dom";
 import { useMemo, useState } from "react";
 
-import { DataTable } from "../../components/DataTable";
+import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { KeyValueList } from "../../components/KeyValueList";
@@ -82,6 +82,7 @@ export function ReviewPage() {
     clearProtectedMutation.isPending ||
     replanMutation.isPending ||
     createJobMutation.isPending;
+  const metrics = summariseReviewItems(items);
 
   async function handleDecision(
     action:
@@ -129,165 +130,271 @@ export function ReviewPage() {
   return (
     <div className="page-stack">
       <PageHeader
-        eyebrow="Manual Review"
-        title="Manual review queue"
-        description="Inspect ambiguous or protected files, review why automation paused, and take explicit operator decisions."
+        eyebrow="Review"
+        title="Review"
+        description="See why automation paused, inspect the latest context, then take a decision."
       />
 
       {mutationError instanceof Error ? (
         <ErrorPanel title="Review action failed" message={mutationError.message} />
       ) : null}
 
-      <section className="dashboard-grid">
-        <SectionCard title="Filters" subtitle="Focus on open review items, protected files, and recent failures.">
-          <div className="filter-grid">
-            <label className="field">
-              <span>Status</span>
-              <select value={status} onChange={(event) => setStatus(event.target.value)}>
-                <option value="">Any</option>
-                <option value="open">Open</option>
-                <option value="approved">Approved</option>
-                <option value="held">Held</option>
-                <option value="rejected">Rejected</option>
-                <option value="resolved">Resolved</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>Protected</span>
-              <select value={protectedOnly} onChange={(event) => setProtectedOnly(event.target.value)}>
-                <option value="">Any</option>
-                <option value="true">Protected only</option>
-                <option value="false">Unprotected only</option>
-              </select>
-            </label>
-            <label className="field">
-              <span>4K</span>
-              <select value={is4k} onChange={(event) => setIs4k(event.target.value)}>
-                <option value="">Any</option>
-                <option value="true">4K only</option>
-                <option value="false">Non-4K only</option>
-              </select>
-            </label>
-            <label className="field checkbox-field">
-              <input
-                type="checkbox"
-                checked={recentFailuresOnly}
-                onChange={(event) => setRecentFailuresOnly(event.target.checked)}
-              />
-              <span>Recent failures only</span>
-            </label>
-          </div>
-        </SectionCard>
+      <section className="metric-grid">
+        <div className="metric-panel">
+          <span className="metric-label">Items in view</span>
+          <strong>{metrics.total}</strong>
+          <span className="metric-subtle">Current review queue</span>
+        </div>
+        <div className="metric-panel">
+          <span className="metric-label">Open</span>
+          <strong>{metrics.open}</strong>
+          <span className="metric-subtle">Awaiting a decision</span>
+        </div>
+        <div className="metric-panel">
+          <span className="metric-label">Protected</span>
+          <strong>{metrics.protected}</strong>
+          <span className="metric-subtle">Planner or operator protected</span>
+        </div>
+        <div className="metric-panel">
+          <span className="metric-label">Held</span>
+          <strong>{metrics.held}</strong>
+          <span className="metric-subtle">Paused for later follow-up</span>
+        </div>
       </section>
 
-      <section className="two-column-layout">
-        <SectionCard title="Review items" subtitle={`${items.length} result${items.length === 1 ? "" : "s"}`}>
-          <DataTable
-            items={items}
-            rowKey={(item) => item.id}
-            empty={
+      <section className={`jobs-review-layout${items.length === 0 || (!detail && !(itemId && detailQuery.isLoading)) ? " jobs-review-layout-single" : ""}`}>
+        <div className="list-detail-stack">
+          <SectionCard title="Filters" subtitle="Focus on the items that need a decision now.">
+            <div className="filter-grid filter-grid-tight">
+              <label className="field">
+                <span>Review status</span>
+                <select value={status} onChange={(event) => setStatus(event.target.value)}>
+                  <option value="">Any</option>
+                  <option value="open">Open</option>
+                  <option value="approved">Approved</option>
+                  <option value="held">Held</option>
+                  <option value="rejected">Rejected</option>
+                  <option value="resolved">Resolved</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Protection</span>
+                <select value={protectedOnly} onChange={(event) => setProtectedOnly(event.target.value)}>
+                  <option value="">Any</option>
+                  <option value="true">Protected only</option>
+                  <option value="false">Unprotected only</option>
+                </select>
+              </label>
+              <label className="field">
+                <span>Resolution</span>
+                <select value={is4k} onChange={(event) => setIs4k(event.target.value)}>
+                  <option value="">Any</option>
+                  <option value="true">4K only</option>
+                  <option value="false">Non-4K only</option>
+                </select>
+              </label>
+              <label className="field checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={recentFailuresOnly}
+                  onChange={(event) => setRecentFailuresOnly(event.target.checked)}
+                />
+                <span>Recent failures only</span>
+              </label>
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Inbox" subtitle={`${items.length} item${items.length === 1 ? "" : "s"} in view`}>
+            {items.length === 0 ? (
               <EmptyState
                 title="No review items"
-                message="Open manual-review and protected-file items will appear here when operator attention is required."
+                message="Nothing needs a manual decision right now."
               />
-            }
-            columns={[
-              {
-                key: "file",
-                header: "File",
-                render: (item) => (
-                  <Link className="table-link" to={APP_ROUTES.reviewDetail(item.id)}>
-                    <strong>{item.tracked_file.source_filename}</strong>
-                    <span>{item.tracked_file.source_directory}</span>
-                  </Link>
-                ),
-              },
-              {
-                key: "status",
-                header: "Review",
-                render: (item) => <StatusBadge value={item.review_status} />,
-              },
-              {
-                key: "protected",
-                header: "Protected",
-                render: (item) =>
-                  item.protected_state.is_protected ? (
-                      <span className="badge-row">
-                        <StatusBadge value="manual_review" />
-                        <span>{formatProtectedSource(item.protected_state.source)}</span>
-                      </span>
-                  ) : (
-                    "No"
-                  ),
-              },
-              {
-                key: "confidence",
-                header: "Confidence",
-                render: (item) => <StatusBadge value={item.confidence ?? "unknown"} />,
-              },
-              {
-                key: "updated",
-                header: "Latest activity",
-                render: (item) => formatDateTime(item.latest_job_at ?? item.latest_plan_at ?? item.latest_probe_at),
-              },
-            ]}
-          />
-        </SectionCard>
+            ) : (
+              <div className="record-list" role="list" aria-label="Review items list">
+                {items.map((item) => {
+                  const isActive = item.id === itemId;
+                  return (
+                    <Link
+                      key={item.id}
+                      className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
+                      to={APP_ROUTES.reviewDetail(item.id)}
+                    >
+                      <div className="record-list-main">
+                        <div className="record-list-heading">
+                          <strong>{item.tracked_file.source_filename}</strong>
+                          <span>{item.tracked_file.source_directory}</span>
+                        </div>
+                        <div className="badge-row">
+                          <StatusBadge value={item.review_status} />
+                          <StatusBadge value={item.confidence ?? "unknown"} />
+                          {item.requires_review ? <StatusBadge value="manual_review" /> : null}
+                          {item.protected_state.is_protected ? <StatusBadge value="protected" /> : null}
+                        </div>
+                      </div>
+                      <div className="record-list-meta">
+                        <span className="record-list-kicker">{reviewPriorityLabel(item)}</span>
+                        <span>{formatDateTime(item.latest_job_at ?? item.latest_plan_at ?? item.latest_probe_at)}</span>
+                        <span className="record-list-emphasis">
+                          {summariseReasons(item.reasons, item.warnings)}
+                        </span>
+                      </div>
+                    </Link>
+                  );
+                })}
+              </div>
+            )}
+          </SectionCard>
+        </div>
 
-        <SectionCard
-          title="Review detail"
-          subtitle={detail ? detail.tracked_file.source_filename : "Select a review item to inspect its plan, warnings, and protected state."}
-        >
-          {itemId && detailQuery.isLoading ? (
+        {itemId && detailQuery.isLoading ? (
+          <SectionCard title="Selected item" subtitle="Loading the latest decision context.">
             <LoadingBlock label="Loading review detail" />
-          ) : detail ? (
+          </SectionCard>
+        ) : detail ? (
+          <SectionCard
+            title="Selected item"
+            subtitle={detail.tracked_file.source_filename}
+          >
             <div className="card-stack">
+              <section className="review-reasons-grid">
+                <div className="review-alert-panel review-alert-danger">
+                  <span className="metric-label">Needs review because</span>
+                  {detail.reasons.length > 0 ? (
+                    <ul className="plain-list">
+                      {detail.reasons.map((reason) => (
+                        <li key={`reason-${reason.code}`}>
+                          <strong>{reason.message}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="muted-copy">No explicit review reasons are attached.</p>
+                  )}
+                </div>
+                <div className="review-alert-panel review-alert-warning">
+                  <span className="metric-label">Warnings</span>
+                  {detail.warnings.length > 0 ? (
+                    <ul className="plain-list">
+                      {detail.warnings.map((warning) => (
+                        <li key={`warning-${warning.code}`}>
+                          <strong>{warning.message}</strong>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="muted-copy">No warnings recorded.</p>
+                  )}
+                </div>
+              </section>
+
+              <div className="badge-row">
+                <StatusBadge value={detail.review_status} />
+                <StatusBadge value={detail.confidence ?? "unknown"} />
+                {detail.requires_review ? <StatusBadge value="manual_review" /> : null}
+                {detail.protected_state.is_protected ? <StatusBadge value="protected" /> : null}
+                {detail.latest_job ? <StatusBadge value={detail.latest_job.status} /> : null}
+              </div>
+
               <KeyValueList
                 items={[
                   { label: "Source path", value: detail.source_path },
-                  { label: "Review status", value: <StatusBadge value={detail.review_status} /> },
-                  { label: "Requires review", value: formatRelativeBoolean(detail.requires_review) },
-                  { label: "Confidence", value: <StatusBadge value={detail.confidence ?? "unknown"} /> },
                   { label: "Protected", value: formatRelativeBoolean(detail.protected_state.is_protected) },
                   { label: "Protected source", value: formatProtectedSource(detail.protected_state.source) },
-                  { label: "Latest decision", value: detail.latest_decision ? `${detail.latest_decision.decision_type} by ${detail.latest_decision.created_by_username}` : "No decision recorded" },
+                  {
+                    label: "Latest decision",
+                    value: detail.latest_decision
+                      ? `${detail.latest_decision.decision_type} by ${detail.latest_decision.created_by_username}`
+                      : "No decision recorded",
+                  },
+                  {
+                    label: "Latest activity",
+                    value: formatDateTime(detail.latest_job_at ?? detail.latest_plan_at ?? detail.latest_probe_at),
+                  },
                 ]}
               />
 
-              <SectionCard title="Reasons" subtitle="Planner and job signals that caused review or cautious handling.">
-                {detail.reasons.length === 0 && detail.warnings.length === 0 ? (
-                  <EmptyState title="No review reasons" message="This item currently has no explicit reasons or warnings attached." />
-                ) : (
-                  <div className="card-stack">
-                    {detail.reasons.length > 0 ? (
-                      <div>
-                        <h3 className="subsection-title">Reasons</h3>
-                        <ul className="plain-list">
-                          {detail.reasons.map((reason) => (
-                            <li key={`reason-${reason.code}`}>
-                              <strong>{reason.code}</strong>: {reason.message}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                    {detail.warnings.length > 0 ? (
-                      <div>
-                        <h3 className="subsection-title">Warnings</h3>
-                        <ul className="plain-list">
-                          {detail.warnings.map((warning) => (
-                            <li key={`warning-${warning.code}`}>
-                              <strong>{warning.code}</strong>: {warning.message}
-                            </li>
-                          ))}
-                        </ul>
-                      </div>
-                    ) : null}
-                  </div>
-                )}
-              </SectionCard>
+              <section className="decision-panel">
+                <div className="decision-panel-copy">
+                  <span className="metric-label">Decision</span>
+                  <strong>Choose the next step</strong>
+                  <span className="metric-subtle">
+                    Approval, rejection, protection, replan, and job creation stay on the same backend actions.
+                  </span>
+                </div>
+                <label className="field">
+                  <span>Operator note</span>
+                  <textarea
+                    rows={3}
+                    value={decisionNote}
+                    onChange={(event) => setDecisionNote(event.target.value)}
+                    placeholder="Add context for the next operator or audit trail"
+                  />
+                </label>
+                <div className="decision-button-grid">
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    onClick={() => void handleDecision("approve")}
+                    disabled={isActionPending || !detail.requires_review}
+                  >
+                    Approve
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => void handleDecision("hold")}
+                    disabled={isActionPending}
+                  >
+                    Hold
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => void handleDecision("reject")}
+                    disabled={isActionPending}
+                  >
+                    Reject
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => void handleDecision("mark_protected")}
+                    disabled={isActionPending || detail.protected_state.operator_protected}
+                  >
+                    Mark protected
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => void handleDecision("clear_protected")}
+                    disabled={isActionPending || !detail.protected_state.operator_protected}
+                  >
+                    Clear protected
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => void handleDecision("replan")}
+                    disabled={isActionPending}
+                  >
+                    Replan
+                  </button>
+                  <button
+                    className="button button-secondary"
+                    type="button"
+                    onClick={() => void handleDecision("create_job")}
+                    disabled={isActionPending || detail.review_status !== "approved"}
+                  >
+                    Create job
+                  </button>
+                </div>
+              </section>
 
-              <SectionCard title="Protected state" subtitle="Planner-derived and operator-applied protection are shown separately.">
+              <CollapsibleSection
+                title="Show protection details"
+                subtitle="Planner and operator protection are kept separate."
+              >
                 <KeyValueList
                   items={[
                     { label: "Planner protected", value: formatRelativeBoolean(detail.protected_state.planner_protected) },
@@ -298,10 +405,13 @@ export function ReviewPage() {
                     { label: "Updated at", value: formatDateTime(detail.protected_state.updated_at) },
                   ]}
                 />
-              </SectionCard>
+              </CollapsibleSection>
 
               {detail.latest_plan ? (
-                <SectionCard title="Latest plan" subtitle={`Action: ${detail.latest_plan.action}`}>
+                <CollapsibleSection
+                  title="Show latest plan"
+                  subtitle="Planner action, confidence, and profile details."
+                >
                   <KeyValueList
                     items={[
                       { label: "Action", value: <StatusBadge value={detail.latest_plan.action} /> },
@@ -310,113 +420,36 @@ export function ReviewPage() {
                       { label: "Profile", value: detail.latest_plan.profile_name ?? "Default policy" },
                     ]}
                   />
-                </SectionCard>
+                </CollapsibleSection>
               ) : null}
 
               {detail.latest_job ? (
-                <SectionCard title="Latest job" subtitle={`Job ${detail.latest_job.id.slice(0, 8)}`}>
-                  <KeyValueList
-                    items={[
-                      { label: "Status", value: <StatusBadge value={detail.latest_job.status} /> },
-                      { label: "Verification", value: <StatusBadge value={detail.latest_job.verification_status} /> },
-                      { label: "Replacement", value: <StatusBadge value={detail.latest_job.replacement_status} /> },
-                      { label: "Failure", value: detail.latest_job.failure_message ?? "None" },
-                    ]}
-                  />
-                </SectionCard>
-              ) : null}
-
-              <SectionCard title="Operator actions" subtitle="All review decisions are explicit, authenticated, and auditable.">
-                <div className="card-stack">
-                  <label className="field">
-                    <span>Decision note</span>
-                    <textarea
-                      value={decisionNote}
-                      onChange={(event) => setDecisionNote(event.target.value)}
-                      placeholder="Optional operator note for the review decision"
-                      rows={4}
+                <CollapsibleSection
+                  title="Advanced latest job details"
+                  subtitle="Latest execution status and verification outcome."
+                >
+                  <div className="card-stack">
+                    <KeyValueList
+                      items={[
+                        { label: "Status", value: <StatusBadge value={detail.latest_job.status} /> },
+                        { label: "Verification", value: <StatusBadge value={detail.latest_job.verification_status} /> },
+                        { label: "Replacement", value: <StatusBadge value={detail.latest_job.replacement_status} /> },
+                        { label: "Failure", value: detail.latest_job.failure_message ?? "None" },
+                      ]}
                     />
-                  </label>
-                  <div className="button-row">
-                    <button
-                      className="button button-primary"
-                      type="button"
-                      onClick={() => handleDecision("approve")}
-                      disabled={isActionPending || !detail.requires_review}
-                    >
-                      {approveMutation.isPending ? "Approving…" : "Approve"}
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      onClick={() => handleDecision("hold")}
-                      disabled={isActionPending}
-                    >
-                      {holdMutation.isPending ? "Holding…" : "Hold"}
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      onClick={() => handleDecision("reject")}
-                      disabled={isActionPending}
-                    >
-                      {rejectMutation.isPending ? "Rejecting…" : "Reject"}
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      onClick={() => handleDecision("mark_protected")}
-                      disabled={isActionPending || detail.protected_state.operator_protected}
-                    >
-                      {protectMutation.isPending ? "Marking…" : "Mark protected"}
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      onClick={() => handleDecision("clear_protected")}
-                      disabled={isActionPending || !detail.protected_state.operator_protected}
-                    >
-                      {clearProtectedMutation.isPending ? "Clearing…" : "Clear protected"}
-                    </button>
-                    <button
-                      className="button button-secondary"
-                      type="button"
-                      onClick={() => handleDecision("replan")}
-                      disabled={isActionPending}
-                    >
-                      {replanMutation.isPending ? "Replanning…" : "Replan"}
-                    </button>
-                    <button
-                      className="button button-primary"
-                      type="button"
-                      onClick={() => handleDecision("create_job")}
-                      disabled={isActionPending || detail.review_status !== "approved"}
-                    >
-                      {createJobMutation.isPending ? "Creating…" : "Create job"}
-                    </button>
+                    <PayloadViewer
+                      payload={{
+                        latest_plan: detail.latest_plan,
+                        latest_job: detail.latest_job,
+                        protected_state: detail.protected_state,
+                      }}
+                    />
                   </div>
-                </div>
-              </SectionCard>
-
-              {detail.latest_job ? (
-                <SectionCard title="Latest job payloads" subtitle="Structured outputs remain secondary to the operator workflow.">
-                  <PayloadViewer
-                    payload={{
-                      latest_job_id: detail.latest_job.id,
-                      latest_plan_snapshot_id: detail.latest_plan_snapshot_id,
-                      latest_probe_snapshot_id: detail.latest_probe_snapshot_id,
-                    }}
-                  />
-                </SectionCard>
+                </CollapsibleSection>
               ) : null}
             </div>
-          ) : (
-            <EmptyState
-              title="No review item selected"
-              message="Choose a manual-review item from the list to inspect the current plan, job state, and operator actions."
-            />
-          )}
-        </SectionCard>
+          </SectionCard>
+        ) : null}
       </section>
     </div>
   );
@@ -424,4 +457,48 @@ export function ReviewPage() {
 
 function formatProtectedSource(value: string) {
   return value.split("_").join(" ");
+}
+
+function summariseReviewItems(
+  items: Array<{
+    review_status: string;
+    protected_state: { is_protected: boolean };
+  }>,
+) {
+  return {
+    total: items.length,
+    open: items.filter((item) => item.review_status === "open").length,
+    protected: items.filter((item) => item.protected_state.is_protected).length,
+    held: items.filter((item) => item.review_status === "held").length,
+  };
+}
+
+function reviewPriorityLabel(item: {
+  protected_state: { is_protected: boolean };
+  requires_review: boolean;
+  latest_job: { status: string } | null;
+}) {
+  if (item.protected_state.is_protected) {
+    return "Protected";
+  }
+  if (item.latest_job?.status === "failed") {
+    return "Recent failure";
+  }
+  if (item.requires_review) {
+    return "Needs decision";
+  }
+  return "Watch list";
+}
+
+function summariseReasons(
+  reasons: Array<{ message: string }>,
+  warnings: Array<{ message: string }>,
+) {
+  if (reasons[0]?.message) {
+    return reasons[0].message;
+  }
+  if (warnings[0]?.message) {
+    return warnings[0].message;
+  }
+  return "No reason details recorded";
 }
