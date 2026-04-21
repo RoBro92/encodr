@@ -71,3 +71,25 @@ class WorkerApiClient:
             body=payload,
             bearer_token=worker_token,
         )
+
+    def request_job(self, *, worker_token: str) -> dict:
+        return self.requester.request_json(
+            method="POST",
+            url=f"{self.base_url}/worker/jobs/request",
+            bearer_token=worker_token,
+        )
+
+    def claim_job(self, *, worker_token: str, job_id: str) -> dict:
+        return self.requester.request_json(
+            method="POST",
+            url=f"{self.base_url}/worker/jobs/{job_id}/claim",
+            bearer_token=worker_token,
+        )
+
+    def submit_job_result(self, *, worker_token: str, job_id: str, payload: dict) -> dict:
+        return self.requester.request_json(
+            method="POST",
+            url=f"{self.base_url}/worker/jobs/{job_id}/result",
+            body=payload,
+            bearer_token=worker_token,
+        )

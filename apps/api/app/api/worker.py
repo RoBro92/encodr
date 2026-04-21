@@ -15,11 +15,16 @@ from app.core.dependencies import (
 )
 from app.schemas.worker import (
     QueueHealthSummaryResponse,
+    WorkerAssignedJobResponse,
     WorkerHeartbeatRequest,
     WorkerHeartbeatResponse,
     WorkerInventoryDetailResponse,
     WorkerInventoryListResponse,
     WorkerInventorySummaryResponse,
+    WorkerJobClaimResponse,
+    WorkerJobPollResponse,
+    WorkerJobResultRequest,
+    WorkerJobResultResponse,
     WorkerRegistrationRequest,
     WorkerRegistrationResponse,
     WorkerRunOnceResponse,
@@ -113,6 +118,62 @@ def heartbeat_worker(
         )
         session.commit()
         return WorkerHeartbeatResponse(**heartbeat)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@worker_router.post("/jobs/request", response_model=WorkerJobPollResponse)
+def request_remote_job(
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_worker: Worker = Depends(require_authenticated_worker),
+) -> WorkerJobPollResponse:
+    try:
+        payload = service.request_job(session, worker=current_worker)
+        session.commit()
+        if payload["job"] is not None:
+            payload["job"] = WorkerAssignedJobResponse(**payload["job"])
+        return WorkerJobPollResponse(**payload)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@worker_router.post("/jobs/{job_id}/claim", response_model=WorkerJobClaimResponse)
+def claim_remote_job(
+    job_id: str,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_worker: Worker = Depends(require_authenticated_worker),
+) -> WorkerJobClaimResponse:
+    try:
+        payload = service.claim_job(session, worker=current_worker, job_id=job_id)
+        session.commit()
+        return WorkerJobClaimResponse(**payload)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@worker_router.post("/jobs/{job_id}/result", response_model=WorkerJobResultResponse)
+def submit_remote_job_result(
+    job_id: str,
+    payload: WorkerJobResultRequest,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_worker: Worker = Depends(require_authenticated_worker),
+) -> WorkerJobResultResponse:
+    try:
+        response = service.submit_job_result(
+            session,
+            worker=current_worker,
+            job_id=job_id,
+            result_payload=payload.result_payload,
+            runtime_summary=payload.runtime_summary.model_dump(mode="json") if payload.runtime_summary is not None else None,
+        )
+        session.commit()
+        return WorkerJobResultResponse(**response)
     except ApiServiceError as error:
         session.rollback()
         _raise_service_error(error)

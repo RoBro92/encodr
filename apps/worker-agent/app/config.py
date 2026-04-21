@@ -17,6 +17,8 @@ class WorkerAgentSettings:
     queue: str
     scratch_dir: str | None
     media_mounts: tuple[str, ...]
+    ffmpeg_path: str
+    ffprobe_path: str
 
 
 def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
@@ -51,4 +53,6 @@ def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
             for value in env.get("ENCODR_WORKER_AGENT_MEDIA_MOUNTS", "").split(",")
             if value.strip()
         ),
+        ffmpeg_path=env.get("ENCODR_WORKER_AGENT_FFMPEG_PATH", "ffmpeg"),
+        ffprobe_path=env.get("ENCODR_WORKER_AGENT_FFPROBE_PATH", "ffprobe"),
     )

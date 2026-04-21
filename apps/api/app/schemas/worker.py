@@ -16,6 +16,7 @@ class HealthStatus(str, Enum):
 
 class BinaryStatusResponse(BaseModel):
     configured_path: str
+    resolved_path: str | None = None
     discoverable: bool
     exists: bool
     executable: bool
@@ -85,10 +86,17 @@ class WorkerStatusResponse(BaseModel):
     local_only: bool
     enabled: bool
     available: bool
+    eligible: bool
+    eligibility_summary: str
     default_queue: str
     ffmpeg: BinaryStatusResponse
     ffprobe: BinaryStatusResponse
     local_worker_queue: str
+    execution_backends: list[str] = Field(default_factory=list)
+    hardware_acceleration: list[str] = Field(default_factory=list)
+    hardware_probes: list[dict[str, Any]] = Field(default_factory=list)
+    scratch_path: dict[str, Any] = Field(default_factory=dict)
+    media_paths: list[dict[str, Any]] = Field(default_factory=list)
     last_run_started_at: datetime | None = None
     last_run_completed_at: datetime | None = None
     last_processed_job_id: str | None = None
@@ -204,3 +212,37 @@ class WorkerHeartbeatResponse(BaseModel):
 class WorkerStateChangeResponse(BaseModel):
     worker: WorkerInventoryDetailResponse
     status: str
+
+
+class WorkerAssignedJobResponse(BaseModel):
+    job_id: str
+    tracked_file_id: str
+    plan_snapshot_id: str
+    source_path: str
+    plan_payload: dict[str, Any]
+    media_payload: dict[str, Any]
+    requested_worker_type: str | None = None
+    assignment_state: Literal["assigned", "claimed"] = "assigned"
+    assigned_worker_id: str | None = None
+
+
+class WorkerJobPollResponse(BaseModel):
+    status: Literal["assigned", "no_job"]
+    job: WorkerAssignedJobResponse | None = None
+
+
+class WorkerJobClaimResponse(BaseModel):
+    status: Literal["claimed"]
+    job_id: str
+    claimed_at: datetime
+
+
+class WorkerJobResultRequest(BaseModel):
+    result_payload: dict[str, Any]
+    runtime_summary: WorkerRuntimeSummaryResponse | None = None
+
+
+class WorkerJobResultResponse(BaseModel):
+    job_id: str
+    final_status: str
+    completed_at: datetime | None = None

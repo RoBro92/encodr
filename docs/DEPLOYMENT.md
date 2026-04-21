@@ -22,8 +22,8 @@
 
 - local worker runs in the LXC
 - Intel iGPU acceleration may be available
-- remote worker registration/heartbeat groundwork is implemented
-- remote worker execution is not implemented yet
+- remote workers can register, heartbeat, claim jobs, execute them, and report results
+- Windows is the first practical remote worker target
 
 ## Required secrets
 
@@ -43,7 +43,7 @@ These must come from environment configuration in deployed environments.
 
 ## Later deployment work
 
-- remote job assignment to additional hosts
+- broader remote worker rollout to additional host types
 - stronger reverse-proxy guidance
 - container hardening/slimming
 - backup/restore runbooks

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Select, asc, desc, func, select
+from sqlalchemy import Select, asc, desc, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from encodr_core.execution import ExecutionResult
@@ -14,6 +14,7 @@ from encodr_db.models import (
     ReplacementStatus,
     TrackedFile,
     VerificationStatus,
+    Worker,
     WorkerType,
 )
 
@@ -38,7 +39,7 @@ class JobRepository:
             worker_name=worker_name,
             status=JobStatus.PENDING,
             attempt_count=attempt_count,
-            requested_worker_type=WorkerType.LOCAL,
+            requested_worker_type=None,
             input_size_bytes=tracked_file.last_observed_size,
             verification_status=VerificationStatus.PENDING,
             replacement_status=ReplacementStatus.PENDING,
@@ -52,15 +53,39 @@ class JobRepository:
         self.session.flush()
         return job
 
-    def fetch_next_pending_job(self) -> Job | None:
+    def fetch_next_pending_local_job(self) -> Job | None:
         query = (
             select(Job)
-            .where(Job.status == JobStatus.PENDING)
+            .where(
+                Job.status == JobStatus.PENDING,
+                Job.assigned_worker_id.is_(None),
+                or_(Job.requested_worker_type.is_(None), Job.requested_worker_type == WorkerType.LOCAL),
+            )
             .options(
                 joinedload(Job.tracked_file),
                 joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
             )
             .order_by(asc(Job.created_at))
+            .limit(1)
+        )
+        return self.session.scalar(query)
+
+    def fetch_next_pending_remote_job(self, worker: Worker) -> Job | None:
+        query = (
+            select(Job)
+            .where(
+                Job.status == JobStatus.PENDING,
+                or_(Job.requested_worker_type.is_(None), Job.requested_worker_type == WorkerType.REMOTE),
+                or_(Job.assigned_worker_id.is_(None), Job.assigned_worker_id == worker.id),
+            )
+            .options(
+                joinedload(Job.tracked_file),
+                joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
+            )
+            .order_by(
+                desc(Job.assigned_worker_id == worker.id),
+                asc(Job.created_at),
+            )
             .limit(1)
         )
         return self.session.scalar(query)
@@ -98,6 +123,19 @@ class JobRepository:
         self.session.flush()
         return job
 
+    def assign_worker(self, job: Job, *, worker: Worker) -> Job:
+        job.assigned_worker_id = worker.id
+        job.worker_name = worker.display_name
+        self.session.flush()
+        return job
+
+    def mark_running_for_worker(self, job: Job, *, worker: Worker) -> Job:
+        self.mark_running(job, worker_name=worker.display_name)
+        job.assigned_worker_id = worker.id
+        job.last_worker_id = worker.id
+        self.session.flush()
+        return job
+
     def mark_result(self, job: Job, result: ExecutionResult) -> Job:
         status_map = {
             "completed": JobStatus.COMPLETED,
@@ -132,6 +170,7 @@ class JobRepository:
         job.replacement_failure_message = (
             result.replacement.failure_message if result.replacement is not None else None
         )
+        job.assigned_worker_id = None
         self.session.flush()
         return job
 

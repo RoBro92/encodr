@@ -40,19 +40,34 @@ def main(argv: list[str] | None = None) -> None:
         )
         return
 
+    if command == "run-once":
+        response = service.process_once()
+        if response is None:
+            logger.info("no remote job available")
+        else:
+            logger.info(
+                "completed remote job %s with status %s",
+                response["job_id"],
+                response["final_status"],
+            )
+        return
+
     if command == "loop":
         iterations = int(args[1]) if len(args) > 1 else 1
         for _ in range(iterations):
-            response = service.heartbeat()
-            logger.info(
-                "heartbeat acknowledged for %s (%s)",
-                response["worker_key"],
-                response["health_status"],
-            )
+            response = service.process_once()
+            if response is None:
+                logger.info("no remote job available")
+            else:
+                logger.info(
+                    "completed remote job %s with status %s",
+                    response["job_id"],
+                    response["final_status"],
+                )
             time.sleep(settings.heartbeat_interval_seconds)
         return
 
-    raise SystemExit(f"Unsupported command '{command}'. Use register, heartbeat, or loop.")
+    raise SystemExit(f"Unsupported command '{command}'. Use register, heartbeat, run-once, or loop.")
 
 
 if __name__ == "__main__":

@@ -50,6 +50,6 @@ packages/db/README.md
 packages/shared/README.md
 tests/README.md
 
-# Local-only development workspace
+# Local-only development workspace and generated E2E media harness
 dev-local/
 .runtime/
