@@ -14,6 +14,7 @@ import tarfile
 import tempfile
 from pathlib import Path
 from urllib.error import URLError
+from urllib.parse import urlsplit
 from urllib.request import urlopen
 
 
@@ -182,18 +183,20 @@ def command_health(args: argparse.Namespace) -> int:
     )
 
     api_status = check_url(f"http://127.0.0.1:{bundle.app.api.port}{bundle.app.api.base_path}/health")
-    ui_status = check_url(str(bundle.app.ui.public_url))
+    local_ui_url = local_ui_health_url(project_root)
+    ui_status = check_url(local_ui_url)
 
     print("Local stack health")
     print("------------------")
     print(f"API: {api_status['status']} - {api_status['summary']}")
     print(f"UI: {ui_status['status']} - {ui_status['summary']}")
     print(f"API URL: http://127.0.0.1:{bundle.app.api.port}{bundle.app.api.base_path}/health")
-    print(f"UI URL: {bundle.app.ui.public_url}")
+    print(f"Local UI URL: {local_ui_url}")
+    print(f"Public UI URL: {bundle.app.ui.public_url}")
     print("\nDocker Compose services:")
     print(compose_result.stdout.strip() or compose_result.stderr.strip() or "(no compose output)")
 
-    if api_status["status"] != "healthy" or compose_result.returncode != 0:
+    if api_status["status"] != "healthy" or ui_status["status"] != "healthy" or compose_result.returncode != 0:
         print("\nNext steps:")
         print("  ./encodr logs")
         print("  ./encodr doctor")
@@ -457,6 +460,30 @@ def compose_env(project_root: Path) -> dict[str, str]:
     env.setdefault("ENCODR_MEDIA_HOST_PATH", str(media_root))
     env.setdefault("ENCODR_TEMP_HOST_PATH", str(temp_root))
     return env
+
+
+def local_ui_health_url(project_root: Path) -> str:
+    env_port = read_env_value(project_root / ".env", "UI_PORT")
+    if env_port:
+        port = env_port
+    else:
+        public_url = str(load_bundle(project_root).app.ui.public_url)
+        parsed = urlsplit(public_url)
+        port = str(parsed.port) if parsed.port is not None else "5173"
+    return f"http://127.0.0.1:{port}"
+
+
+def read_env_value(env_path: Path, key: str) -> str | None:
+    if not env_path.exists():
+        return None
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#") or "=" not in line:
+            continue
+        name, raw_value = line.split("=", 1)
+        if name.strip() == key:
+            return raw_value.strip()
+    return None
 
 
 def normalise_allowed_host(value: str) -> str | None:

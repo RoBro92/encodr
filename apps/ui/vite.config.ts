@@ -52,6 +52,10 @@ function extractRequestHost(hostHeader: string | undefined): string {
   return hostHeader.replace(/:\d+$/, "").trim().toLowerCase();
 }
 
+function isSafeDisplayHost(host: string): boolean {
+  return /^[a-z0-9._-]+$/i.test(host);
+}
+
 function isAllowedHost(host: string): boolean {
   if (!host) {
     return false;
@@ -63,13 +67,17 @@ function isAllowedHost(host: string): boolean {
 }
 
 function blockedHostResponse(host: string): string {
+  const command =
+    host && isSafeDisplayHost(host)
+      ? `  encodr addhost ${host}`
+      : "  encodr addhost your.domain.example";
   return [
     `Blocked request. The UI host "${host}" is not allowed.`,
     "",
     "From the Encodr root console, run:",
-    `  encodr addhost ${host}`,
+    command,
     "",
-    "This will add the host to allowed hosts and restart.",
+    "This will add the host to allowed hosts and recreate the stack.",
   ].join("\n");
 }
 

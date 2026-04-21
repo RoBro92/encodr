@@ -377,6 +377,41 @@ def test_scan_and_dry_run_folder_workflows_return_clear_summary_data(
         assert session.query(PlanSnapshot).count() == 0
 
 
+def test_folder_browse_uses_the_active_media_root_for_parent_navigation(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    alt_root = tmp_path / "AltMedia"
+    nested_folder = alt_root / "TV" / "Example Show"
+    nested_folder.mkdir(parents=True, exist_ok=True)
+    (nested_folder / "Episode.mkv").write_text("episode", encoding="utf-8")
+    bundle.workers.local.media_mounts = [layout.source_dir, alt_root]
+
+    browse_response = context.client.get(
+        "/api/files/browse",
+        params={"path": nested_folder.as_posix()},
+        headers=auth.headers,
+    )
+
+    assert browse_response.status_code == 200
+    browse_payload = browse_response.json()
+    assert browse_payload["root_path"] == alt_root.resolve().as_posix()
+    assert browse_payload["parent_path"] == (alt_root / "TV").resolve().as_posix()
+
+    scan_response = context.client.post(
+        "/api/files/scan",
+        json={"source_path": nested_folder.as_posix()},
+        headers=auth.headers,
+    )
+
+    assert scan_response.status_code == 200
+    assert scan_response.json()["root_path"] == alt_root.resolve().as_posix()
+
+
 def test_batch_plan_and_job_creation_from_folder_persist_results_without_bypassing_review(
     tmp_path: Path,
     repo_root: Path,

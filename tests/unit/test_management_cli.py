@@ -260,6 +260,39 @@ def test_command_mount_setup_validation_mode_checks_target_directory(
     assert "Readable from LXC: yes" in output
 
 
+def test_command_health_checks_local_ui_service_not_public_url(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / ".env").write_text("UI_PORT=5544\n", encoding="utf-8")
+
+    monkeypatch.setattr(encodr_cli, "bootstrap_repo", lambda _root: None)
+    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
+
+    def fake_run(*_args, **_kwargs):
+        return SimpleNamespace(returncode=0, stdout="api up\nui up\n", stderr="")
+
+    statuses: list[str] = []
+
+    def fake_check_url(url: str) -> dict[str, str]:
+        statuses.append(url)
+        return {"status": "healthy", "summary": "ok"}
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+    monkeypatch.setattr(encodr_cli, "check_url", fake_check_url)
+
+    result = encodr_cli.command_health(argparse.Namespace(project_root=str(project_root)))
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert statuses == ["http://127.0.0.1:8000/api/health", "http://127.0.0.1:5544"]
+    assert "Local UI URL: http://127.0.0.1:5544" in output
+    assert "Public UI URL: http://localhost:5173" in output
+
+
 def test_command_addhost_updates_env_and_recreates_stack(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,

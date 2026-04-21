@@ -43,6 +43,16 @@ class LibraryService:
             raise ApiValidationError("No media mount is configured.")
         return roots[0]
 
+    def root_for_path(self, path: Path) -> Path:
+        resolved = path.resolve()
+        for root in self.allowed_roots():
+            try:
+                resolved.relative_to(root)
+                return root
+            except ValueError:
+                continue
+        raise ApiValidationError("Folder browsing is only available under the configured media mounts.")
+
     def resolve_directory(self, path: str | None) -> Path:
         if path is None or not path.strip():
             candidate = self.default_root()
@@ -53,13 +63,8 @@ class LibraryService:
         if not candidate.is_dir():
             raise ApiValidationError("The selected path must be a directory.")
         resolved = candidate.resolve()
-        for root in self.allowed_roots():
-            try:
-                resolved.relative_to(root)
-                return resolved
-            except ValueError:
-                continue
-        raise ApiValidationError("Folder browsing is only available under the configured media mounts.")
+        self.root_for_path(resolved)
+        return resolved
 
     def resolve_file(self, path: str) -> Path:
         candidate = Path(path).expanduser()
@@ -68,17 +73,12 @@ class LibraryService:
         if not candidate.is_file():
             raise ApiValidationError("The selected path must point to a file.")
         resolved = candidate.resolve()
-        for root in self.allowed_roots():
-            try:
-                resolved.relative_to(root)
-                return resolved
-            except ValueError:
-                continue
-        raise ApiValidationError("Files must stay under the configured media mounts.")
+        self.root_for_path(resolved)
+        return resolved
 
     def browse_directory(self, path: str | None) -> dict[str, object]:
         current = self.resolve_directory(path)
-        default_root = self.default_root()
+        active_root = self.root_for_path(current)
         entries = []
         for item in sorted(current.iterdir(), key=lambda child: (not child.is_dir(), child.name.lower())):
             if item.name.startswith("."):
@@ -96,16 +96,16 @@ class LibraryService:
             )
 
         parent_path: str | None = None
-        if current != default_root:
+        if current != active_root:
             parent = current.parent
             try:
-                parent.relative_to(default_root)
+                parent.relative_to(active_root)
                 parent_path = parent.as_posix()
             except ValueError:
-                parent_path = default_root.as_posix()
+                parent_path = active_root.as_posix()
 
         return {
-            "root_path": default_root.as_posix(),
+            "root_path": active_root.as_posix(),
             "current_path": current.as_posix(),
             "parent_path": parent_path,
             "entries": entries,
@@ -113,6 +113,7 @@ class LibraryService:
 
     def scan_directory(self, path: str) -> dict[str, object]:
         current = self.resolve_directory(path)
+        active_root = self.root_for_path(current)
         directories: list[Path] = []
         video_files: list[Path] = []
         for item in current.rglob("*"):
@@ -146,7 +147,7 @@ class LibraryService:
 
         return {
             "folder_path": current.as_posix(),
-            "root_path": self.default_root().as_posix(),
+            "root_path": active_root.as_posix(),
             "directory_count": len(directories),
             "direct_directory_count": len(direct_children),
             "video_file_count": len(video_files),
