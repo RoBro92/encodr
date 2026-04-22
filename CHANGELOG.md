@@ -1,5 +1,53 @@
 # Changelog
 
+## 0.3.4 - 2026-04-22
+
+This release focuses on worker orchestration, persistent scan state, watched jobs, schedule-aware dispatch, and conservative interruption handling.
+
+- added explicit orchestration support for:
+  - automatic worker distribution
+  - preferred worker selection
+  - pinned worker selection
+  - preferred backend overrides
+- added worker-level and job-level schedule windows so jobs can remain queued until an allowed execution window opens
+- added persistent scan records for Library flows, including:
+  - saved scan history
+  - reopen previous scan results
+  - rescan support
+  - persisted scan summaries and discovered-file payloads
+- added watched/default job definitions with:
+  - source-path monitoring
+  - optional ruleset override
+  - optional preferred or pinned worker
+  - optional preferred backend
+  - optional schedule window
+  - auto-queue or stage-only behaviour
+- added conservative duplicate prevention for watched-folder ingestion so new files are not repeatedly queued
+- added SSD-first source-path aware workflows by allowing watched jobs to target cache or download locations directly
+- extended job state and API visibility with:
+  - `scheduled`
+  - `interrupted`
+  - scheduled-for timestamps
+  - schedule summaries
+  - interruption reason and retryability
+  - watched-job linkage
+- added conservative worker interruption handling with a grace period and retry-from-start semantics rather than pretending cross-worker resume support
+- improved Library, Jobs, and Workers UI flows just enough to support:
+  - saved scans
+  - watched jobs
+  - schedule editing
+  - worker and backend constraints
+  - scheduled/interrupted job visibility
+- preserved existing:
+  - local and remote execution
+  - per-worker backend preferences
+  - progress reporting
+  - dry-run and manual review safety
+  - protected-file behaviour
+- revalidated the platform with:
+  - `pytest -q`
+  - UI tests and production build
+
 ## 0.3.3 - 2026-04-22
 
 This release focuses on platform completion for worker runtime selection, hardware-aware execution, managed container runtime configuration, and operational visibility.
