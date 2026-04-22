@@ -19,6 +19,8 @@ class WorkerAgentSettings:
     media_mounts: tuple[str, ...]
     ffmpeg_path: str
     ffprobe_path: str
+    preferred_backend: str
+    allow_cpu_fallback: bool
 
 
 def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
@@ -55,4 +57,7 @@ def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
         ),
         ffmpeg_path=env.get("ENCODR_WORKER_AGENT_FFMPEG_PATH", "ffmpeg"),
         ffprobe_path=env.get("ENCODR_WORKER_AGENT_FFPROBE_PATH", "ffprobe"),
+        preferred_backend=(env.get("ENCODR_WORKER_AGENT_PREFERRED_BACKEND", "cpu").strip() or "cpu"),
+        allow_cpu_fallback=env.get("ENCODR_WORKER_AGENT_ALLOW_CPU_FALLBACK", "true").strip().lower()
+        not in {"0", "false", "no", "off"},
     )

@@ -826,6 +826,9 @@ describe("Encodr UI shell", () => {
               progress_fps: 83.2,
               progress_speed: 1.94,
               worker_name: "worker-remote-a",
+              requested_execution_backend: "prefer_nvidia_gpu",
+              actual_execution_backend: "nvidia_gpu",
+              backend_selection_reason: "Using NVIDIA NVENC for hardware-accelerated video encoding.",
             },
           ],
           limit: 100,
@@ -840,6 +843,7 @@ describe("Encodr UI shell", () => {
     expect(screen.getByText(/42%/i)).toBeInTheDocument();
     expect(screen.getAllByText(/worker-remote-a/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/83\.2 fps/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/nvidia/i).length).toBeGreaterThan(0);
   });
 
   it("uses tracked-file search requests instead of a fixed local picker list", async () => {
@@ -1082,6 +1086,76 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
     expect(screen.getByText(/not configured/i)).toBeInTheDocument();
   });
+
+  it("shows worker current activity, telemetry, and recent jobs in worker detail", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: {
+          ...workerInventory(),
+          runtime_summary: {
+            queue: "local-default",
+            scratch_dir: "/temp",
+            media_mounts: ["/media"],
+            preferred_backend: "prefer_nvidia_gpu",
+            allow_cpu_fallback: true,
+            current_job_id: "job-running",
+            current_backend: "nvidia_gpu",
+            current_stage: "encoding",
+            current_progress_percent: 44,
+            current_progress_updated_at: "2026-04-22T12:01:00Z",
+            telemetry: {
+              collected_at: "2026-04-22T12:01:00Z",
+              cpu_usage_percent: 68.2,
+              process_cpu_usage_percent: 41.1,
+              memory_usage_percent: 58.0,
+              process_memory_bytes: 209715200,
+              cpu_temperature_c: 62.1,
+              gpu: {
+                vendor: "NVIDIA",
+                status: "healthy",
+                usage_percent: 77.0,
+                temperature_c: 69.0,
+                message: "Telemetry is being read from nvidia-smi.",
+              },
+            },
+            last_completed_job_id: "job-older",
+          },
+          recent_jobs: [
+            {
+              job_id: "job-older",
+              source_filename: "Previous Film (2024).mkv",
+              status: "completed",
+              actual_execution_backend: "nvidia_gpu",
+              requested_execution_backend: "prefer_nvidia_gpu",
+              backend_fallback_used: false,
+              completed_at: "2026-04-22T11:50:00Z",
+              duration_seconds: 120,
+              failure_message: null,
+            },
+          ],
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [workerInventory()],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /current activity/i })).toBeInTheDocument();
+    expect(screen.getByText(/job-running/i)).toBeInTheDocument();
+    expect(screen.getByText(/44%/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/nvidia/i).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: /recent jobs/i })).toBeInTheDocument();
+    expect(screen.getByText(/previous film \(2024\)\.mkv/i)).toBeInTheDocument();
+  });
 });
 
 function analyticsDashboard() {
@@ -1157,6 +1231,8 @@ function workerStatus() {
     local_only: true,
     enabled: true,
     available: true,
+    eligible: true,
+    eligibility_summary: "The local worker can accept execution work.",
     default_queue: "local-default",
     ffmpeg: binaryStatus(),
     ffprobe: binaryStatus(),
@@ -1167,6 +1243,20 @@ function workerStatus() {
     last_result_status: "completed",
     last_failure_message: null,
     processed_jobs: 4,
+    current_job_id: null,
+    current_backend: null,
+    current_stage: null,
+    current_progress_percent: null,
+    current_progress_updated_at: null,
+    telemetry: {
+      collected_at: "2026-04-22T12:00:00Z",
+      cpu_usage_percent: 21.2,
+      process_cpu_usage_percent: 5.4,
+      memory_usage_percent: 33.1,
+      process_memory_bytes: 104857600,
+      cpu_temperature_c: null,
+      gpu: null,
+    },
     capabilities: { ffmpeg: true, ffprobe: true, intel_qsv: false },
     execution_backends: ["remux", "transcode"],
     hardware_acceleration: [],
@@ -1563,6 +1653,11 @@ function jobDetail() {
     progress_fps: null,
     progress_speed: null,
     progress_updated_at: null,
+    requested_execution_backend: "cpu",
+    actual_execution_backend: null,
+    actual_execution_accelerator: null,
+    backend_fallback_used: false,
+    backend_selection_reason: null,
     failure_message: null,
     failure_category: null,
     verification_status: "pending",
@@ -1707,5 +1802,24 @@ function workerInventory() {
     },
     pending_assignment_count: 0,
     last_completed_job_id: null,
+    runtime_summary: {
+      queue: "remote-default",
+      scratch_dir: "/temp",
+      media_mounts: ["/media"],
+      preferred_backend: "cpu",
+      allow_cpu_fallback: true,
+      current_job_id: null,
+      current_backend: null,
+      current_stage: null,
+      current_progress_percent: null,
+      current_progress_updated_at: null,
+      telemetry: null,
+      last_completed_job_id: null,
+    },
+    binary_summary: [],
+    assigned_job_ids: [],
+    last_processed_job_id: null,
+    recent_failure_message: null,
+    recent_jobs: [],
   };
 }

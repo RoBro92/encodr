@@ -140,6 +140,7 @@ def command_start(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bootstrap_repo(project_root)
     ensure_local_storage_mounts(project_root)
+    ensure_runtime_compose_override(project_root)
     print("Starting Encodr locally with Docker Compose...")
     return run_compose(args, ["up", "-d", "--build"])
 
@@ -153,6 +154,7 @@ def command_restart(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bootstrap_repo(project_root)
     ensure_local_storage_mounts(project_root)
+    ensure_runtime_compose_override(project_root)
     print("Restarting the local Encodr stack...")
     return run_compose(args, ["restart"])
 
@@ -172,6 +174,7 @@ def command_logs(args: argparse.Namespace) -> int:
 def command_health(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bootstrap_repo(project_root)
+    ensure_runtime_compose_override(project_root)
     bundle = load_bundle(project_root)
     compose_result = subprocess.run(
         compose_command(project_root, "ps"),
@@ -210,6 +213,7 @@ def command_rebuild(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bootstrap_repo(project_root)
     ensure_local_storage_mounts(project_root)
+    ensure_runtime_compose_override(project_root)
     print("Rebuilding and recreating the local Encodr stack...")
     return run_compose(args, ["up", "-d", "--build", "--force-recreate"])
 
@@ -306,6 +310,7 @@ def command_update(args: argparse.Namespace) -> int:
             return 0
 
     apply_archive_update(project_root=project_root, download_url=status.download_url)
+    ensure_runtime_compose_override(project_root)
     subprocess.run(
         compose_command(project_root, "up", "-d", "--build"),
         cwd=project_root,
@@ -462,6 +467,17 @@ def compose_env(project_root: Path) -> dict[str, str]:
     env.setdefault("ENCODR_MEDIA_HOST_PATH", str(media_root))
     env.setdefault("ENCODR_TEMP_HOST_PATH", str(temp_root))
     return env
+
+
+def ensure_runtime_compose_override(project_root: Path) -> None:
+    generator = project_root / "infra" / "scripts" / "generate_runtime_compose.py"
+    if not generator.exists():
+        return
+    subprocess.run(
+        [sys.executable, str(generator), "--project-root", str(project_root)],
+        cwd=project_root,
+        check=True,
+    )
 
 
 def local_ui_health_url(project_root: Path) -> str:
@@ -685,10 +701,15 @@ def check_api_health(bundle: ConfigBundle) -> dict[str, str]:
 
 
 def compose_command(project_root: Path, *compose_args: str) -> list[str]:
+    ensure_runtime_compose_override(project_root)
     command = ["docker", "compose"]
     local_override = project_root / "infra" / "compose" / "local.override.yml"
+    runtime_override = project_root / ".runtime" / "compose.runtime.yml"
+    command.extend(["-f", "docker-compose.yml"])
     if (project_root / ".git").exists() and local_override.exists():
-        command.extend(["-f", "docker-compose.yml", "-f", str(local_override)])
+        command.extend(["-f", str(local_override)])
+    if runtime_override.exists():
+        command.extend(["-f", str(runtime_override)])
     command.extend(compose_args)
     return command
 

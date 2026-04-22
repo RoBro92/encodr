@@ -1,5 +1,49 @@
 # Changelog
 
+## 0.3.3-rc.1 - 2026-04-22
+
+This release candidate focuses on platform completion for worker runtime selection, hardware-aware execution, managed container runtime configuration, and operational visibility.
+
+- added backend-aware execution selection for:
+  - CPU
+  - Intel iGPU / QSV
+  - NVIDIA GPU / NVENC
+  - AMD GPU / AMF or VAAPI where truthfully available
+- added requested vs actual backend tracking on jobs, including:
+  - fallback-used reporting
+  - backend selection reason
+  - persisted backend metadata in the job model and API
+- added app-managed runtime compose generation so Encodr can expose verified hardware paths to containers without manual docker-compose editing
+- extended install and management CLI flows so runtime compose overrides are regenerated automatically during:
+  - install
+  - start / restart
+  - rebuild
+  - update
+- improved worker assignment and local queue selection so jobs are matched conservatively against backend capability and CPU fallback policy
+- extended local and remote worker runtime summaries with:
+  - current job
+  - current backend
+  - current stage and progress
+  - last progress timestamp
+  - recent jobs
+  - bounded live telemetry
+- added truthful telemetry collection where the runtime can actually read it, including:
+  - CPU usage
+  - memory usage
+  - process usage
+  - CPU temperature where readable
+  - NVIDIA and DRM/HWMON-backed GPU telemetry where readable
+- completed the remote worker backend preference path so Windows worker bootstrap can carry:
+  - preferred backend
+  - CPU fallback policy
+- improved Workers, Jobs, System, and Settings so they surface the new backend/runtime truth without broad UI redesign
+- hardened the local validation harness for runtime-heavy scenarios by fixing local-only timing and terminal-state polling issues during stack bring-up and worker execution checks
+- revalidated the full platform flow with:
+  - `pytest -q`
+  - UI tests and build
+  - shell syntax checks
+  - clean local scenario harness execution with local and remote worker success
+
 ## 0.3.2 - 2026-04-21
 
 This release focuses on intelligent processing policy, progress visibility, and worker execution truth.

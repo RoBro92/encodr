@@ -7,7 +7,10 @@ param(
     [string]$Queue = "remote-default",
     [string]$ScratchDir = "C:\EncodrScratch",
     [string]$MediaMounts = "",
-    [string]$PythonCommand = "py"
+    [string]$PythonCommand = "py",
+    [ValidateSet("cpu", "intel_igpu", "nvidia_gpu", "amd_gpu", "cpu_only", "prefer_intel_igpu", "prefer_nvidia_gpu", "prefer_amd_gpu")]
+    [string]$PreferredBackend = "cpu",
+    [bool]$AllowCpuFallback = $true
 )
 
 $ErrorActionPreference = "Stop"
@@ -49,6 +52,8 @@ $EnvContents = @"
 `$env:ENCODR_WORKER_AGENT_TOKEN_FILE = "$TokenFile"
 `$env:ENCODR_WORKER_AGENT_FFMPEG_PATH = "ffmpeg"
 `$env:ENCODR_WORKER_AGENT_FFPROBE_PATH = "ffprobe"
+`$env:ENCODR_WORKER_AGENT_PREFERRED_BACKEND = "$PreferredBackend"
+`$env:ENCODR_WORKER_AGENT_ALLOW_CPU_FALLBACK = "$AllowCpuFallback"
 "@
 $EnvContents | Set-Content -Path $EnvFile -Encoding UTF8
 

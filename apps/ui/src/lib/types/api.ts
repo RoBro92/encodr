@@ -191,6 +191,11 @@ export type JobSummary = {
   progress_fps: number | null;
   progress_speed: number | null;
   progress_updated_at: string | null;
+  requested_execution_backend: string | null;
+  actual_execution_backend: string | null;
+  actual_execution_accelerator: string | null;
+  backend_fallback_used: boolean;
+  backend_selection_reason: string | null;
   failure_message: string | null;
   failure_category: string | null;
   verification_status: string;
@@ -318,6 +323,8 @@ export type WorkerStatus = {
   local_only: boolean;
   enabled: boolean;
   available: boolean;
+  eligible: boolean;
+  eligibility_summary: string;
   default_queue: string;
   ffmpeg: BinaryStatus;
   ffprobe: BinaryStatus;
@@ -328,6 +335,12 @@ export type WorkerStatus = {
   last_result_status: string | null;
   last_failure_message: string | null;
   processed_jobs: number;
+  current_job_id: string | null;
+  current_backend: string | null;
+  current_stage: string | null;
+  current_progress_percent: number | null;
+  current_progress_updated_at: string | null;
+  telemetry: Record<string, unknown> | null;
   capabilities: Record<string, boolean>;
   execution_backends: string[];
   hardware_acceleration: string[];
@@ -446,6 +459,14 @@ export type WorkerRuntimeSummary = {
   queue: string | null;
   scratch_dir: string | null;
   media_mounts: string[];
+  preferred_backend: string | null;
+  allow_cpu_fallback: boolean | null;
+  current_job_id: string | null;
+  current_backend: string | null;
+  current_stage: string | null;
+  current_progress_percent: number | null;
+  current_progress_updated_at: string | null;
+  telemetry: Record<string, unknown> | null;
   last_completed_job_id: string | null;
 };
 
@@ -481,6 +502,17 @@ export type WorkerInventoryDetail = WorkerInventorySummary & {
   assigned_job_ids: string[];
   last_processed_job_id: string | null;
   recent_failure_message: string | null;
+  recent_jobs: Array<{
+    job_id: string;
+    source_filename: string | null;
+    status: string;
+    actual_execution_backend: string | null;
+    requested_execution_backend: string | null;
+    backend_fallback_used: boolean;
+    completed_at: string | null;
+    duration_seconds: number | null;
+    failure_message: string | null;
+  }>;
 };
 
 export type WorkerInventoryListResponse = {

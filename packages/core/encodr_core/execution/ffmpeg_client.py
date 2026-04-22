@@ -31,6 +31,13 @@ class FFmpegClient:
                 "ffmpeg binary could not be found.",
                 file_path=command_plan.input_path,
                 command=command_plan.command,
+                details={
+                    "requested_backend": command_plan.requested_backend,
+                    "actual_backend": command_plan.actual_backend,
+                    "actual_accelerator": command_plan.actual_accelerator,
+                    "backend_fallback_used": command_plan.fallback_used,
+                    "backend_selection_reason": command_plan.backend_selection_reason,
+                },
             ) from error
 
         stdout_lines: list[str] = []
@@ -74,6 +81,11 @@ class FFmpegClient:
                     "exit_code": returncode,
                     "stdout": stdout,
                     "stderr": stderr,
+                    "requested_backend": command_plan.requested_backend,
+                    "actual_backend": command_plan.actual_backend,
+                    "actual_accelerator": command_plan.actual_accelerator,
+                    "backend_fallback_used": command_plan.fallback_used,
+                    "backend_selection_reason": command_plan.backend_selection_reason,
                 },
             )
 
@@ -82,6 +94,11 @@ class FFmpegClient:
             status="completed",
             command=command_plan.command,
             output_path=command_plan.output_path,
+            requested_backend=command_plan.requested_backend,
+            actual_backend=command_plan.actual_backend,
+            actual_accelerator=command_plan.actual_accelerator,
+            backend_fallback_used=command_plan.fallback_used,
+            backend_selection_reason=command_plan.backend_selection_reason,
             exit_code=returncode,
             stdout=stdout,
             stderr=stderr,

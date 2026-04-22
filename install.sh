@@ -129,6 +129,24 @@ run_compose_in_install_root() {
   )
 }
 
+run_managed_compose_in_install_root() {
+  (
+    cd "${INSTALL_ROOT}" || exit 1
+    local args=(-f docker-compose.yml)
+    if [[ -f "${INSTALL_ROOT}/.runtime/compose.runtime.yml" ]]; then
+      args+=(-f "${INSTALL_ROOT}/.runtime/compose.runtime.yml")
+    fi
+    docker compose "${args[@]}" "$@"
+  )
+}
+
+generate_runtime_compose_override() {
+  local generator="${INSTALL_ROOT}/infra/scripts/generate_runtime_compose.py"
+  [[ -f "${generator}" ]] || return 0
+  python3 "${generator}" --project-root "${INSTALL_ROOT}" || \
+    fail "Unable to generate the Encodr runtime compose override."
+}
+
 parse_args() {
   local fresh_requested=0
   local fresh_confirmed=0
@@ -617,6 +635,11 @@ prepare_management_cli_runtime() {
 
 install_startup_service() {
   local unit_path="/etc/systemd/system/encodr.service"
+  local compose_files="-f ${INSTALL_ROOT}/docker-compose.yml"
+
+  if [[ -f "${INSTALL_ROOT}/.runtime/compose.runtime.yml" ]]; then
+    compose_files="${compose_files} -f ${INSTALL_ROOT}/.runtime/compose.runtime.yml"
+  fi
 
   if ! command -v systemctl >/dev/null 2>&1; then
     warn "systemctl is not available, so automatic stack restart on boot could not be configured."
@@ -634,8 +657,8 @@ Wants=network-online.target
 [Service]
 Type=oneshot
 WorkingDirectory=${INSTALL_ROOT}
-ExecStart=/usr/bin/docker compose up -d
-ExecStop=/usr/bin/docker compose down
+ExecStart=/usr/bin/docker compose ${compose_files} up -d
+ExecStop=/usr/bin/docker compose ${compose_files} down
 RemainAfterExit=yes
 TimeoutStartSec=0
 
@@ -906,6 +929,7 @@ main() {
   ensure_secret "ENCODR_AUTH_SECRET"
   ensure_secret "ENCODR_WORKER_REGISTRATION_SECRET"
   ensure_ui_allowed_hosts_for_network_ips
+  generate_runtime_compose_override
   prepare_management_cli_runtime
 
   mkdir -p /usr/local/bin
@@ -916,7 +940,7 @@ main() {
   load_env
 
   section "Starting the stack"
-  run_with_progress "Launching Docker services" docker compose up -d --build || \
+  run_with_progress "Launching Docker services" run_managed_compose_in_install_root up -d --build || \
     fail "Docker Compose could not start the Encodr stack."
 
   section "Waiting for health"

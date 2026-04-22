@@ -16,6 +16,7 @@ from app.capabilities import (
 from app.client import WorkerApiClient
 from app.config import WorkerAgentSettings
 from app.execution import RemoteExecutionService
+from encodr_shared import collect_runtime_telemetry
 
 
 @dataclass(frozen=True, slots=True)
@@ -114,10 +115,26 @@ class WorkerAgentService:
 
         job = assignment["job"]
         job_id = str(job["job_id"])
+        preview_backend = getattr(self.execution_service, "preview_backend", None)
+        if callable(preview_backend):
+            backend_preview = preview_backend(
+                job_id=job_id,
+                plan_payload=dict(job["plan_payload"]),
+                media_payload=dict(job["media_payload"]),
+            )
+        else:
+            backend_preview = {
+                "requested_backend": self.settings.preferred_backend,
+                "actual_backend": None,
+                "actual_accelerator": None,
+                "fallback_used": False,
+                "selection_reason": None,
+            }
         self.api_client.claim_job(worker_token=session.worker_token, job_id=job_id)
         progress_reporter = self._build_progress_reporter(
             worker_token=session.worker_token,
             job_id=job_id,
+            current_backend=(backend_preview.get("actual_backend") or backend_preview.get("requested_backend")),
         )
         execute_kwargs = {
             "job_id": job_id,
@@ -133,7 +150,13 @@ class WorkerAgentService:
                 job_id=job_id,
                 payload={
                     "result_payload": result.model_dump(mode="json"),
-                    "runtime_summary": build_runtime_summary(self.settings) | {"last_completed_job_id": job_id},
+                    "runtime_summary": self._runtime_summary_for_job(
+                        job_id=job_id,
+                        current_backend=result.actual_backend or backend_preview.get("actual_backend") or backend_preview.get("requested_backend"),
+                        current_stage=result.status,
+                        current_progress_percent=100 if result.status == "completed" else None,
+                        last_completed_job_id=job_id if result.status == "completed" else None,
+                    ),
                 },
             )
             return response
@@ -143,6 +166,7 @@ class WorkerAgentService:
                 job_id=job_id,
                 failure_message=str(error),
                 failure_category="worker_agent_error",
+                current_backend=(backend_preview.get("actual_backend") or backend_preview.get("requested_backend")),
             )
             raise
 
@@ -153,6 +177,7 @@ class WorkerAgentService:
         job_id: str,
         failure_message: str,
         failure_category: str,
+        current_backend: str | None,
     ) -> None:
         try:
             self.api_client.report_job_failure(
@@ -161,13 +186,17 @@ class WorkerAgentService:
                 payload={
                     "failure_message": failure_message,
                     "failure_category": failure_category,
-                    "runtime_summary": build_runtime_summary(self.settings),
+                    "runtime_summary": self._runtime_summary_for_job(
+                        job_id=job_id,
+                        current_backend=current_backend,
+                        current_stage="failed",
+                    ),
                 },
             )
         except Exception:
             return
 
-    def _build_progress_reporter(self, *, worker_token: str, job_id: str):
+    def _build_progress_reporter(self, *, worker_token: str, job_id: str, current_backend: str | None):
         last_sent_at: datetime | None = None
         last_percent: int | None = None
 
@@ -194,10 +223,35 @@ class WorkerAgentService:
                     "out_time_seconds": update.out_time_seconds,
                     "fps": update.fps,
                     "speed": update.speed,
-                    "runtime_summary": build_runtime_summary(self.settings),
+                    "runtime_summary": self._runtime_summary_for_job(
+                        job_id=job_id,
+                        current_backend=current_backend,
+                        current_stage=update.stage,
+                        current_progress_percent=int(update.percent) if update.percent is not None else None,
+                    ),
                 },
             )
             last_sent_at = now
             last_percent = current_percent
 
         return report
+
+    def _runtime_summary_for_job(
+        self,
+        *,
+        job_id: str | None = None,
+        current_backend: str | None = None,
+        current_stage: str | None = None,
+        current_progress_percent: int | None = None,
+        last_completed_job_id: str | None = None,
+    ) -> dict[str, object]:
+        now = datetime.now(timezone.utc)
+        return build_runtime_summary(self.settings) | {
+            "current_job_id": job_id,
+            "current_backend": current_backend,
+            "current_stage": current_stage,
+            "current_progress_percent": current_progress_percent,
+            "current_progress_updated_at": now.isoformat() if job_id is not None else None,
+            "last_completed_job_id": last_completed_job_id,
+            "telemetry": collect_runtime_telemetry(current_backend=current_backend),
+        }

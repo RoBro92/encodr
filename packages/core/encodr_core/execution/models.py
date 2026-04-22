@@ -15,6 +15,11 @@ class ExecutionCommandPlan(ConfigModel):
     input_path: Path
     output_path: Path | None = None
     command: list[str] = Field(default_factory=list)
+    requested_backend: str | None = None
+    actual_backend: str | None = None
+    actual_accelerator: str | None = None
+    fallback_used: bool = False
+    backend_selection_reason: str | None = None
 
 
 class ExecutionResult(ConfigModel):
@@ -37,6 +42,11 @@ class ExecutionResult(ConfigModel):
     stderr: str | None = None
     failure_message: str | None = None
     failure_category: str | None = None
+    requested_backend: str | None = None
+    actual_backend: str | None = None
+    actual_accelerator: str | None = None
+    backend_fallback_used: bool = False
+    backend_selection_reason: str | None = None
     verification: VerificationResult | None = None
     replacement: ReplacementResult | None = None
     started_at: datetime

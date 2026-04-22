@@ -6,6 +6,7 @@ from math import floor
 from sqlalchemy import Select, asc, desc, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
+from encodr_core.execution import normalise_backend_preference
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
 from encodr_db.models import (
     FileLifecycleState,
@@ -54,7 +55,7 @@ class JobRepository:
         self.session.flush()
         return job
 
-    def fetch_next_pending_local_job(self) -> Job | None:
+    def fetch_next_pending_local_jobs(self, *, limit: int = 25) -> list[Job]:
         query = (
             select(Job)
             .where(
@@ -67,11 +68,15 @@ class JobRepository:
                 joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
             )
             .order_by(asc(Job.created_at))
-            .limit(1)
+            .limit(limit)
         )
-        return self.session.scalar(query)
+        return list(self.session.scalars(query))
 
-    def fetch_next_pending_remote_job(self, worker: Worker) -> Job | None:
+    def fetch_next_pending_local_job(self) -> Job | None:
+        items = self.fetch_next_pending_local_jobs(limit=1)
+        return items[0] if items else None
+
+    def fetch_next_pending_remote_jobs(self, worker: Worker, *, limit: int = 25) -> list[Job]:
         query = (
             select(Job)
             .where(
@@ -87,9 +92,13 @@ class JobRepository:
                 desc(Job.assigned_worker_id == worker.id),
                 asc(Job.created_at),
             )
-            .limit(1)
+            .limit(limit)
         )
-        return self.session.scalar(query)
+        return list(self.session.scalars(query))
+
+    def fetch_next_pending_remote_job(self, worker: Worker) -> Job | None:
+        items = self.fetch_next_pending_remote_jobs(worker, limit=1)
+        return items[0] if items else None
 
     def get_by_id(self, job_id: str) -> Job | None:
         query = (
@@ -115,7 +124,7 @@ class JobRepository:
         )
         return self.session.scalar(query)
 
-    def mark_running(self, job: Job, *, worker_name: str) -> Job:
+    def mark_running(self, job: Job, *, worker_name: str, requested_backend: str | None = None) -> Job:
         job.status = JobStatus.RUNNING
         job.worker_name = worker_name
         job.started_at = datetime.now(timezone.utc)
@@ -125,6 +134,8 @@ class JobRepository:
         job.progress_fps = None
         job.progress_speed = None
         job.progress_updated_at = job.started_at
+        if requested_backend is not None:
+            job.requested_execution_backend = normalise_backend_preference(requested_backend)
         if job.tracked_file is not None:
             job.tracked_file.lifecycle_state = job.tracked_file.lifecycle_state.PROCESSING
         self.session.flush()
@@ -136,8 +147,8 @@ class JobRepository:
         self.session.flush()
         return job
 
-    def mark_running_for_worker(self, job: Job, *, worker: Worker) -> Job:
-        self.mark_running(job, worker_name=worker.display_name)
+    def mark_running_for_worker(self, job: Job, *, worker: Worker, requested_backend: str | None = None) -> Job:
+        self.mark_running(job, worker_name=worker.display_name, requested_backend=requested_backend)
         job.assigned_worker_id = worker.id
         job.last_worker_id = worker.id
         self.session.flush()
@@ -154,6 +165,11 @@ class JobRepository:
         job.completed_at = result.completed_at
         job.failure_message = result.failure_message
         job.failure_category = result.failure_category
+        job.requested_execution_backend = result.requested_backend
+        job.actual_execution_backend = result.actual_backend
+        job.actual_execution_accelerator = result.actual_accelerator
+        job.backend_fallback_used = result.backend_fallback_used
+        job.backend_selection_reason = result.backend_selection_reason
         job.output_size_bytes = result.output_size_bytes
         job.space_saved_bytes = calculate_space_saved(job.input_size_bytes, result.output_size_bytes)
         job.video_input_size_bytes = result.video_input_size_bytes
@@ -271,6 +287,36 @@ class JobRepository:
                 Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED])
             )
         )
+
+    def list_recent_for_worker(
+        self,
+        *,
+        worker_name: str | None = None,
+        worker_id: str | None = None,
+        limit: int = 5,
+    ) -> list[Job]:
+        query: Select[tuple[Job]] = (
+            select(Job)
+            .options(joinedload(Job.tracked_file))
+            .where(
+                Job.status.in_(
+                    [
+                        JobStatus.COMPLETED,
+                        JobStatus.FAILED,
+                        JobStatus.MANUAL_REVIEW,
+                        JobStatus.SKIPPED,
+                    ]
+                )
+            )
+        )
+        if worker_id is not None:
+            query = query.where(Job.last_worker_id == worker_id)
+        elif worker_name is not None:
+            query = query.where(Job.worker_name == worker_name)
+        else:
+            return []
+        query = query.order_by(desc(Job.completed_at), desc(Job.updated_at)).limit(limit)
+        return list(self.session.scalars(query))
 
 
 def truncate_log(value: str | None, limit: int = 8000) -> str | None:

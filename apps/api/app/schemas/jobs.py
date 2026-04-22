@@ -72,6 +72,11 @@ class JobSummaryResponse(BaseModel):
     progress_fps: float | None = None
     progress_speed: float | None = None
     progress_updated_at: datetime | None = None
+    requested_execution_backend: str | None = None
+    actual_execution_backend: str | None = None
+    actual_execution_accelerator: str | None = None
+    backend_fallback_used: bool = False
+    backend_selection_reason: str | None = None
     failure_message: str | None = None
     failure_category: str | None = None
     input_size_bytes: int | None = None
@@ -112,6 +117,11 @@ class JobSummaryResponse(BaseModel):
             progress_fps=job.progress_fps,
             progress_speed=job.progress_speed,
             progress_updated_at=job.progress_updated_at,
+            requested_execution_backend=job.requested_execution_backend,
+            actual_execution_backend=job.actual_execution_backend,
+            actual_execution_accelerator=job.actual_execution_accelerator,
+            backend_fallback_used=job.backend_fallback_used,
+            backend_selection_reason=job.backend_selection_reason,
             failure_message=job.failure_message,
             failure_category=job.failure_category,
             input_size_bytes=job.input_size_bytes,
