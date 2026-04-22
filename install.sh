@@ -575,10 +575,38 @@ sync_local_checkout_tree() {
   fi
 
   if [[ -d "${SCRIPT_ROOT}/.git" ]] && command -v git >/dev/null 2>&1; then
+    local tracked_files_list=""
+    tracked_files_list="$(mktemp "${TMPDIR:-/tmp}/encodr-install-files.XXXXXX")" || \
+      fail "Unable to prepare the local checkout file list."
     (
       cd "${SCRIPT_ROOT}" &&
-      git ls-files -z | tar --null -T - -C "${SCRIPT_ROOT}" -cf -
-    ) | tar -C "${INSTALL_ROOT}" -xf - || fail "Unable to copy the local checkout into ${INSTALL_ROOT}."
+      git ls-files -z > "${tracked_files_list}"
+    ) || {
+      rm -f "${tracked_files_list}"
+      fail "Unable to enumerate tracked files from the local checkout."
+    }
+    python3 - "${SCRIPT_ROOT}" "${INSTALL_ROOT}" "${tracked_files_list}" <<'PY' || {
+from pathlib import Path
+import shutil
+import sys
+
+source_root = Path(sys.argv[1])
+target_root = Path(sys.argv[2])
+tracked_list = Path(sys.argv[3])
+
+for raw_path in tracked_list.read_bytes().split(b"\0"):
+    if not raw_path:
+        continue
+    relative = Path(raw_path.decode("utf-8"))
+    source_path = source_root / relative
+    target_path = target_root / relative
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, target_path)
+PY
+      rm -f "${tracked_files_list}"
+      fail "Unable to copy the local checkout into ${INSTALL_ROOT}."
+    }
+    rm -f "${tracked_files_list}"
   else
     tar \
       --exclude-vcs \
