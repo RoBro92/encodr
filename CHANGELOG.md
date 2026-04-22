@@ -1,8 +1,8 @@
 # Changelog
 
-## 0.3.3-rc.1 - 2026-04-22
+## 0.3.3 - 2026-04-22
 
-This release candidate focuses on platform completion for worker runtime selection, hardware-aware execution, managed container runtime configuration, and operational visibility.
+This release focuses on platform completion for worker runtime selection, hardware-aware execution, managed container runtime configuration, and operational visibility.
 
 - added backend-aware execution selection for:
   - CPU
@@ -37,6 +37,7 @@ This release candidate focuses on platform completion for worker runtime selecti
   - preferred backend
   - CPU fallback policy
 - improved Workers, Jobs, System, and Settings so they surface the new backend/runtime truth without broad UI redesign
+- corrected Python packaging and installer repair behaviour so Debian 12 / Python 3.11 installs can repair and upgrade cleanly without manual path workarounds
 - hardened the local validation harness for runtime-heavy scenarios by fixing local-only timing and terminal-state polling issues during stack bring-up and worker execution checks
 - revalidated the full platform flow with:
   - `pytest -q`

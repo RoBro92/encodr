@@ -548,6 +548,82 @@ download_release_tree() {
   success "Release files are in place"
 }
 
+prepare_install_root_for_sync() {
+  section "Preparing install directory"
+  mkdir -p "${INSTALL_ROOT}"
+  find "${INSTALL_ROOT}" -mindepth 1 -maxdepth 1 \
+    ! -name '.env' \
+    ! -name '.runtime' \
+    ! -name 'config' \
+    ! -name 'temp' \
+    ! -name 'postgres-data' \
+    ! -name 'redis-data' \
+    -exec rm -rf {} +
+}
+
+sync_local_checkout_tree() {
+  local source_root
+  local target_root
+  source_root="$(cd "${SCRIPT_ROOT}" && pwd -P)"
+  mkdir -p "${INSTALL_ROOT}"
+  target_root="$(cd "${INSTALL_ROOT}" && pwd -P)"
+
+  if [[ "${source_root}" == "${target_root}" ]]; then
+    success "Installer will use the local repository files"
+    return 0
+  fi
+
+  prepare_install_root_for_sync
+
+  if [[ -d "${SCRIPT_ROOT}/.git" ]] && command -v git >/dev/null 2>&1; then
+    local tracked_files_list=""
+    tracked_files_list="$(mktemp "${TMPDIR:-/tmp}/encodr-install-files.XXXXXX")" || \
+      fail "Unable to prepare the local checkout file list."
+    (
+      cd "${SCRIPT_ROOT}" &&
+      git ls-files -z > "${tracked_files_list}"
+    ) || {
+      rm -f "${tracked_files_list}"
+      fail "Unable to enumerate tracked files from the local checkout."
+    }
+    python3 - "${SCRIPT_ROOT}" "${INSTALL_ROOT}" "${tracked_files_list}" <<'PY' || {
+from pathlib import Path
+import shutil
+import sys
+
+source_root = Path(sys.argv[1])
+target_root = Path(sys.argv[2])
+tracked_list = Path(sys.argv[3])
+
+for raw_path in tracked_list.read_bytes().split(b"\0"):
+    if not raw_path:
+        continue
+    relative = Path(raw_path.decode("utf-8"))
+    source_path = source_root / relative
+    target_path = target_root / relative
+    target_path.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(source_path, target_path)
+PY
+      rm -f "${tracked_files_list}"
+      fail "Unable to copy the local checkout into ${INSTALL_ROOT}."
+    }
+    rm -f "${tracked_files_list}"
+  else
+    tar \
+      --exclude-vcs \
+      --exclude='.env' \
+      --exclude='.runtime' \
+      --exclude='config/app.yaml' \
+      --exclude='config/policy.yaml' \
+      --exclude='config/workers.yaml' \
+      --exclude='dev-local' \
+      -C "${SCRIPT_ROOT}" -cf - . | tar -C "${INSTALL_ROOT}" -xf - || \
+      fail "Unable to copy the local checkout into ${INSTALL_ROOT}."
+  fi
+
+  success "Local checkout files are in place"
+}
+
 resolve_latest_release_tag() {
   local release_metadata_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
   local latest_tag=""
@@ -577,8 +653,8 @@ ensure_release_tree() {
     download_release_tree
   else
     section "Using local checkout"
-    info "Installing from ${INSTALL_ROOT}"
-    success "Installer will use the local repository files"
+    info "Installing from ${SCRIPT_ROOT} into ${INSTALL_ROOT}"
+    sync_local_checkout_tree
   fi
 }
 

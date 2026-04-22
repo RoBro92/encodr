@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "encodr-worker-agent"
 dynamic = ["version"]
 description = "Remote worker registration and heartbeat agent for encodr"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
   "encodr-core",
   "encodr-shared",
