@@ -562,17 +562,18 @@ prepare_install_root_for_sync() {
 }
 
 sync_local_checkout_tree() {
-  prepare_install_root_for_sync
-
   local source_root
   local target_root
   source_root="$(cd "${SCRIPT_ROOT}" && pwd -P)"
+  mkdir -p "${INSTALL_ROOT}"
   target_root="$(cd "${INSTALL_ROOT}" && pwd -P)"
 
   if [[ "${source_root}" == "${target_root}" ]]; then
     success "Installer will use the local repository files"
     return 0
   fi
+
+  prepare_install_root_for_sync
 
   if [[ -d "${SCRIPT_ROOT}/.git" ]] && command -v git >/dev/null 2>&1; then
     local tracked_files_list=""

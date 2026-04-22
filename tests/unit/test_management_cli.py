@@ -865,6 +865,28 @@ def test_local_checkout_install_syncs_tracked_files_into_external_install_root(
     assert "PROJECT_NAME=encodr" in result.stdout
 
 
+def test_local_checkout_install_does_not_purge_when_install_root_matches_source(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    install_root = tmp_path / "encodr"
+    install_root.mkdir(parents=True, exist_ok=True)
+
+    result = run_install_shell(
+        repo_root,
+        (
+            "prepare_install_root_for_sync() { echo called; return 99; }; "
+            f"INSTALL_ROOT='{install_root}' "
+            f"SCRIPT_ROOT='{install_root}' "
+            "REMOTE_BOOTSTRAP=0 "
+            "sync_local_checkout_tree"
+        ),
+    )
+
+    assert result.returncode == 0
+    assert "called" not in result.stdout
+
+
 def test_gitignore_excludes_local_ui_workspace(repo_root: Path) -> None:
     gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
 
