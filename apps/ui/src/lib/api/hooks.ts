@@ -18,6 +18,7 @@ import {
   getAnalyticsStorage,
   createJob,
   getCurrentUser,
+  getExecutionPreferences,
   getBootstrapStatus,
   getEffectiveConfig,
   getFile,
@@ -51,6 +52,7 @@ import {
   scanFolder,
   enableWorker,
   updateLibraryRoots,
+  updateExecutionPreferences,
   updateProcessingRules,
 } from "./endpoints";
 import { useSession } from "../../features/auth/AuthProvider";
@@ -107,6 +109,15 @@ export function useLibraryRootsQuery() {
   return useQuery({
     queryKey: ["config", "library-roots"],
     queryFn: () => getLibraryRoots(apiClient),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useExecutionPreferencesQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["config", "execution-preferences"],
+    queryFn: () => getExecutionPreferences(apiClient),
     enabled: isAuthenticated,
   });
 }
@@ -261,6 +272,22 @@ export function useUpdateStatusQuery() {
     queryKey: ["system", "update"],
     queryFn: () => getUpdateStatus(apiClient),
     enabled: isAuthenticated,
+  });
+}
+
+export function useUpdateExecutionPreferencesMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: updateExecutionPreferences.bind(null, apiClient),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["config", "execution-preferences"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["system"] }),
+      ]);
+    },
   });
 }
 

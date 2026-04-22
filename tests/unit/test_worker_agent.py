@@ -170,17 +170,11 @@ def test_worker_agent_does_not_claim_vaapi_without_render_device(
         binary.chmod(0o755)
     (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(worker_agent_capabilities, "detect_ffmpeg_hwaccels", lambda _path: ["vaapi"])
     monkeypatch.setattr(
         worker_agent_capabilities,
-        "probe_intel_qsv",
-        lambda _path: type(
-            "Probe",
-            (),
-            {"usable": False, "backend": "intel_qsv", "detected": False, "status": "failed", "message": "", "details": {}},
-        )(),
+        "probe_execution_backends",
+        lambda _path: [],
     )
-    monkeypatch.setattr(worker_agent_capabilities.Path, "glob", lambda _self, _pattern: iter(()))
 
     summary = build_capability_summary(settings)
 

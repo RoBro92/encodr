@@ -32,6 +32,7 @@ class UpdateCheckResult:
     status: str
     release_name: str | None = None
     release_summary: str | None = None
+    breaking_changes_summary: str | None = None
     checked_at: datetime | None = None
     error: str | None = None
     download_url: str | None = None
@@ -103,6 +104,7 @@ class UpdateChecker:
             release_notes_url = _optional_text(payload.get("release_notes_url")) or _optional_text(payload.get("html_url"))
             release_name = _optional_text(payload.get("release_name")) or _optional_text(payload.get("name"))
             release_summary = _extract_release_summary(payload)
+            breaking_changes_summary = _extract_breaking_changes_summary(payload)
 
             self._last_result = UpdateCheckResult(
                 current_version=self.current_version,
@@ -112,6 +114,7 @@ class UpdateChecker:
                 status="ok",
                 release_name=release_name,
                 release_summary=release_summary,
+                breaking_changes_summary=breaking_changes_summary,
                 checked_at=checked_at,
                 download_url=download_url,
                 release_notes_url=release_notes_url,
@@ -162,6 +165,45 @@ def _extract_release_summary(payload: dict[str, Any]) -> str | None:
     summary_lines = meaningful_lines[:4]
     summary = "\n".join(summary_lines)
     if len(meaningful_lines) > 4 or len(summary) > 420:
+        summary = summary[:420].rstrip()
+        if not summary.endswith("..."):
+            summary = f"{summary}..."
+    return summary
+
+
+def _extract_breaking_changes_summary(payload: dict[str, Any]) -> str | None:
+    explicit = _optional_text(payload.get("breaking_changes_summary"))
+    if explicit:
+        return explicit
+
+    body = _optional_text(payload.get("body"))
+    if not body:
+        return None
+
+    lines = [line.rstrip() for line in body.splitlines()]
+    capture = False
+    captured: list[str] = []
+    for line in lines:
+        stripped = line.strip()
+        lowered = stripped.lower()
+        if lowered.startswith("## ") or lowered.startswith("### "):
+            if capture:
+                break
+            if "breaking" in lowered:
+                capture = True
+            continue
+        if not capture:
+            continue
+        if stripped:
+            captured.append(stripped)
+        elif captured:
+            break
+
+    if not captured:
+        return None
+
+    summary = "\n".join(captured[:4])
+    if len(captured) > 4 or len(summary) > 420:
         summary = summary[:420].rstrip()
         if not summary.endswith("..."):
             summary = f"{summary}..."

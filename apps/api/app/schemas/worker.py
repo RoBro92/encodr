@@ -24,6 +24,37 @@ class BinaryStatusResponse(BaseModel):
     message: str
 
 
+class DevicePathStatusResponse(BaseModel):
+    path: str
+    exists: bool
+    readable: bool
+    writable: bool
+    is_character_device: bool
+    status: str
+    message: str
+    vendor_id: str | None = None
+    vendor_name: str | None = None
+
+
+class ExecutionBackendStatusResponse(BaseModel):
+    backend: str
+    preference_key: str
+    detected: bool
+    usable_by_ffmpeg: bool
+    ffmpeg_path_verified: bool
+    status: str
+    message: str
+    reason_unavailable: str | None = None
+    recommended_usage: str | None = None
+    device_paths: list[DevicePathStatusResponse] = Field(default_factory=list)
+    details: dict[str, Any] = Field(default_factory=dict)
+
+
+class ExecutionPreferenceResponse(BaseModel):
+    preferred_backend: str
+    allow_cpu_fallback: bool
+
+
 class QueueHealthSummaryResponse(BaseModel):
     status: HealthStatus
     summary: str
@@ -94,7 +125,9 @@ class WorkerStatusResponse(BaseModel):
     local_worker_queue: str
     execution_backends: list[str] = Field(default_factory=list)
     hardware_acceleration: list[str] = Field(default_factory=list)
-    hardware_probes: list[dict[str, Any]] = Field(default_factory=list)
+    hardware_probes: list[ExecutionBackendStatusResponse] = Field(default_factory=list)
+    runtime_device_paths: list[DevicePathStatusResponse] = Field(default_factory=list)
+    execution_preferences: ExecutionPreferenceResponse
     scratch_path: dict[str, Any] = Field(default_factory=dict)
     media_paths: list[dict[str, Any]] = Field(default_factory=list)
     last_run_started_at: datetime | None = None

@@ -9,14 +9,22 @@ import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
+  useExecutionPreferencesQuery,
   useLibraryRootsQuery,
   useProcessingRulesQuery,
   useRuntimeStatusQuery,
   useStorageStatusQuery,
+  useUpdateStatusQuery,
+  useUpdateExecutionPreferencesMutation,
   useUpdateLibraryRootsMutation,
   useUpdateProcessingRulesMutation,
 } from "../../lib/api/hooks";
-import type { ProcessingRules, ProcessingRuleset, ProcessingRuleValues } from "../../lib/types/api";
+import type {
+  ExecutionPreferences,
+  ProcessingRules,
+  ProcessingRuleset,
+  ProcessingRuleValues,
+} from "../../lib/types/api";
 
 type PickerTarget = "movies" | "tv" | null;
 type RulesetKey = "movies" | "movies_4k" | "tv" | "tv_4k";
@@ -73,11 +81,15 @@ export function ConfigPage() {
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null);
   const [rulesDraft, setRulesDraft] = useState<ProcessingRules | null>(null);
   const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
+  const [executionPrefsDraft, setExecutionPrefsDraft] = useState<ExecutionPreferences | null>(null);
   const rootsQuery = useLibraryRootsQuery();
+  const executionPreferencesQuery = useExecutionPreferencesQuery();
   const rulesQuery = useProcessingRulesQuery();
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
+  const updateStatusQuery = useUpdateStatusQuery();
   const updateRootsMutation = useUpdateLibraryRootsMutation();
+  const updateExecutionPreferencesMutation = useUpdateExecutionPreferencesMutation();
   const updateRulesMutation = useUpdateProcessingRulesMutation();
 
   useEffect(() => {
@@ -87,9 +99,26 @@ export function ConfigPage() {
     }
   }, [rulesQuery.data]);
 
-  const error = rootsQuery.error ?? rulesQuery.error ?? runtimeQuery.error ?? storageQuery.error;
+  useEffect(() => {
+    if (executionPreferencesQuery.data) {
+      setExecutionPrefsDraft(executionPreferencesQuery.data);
+    }
+  }, [executionPreferencesQuery.data]);
+
+  const error =
+    rootsQuery.error ??
+    executionPreferencesQuery.error ??
+    rulesQuery.error ??
+    runtimeQuery.error ??
+    storageQuery.error ??
+    updateStatusQuery.error;
   const loading =
-    rootsQuery.isLoading || rulesQuery.isLoading || runtimeQuery.isLoading || storageQuery.isLoading;
+    rootsQuery.isLoading ||
+    executionPreferencesQuery.isLoading ||
+    rulesQuery.isLoading ||
+    runtimeQuery.isLoading ||
+    storageQuery.isLoading ||
+    updateStatusQuery.isLoading;
 
   if (loading) {
     return <LoadingBlock label="Loading settings" />;
@@ -103,7 +132,8 @@ export function ConfigPage() {
   const rules = rulesDraft;
   const runtime = runtimeQuery.data;
   const storage = storageQuery.data;
-  if (!roots || !runtime || !storage || !rules) {
+  const updateStatus = updateStatusQuery.data;
+  if (!roots || !runtime || !storage || !rules || !executionPrefsDraft || !updateStatus) {
     return <ErrorPanel title="Settings are unavailable" message="The API did not return settings information." />;
   }
 
@@ -132,6 +162,12 @@ export function ConfigPage() {
       ) : null}
       {updateRulesMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to save processing rules" message={updateRulesMutation.error.message} />
+      ) : null}
+      {updateExecutionPreferencesMutation.error instanceof Error ? (
+        <ErrorPanel
+          title="Unable to save execution preference"
+          message={updateExecutionPreferencesMutation.error.message}
+        />
       ) : null}
 
       <section className="dashboard-grid">
@@ -193,6 +229,132 @@ export function ConfigPage() {
           ]}
         />
       </SectionCard>
+
+      <section className="dashboard-grid">
+        <SectionCard
+          title="Execution backends"
+          subtitle="Encodr validates what this runtime can really see and what FFmpeg can actually use."
+        >
+          <div className="card-stack">
+            <div className="info-strip">
+              <strong>Operator-managed passthrough</strong>
+              <span>
+                Keep host-level GPU and mount passthrough managed outside Encodr. Encodr only validates what is already exposed inside this runtime.
+              </span>
+            </div>
+            <div className="info-strip" role="note">
+              <strong>Current execution path</strong>
+              <span>Local execution remains CPU-backed. The backend preference below records operator intent and validates passthrough readiness.</span>
+            </div>
+            <div className="settings-rules-fields settings-rules-fields-compact">
+              <label className="field">
+                <span>Preferred backend</span>
+                <select
+                  aria-label="Preferred execution backend"
+                  value={executionPrefsDraft.preferred_backend}
+                  onChange={(event) =>
+                    setExecutionPrefsDraft({
+                      ...executionPrefsDraft,
+                      preferred_backend: event.target.value,
+                    })
+                  }
+                >
+                  <option value="cpu_only">CPU only</option>
+                  <option value="prefer_intel_igpu">Prefer Intel iGPU</option>
+                  <option value="prefer_nvidia_gpu">Prefer NVIDIA</option>
+                  <option value="prefer_amd_gpu">Prefer AMD</option>
+                </select>
+              </label>
+              <label className="field field-checkbox">
+                <span>Allow CPU fallback</span>
+                <input
+                  aria-label="Allow CPU fallback"
+                  type="checkbox"
+                  checked={executionPrefsDraft.allow_cpu_fallback}
+                  onChange={(event) =>
+                    setExecutionPrefsDraft({
+                      ...executionPrefsDraft,
+                      allow_cpu_fallback: event.target.checked,
+                    })
+                  }
+                />
+              </label>
+            </div>
+            <div className="section-card-actions">
+              <button
+                className="button button-primary button-small"
+                type="button"
+                onClick={() => updateExecutionPreferencesMutation.mutate(executionPrefsDraft)}
+                disabled={updateExecutionPreferencesMutation.isPending}
+              >
+                {updateExecutionPreferencesMutation.isPending ? "Saving…" : "Save backend preference"}
+              </button>
+            </div>
+            <div className="status-grid">
+              {runtime.execution_backends.map((backend) => (
+                <article
+                  key={backend.backend}
+                  className={`status-card ${
+                    backend.status === "degraded" || backend.status === "failed" ? "status-card-alert" : ""
+                  }`}
+                >
+                  <div className="badge-row">
+                    <StatusBadge value={backend.usable_by_ffmpeg ? "healthy" : backend.detected ? "degraded" : "failed"} />
+                    <strong>{formatBackendLabel(backend.backend)}</strong>
+                  </div>
+                  <p className="muted-copy">{backend.message}</p>
+                  <KeyValueList
+                    items={[
+                      { label: "Detected", value: backend.detected ? "Yes" : "No" },
+                      { label: "Usable by FFmpeg", value: backend.usable_by_ffmpeg ? "Yes" : "No" },
+                      { label: "Verified path", value: backend.ffmpeg_path_verified ? "Yes" : "No" },
+                    ]}
+                  />
+                  {backend.reason_unavailable ? <p className="muted-copy">{backend.reason_unavailable}</p> : null}
+                  {backend.recommended_usage ? (
+                    <div className="info-strip" role="note">
+                      <strong>Recommended usage</strong>
+                      <span>{backend.recommended_usage}</span>
+                    </div>
+                  ) : null}
+                </article>
+              ))}
+            </div>
+          </div>
+        </SectionCard>
+
+        <SectionCard title="Updates" subtitle="Check what is installed and what to run from the root console.">
+          <div className="card-stack">
+            <div className="info-strip">
+              <StatusBadge value={updateStatus.update_available ? "degraded" : "healthy"} />
+              <span>
+                Current {updateStatus.current_version}
+                {updateStatus.latest_version ? ` • Latest ${updateStatus.latest_version}` : ""}
+              </span>
+            </div>
+            <KeyValueList
+              items={[
+                { label: "Update available", value: updateStatus.update_available ? "Yes" : "No" },
+                { label: "Release", value: updateStatus.release_name ?? "Not reported" },
+                { label: "Check status", value: updateStatus.status },
+                { label: "Command", value: <code>encodr update --apply</code> },
+              ]}
+            />
+            {updateStatus.release_summary ? (
+              <div className="info-strip" role="note">
+                <strong>Summary</strong>
+                <span>{updateStatus.release_summary}</span>
+              </div>
+            ) : null}
+            {updateStatus.breaking_changes_summary ? (
+              <div className="info-strip info-strip-warning" role="note">
+                <strong>Breaking changes</strong>
+                <span>{updateStatus.breaking_changes_summary}</span>
+              </div>
+            ) : null}
+          </div>
+        </SectionCard>
+      </section>
 
       <SectionCard
         title="Processing rules"
@@ -258,6 +420,21 @@ export function ConfigPage() {
       />
     </div>
   );
+}
+
+function formatBackendLabel(value: string): string {
+  switch (value) {
+    case "cpu":
+      return "CPU";
+    case "intel_igpu":
+      return "Intel iGPU";
+    case "nvidia_gpu":
+      return "NVIDIA GPU";
+    case "amd_gpu":
+      return "AMD GPU";
+    default:
+      return value.replace(/_/g, " ");
+  }
 }
 
 function RulesetEditor({

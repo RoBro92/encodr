@@ -186,6 +186,12 @@ export function AppShell() {
               <strong>What changed</strong>
               <p>{updateStatus.release_summary ?? "A newer Encodr release is available for this install."}</p>
             </div>
+            {updateStatus.breaking_changes_summary ? (
+              <div className="update-summary-card">
+                <strong>Breaking changes</strong>
+                <p>{updateStatus.breaking_changes_summary}</p>
+              </div>
+            ) : null}
             <div className="update-command-card">
               <strong>Run this in the root console</strong>
               <pre>encodr update --apply</pre>

@@ -22,6 +22,7 @@ from encodr_core.planning.rules import merge_optional_model, merge_video_rules
 LANGUAGE_CODE_RE = re.compile(r"^[a-z]{3}$")
 
 RulesetName = Literal["movies", "movies_4k", "tv", "tv_4k"]
+ExecutionBackendPreference = Literal["cpu_only", "prefer_intel_igpu", "prefer_nvidia_gpu", "prefer_amd_gpu"]
 
 
 class ProcessingRuleValues(TypedDict):
@@ -45,6 +46,7 @@ class SetupStatePayload(TypedDict):
     movies_root: str | None
     tv_root: str | None
     processing_rules: dict[str, ProcessingRuleValues | None]
+    execution_preferences: dict[str, object]
 
 
 class SetupStateService:
@@ -88,6 +90,10 @@ class SetupStateService:
             for ruleset in self._ruleset_names()
         }
 
+    def get_execution_preferences(self) -> dict[str, object]:
+        payload = self._load_state_payload()
+        return dict(payload["execution_preferences"])
+
     def update_processing_rules(
         self,
         *,
@@ -105,6 +111,27 @@ class SetupStateService:
         }
         self._write_state_payload(payload)
         return self.get_processing_rules()
+
+    def update_execution_preferences(
+        self,
+        *,
+        preferred_backend: ExecutionBackendPreference,
+        allow_cpu_fallback: bool,
+    ) -> dict[str, object]:
+        if preferred_backend not in {
+            "cpu_only",
+            "prefer_intel_igpu",
+            "prefer_nvidia_gpu",
+            "prefer_amd_gpu",
+        }:
+            raise ApiValidationError("Unsupported execution backend preference.")
+        payload = self._load_state_payload()
+        payload["execution_preferences"] = {
+            "preferred_backend": preferred_backend,
+            "allow_cpu_fallback": bool(allow_cpu_fallback),
+        }
+        self._write_state_payload(payload)
+        return dict(payload["execution_preferences"])
 
     def rules_for_source(self, source_path: str | Path, *, is_4k: bool = False) -> ProcessingRuleValues | None:
         source = Path(source_path).resolve()
@@ -172,6 +199,20 @@ class SetupStateService:
         payload = self._empty_payload()
         payload["movies_root"] = self._clean_optional_path(raw.get("movies_root"))
         payload["tv_root"] = self._clean_optional_path(raw.get("tv_root"))
+        execution_preferences = raw.get("execution_preferences")
+        if isinstance(execution_preferences, dict):
+            preferred_backend = str(execution_preferences.get("preferred_backend") or "cpu_only").strip()
+            if preferred_backend not in {
+                "cpu_only",
+                "prefer_intel_igpu",
+                "prefer_nvidia_gpu",
+                "prefer_amd_gpu",
+            }:
+                preferred_backend = "cpu_only"
+            payload["execution_preferences"] = {
+                "preferred_backend": preferred_backend,
+                "allow_cpu_fallback": bool(execution_preferences.get("allow_cpu_fallback", True)),
+            }
         if isinstance(processing_rules, dict):
             for ruleset in self._ruleset_names():
                 payload["processing_rules"][ruleset] = self._coerce_processing_rules(processing_rules.get(ruleset))
@@ -192,6 +233,10 @@ class SetupStateService:
             "movies_root": None,
             "tv_root": None,
             "processing_rules": {ruleset: None for ruleset in cls._ruleset_names()},
+            "execution_preferences": {
+                "preferred_backend": "cpu_only",
+                "allow_cpu_fallback": True,
+            },
         }
 
     def _build_ruleset_response(

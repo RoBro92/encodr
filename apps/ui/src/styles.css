@@ -1264,6 +1264,16 @@ pre {
   grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
 }
 
+.field-checkbox {
+  align-content: end;
+}
+
+.field-checkbox input[type="checkbox"] {
+  width: 18px;
+  height: 18px;
+  margin-top: 10px;
+}
+
 .settings-rules-toggles {
   display: grid;
   gap: 10px;

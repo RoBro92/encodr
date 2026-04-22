@@ -21,9 +21,11 @@ from app.schemas.config import (
     WorkerDefinitionSummaryResponse,
 )
 from app.schemas.worker import HealthStatus
+from app.services.setup import SetupStateService
 from encodr_core.config import ConfigBundle
 from encodr_db.models import JobStatus
 from encodr_db.repositories import JobRepository, UserRepository
+from encodr_shared.worker_runtime import discover_runtime_devices, probe_execution_backends
 from encodr_shared.update import UpdateChecker
 
 
@@ -323,6 +325,29 @@ class SystemService:
         user_count = self.user_count()
         queue_health = self.queue_health_summary()
         storage = self.storage_status()
+        execution_backends = [
+            {
+                "backend": probe.backend,
+                "preference_key": {
+                    "cpu": "cpu_only",
+                    "intel_igpu": "prefer_intel_igpu",
+                    "nvidia_gpu": "prefer_nvidia_gpu",
+                    "amd_gpu": "prefer_amd_gpu",
+                }.get(probe.backend, probe.backend),
+                "detected": probe.detected,
+                "usable_by_ffmpeg": probe.usable,
+                "ffmpeg_path_verified": bool(probe.details.get("ffmpeg_path_verified", probe.usable)),
+                "status": probe.status,
+                "message": probe.message,
+                "reason_unavailable": probe.details.get("reason_unavailable"),
+                "recommended_usage": probe.details.get("recommended_usage"),
+                "device_paths": probe.details.get("device_paths", []),
+                "details": probe.details,
+            }
+            for probe in probe_execution_backends(self.config_bundle.app.media.ffmpeg_path)
+        ]
+        runtime_device_paths = discover_runtime_devices()
+        execution_preferences = SetupStateService(config_bundle=self.config_bundle).get_execution_preferences()
         first_user_setup_required = user_count == 0 if user_count is not None else False
 
         warnings: list[str] = []
@@ -334,6 +359,12 @@ class SystemService:
             warnings.append("The local worker is disabled.")
         if storage["status"] != HealthStatus.HEALTHY:
             warnings.append(str(storage["summary"]))
+        for backend in execution_backends:
+            if backend["backend"] == "cpu":
+                continue
+            if backend["detected"] and not backend["usable_by_ffmpeg"]:
+                warnings.append(str(backend["message"]))
+                break
         if queue_health["status"] == HealthStatus.DEGRADED:
             warnings.append(str(queue_health["summary"]))
 
@@ -370,6 +401,9 @@ class SystemService:
                 "workers": self.config_bundle.paths.workers.resolved_path.as_posix(),
             },
             "warnings": warnings,
+            "execution_backends": execution_backends,
+            "runtime_device_paths": runtime_device_paths,
+            "execution_preferences": execution_preferences,
             "queue_health": queue_health,
         }
 
@@ -383,6 +417,7 @@ class SystemService:
             "status": result.status,
             "release_name": result.release_name,
             "release_summary": result.release_summary,
+            "breaking_changes_summary": getattr(result, "breaking_changes_summary", None),
             "checked_at": result.checked_at.isoformat() if result.checked_at else None,
             "error": result.error,
             "download_url": result.download_url,

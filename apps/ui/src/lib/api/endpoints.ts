@@ -15,6 +15,7 @@ import type {
   CreateBatchJobsPayload,
   CurrentUser,
   EffectiveConfig,
+  ExecutionPreferencesResponse,
   FileDetail,
   FileListResponse,
   FileSelectionPayload,
@@ -318,6 +319,10 @@ export function getLibraryRoots(client: ApiClient): Promise<LibraryRoots> {
   return client.request<LibraryRoots>("/config/setup/library-roots");
 }
 
+export function getExecutionPreferences(client: ApiClient): Promise<ExecutionPreferencesResponse> {
+  return client.request<ExecutionPreferencesResponse>("/config/setup/execution-preferences");
+}
+
 export function updateLibraryRoots(
   client: ApiClient,
   payload: { movies_root?: string | null; tv_root?: string | null },
@@ -342,6 +347,16 @@ export function updateProcessingRules(
   },
 ): Promise<ProcessingRules> {
   return client.request<ProcessingRules>("/config/setup/processing-rules", {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateExecutionPreferences(
+  client: ApiClient,
+  payload: ExecutionPreferencesResponse,
+): Promise<ExecutionPreferencesResponse> {
+  return client.request<ExecutionPreferencesResponse>("/config/setup/execution-preferences", {
     method: "PUT",
     body: JSON.stringify(payload),
   });

@@ -312,7 +312,9 @@ def command_update(args: argparse.Namespace) -> int:
         env=compose_env(project_root),
         check=True,
     )
-    return command_doctor(args)
+    doctor_result = command_doctor(args)
+    prompt_for_restart_after_update()
+    return doctor_result
 
 
 def command_reset_admin(args: argparse.Namespace) -> int:
@@ -729,6 +731,9 @@ def print_update_status(status) -> None:
     if getattr(status, "release_summary", None):
         print("Summary:")
         print(status.release_summary)
+    if getattr(status, "breaking_changes_summary", None):
+        print("Breaking changes:")
+        print(status.breaking_changes_summary)
     if status.download_url:
         print(f"Download URL: {status.download_url}")
 
@@ -770,6 +775,45 @@ def sync_release_tree(*, source_root: Path, target_root: Path) -> None:
         else:
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(path, destination)
+
+
+def detect_restart_environment() -> str:
+    runtime_container = Path("/run/systemd/container")
+    if runtime_container.exists():
+        container_name = runtime_container.read_text(encoding="utf-8").strip().lower()
+        if container_name == "lxc":
+            return "lxc"
+        if container_name:
+            return "container"
+
+    environ_path = Path("/proc/1/environ")
+    if environ_path.exists():
+        try:
+            raw = environ_path.read_bytes().decode("utf-8", errors="ignore")
+        except OSError:
+            raw = ""
+        if "container=lxc" in raw:
+            return "lxc"
+        if "container=" in raw:
+            return "container"
+
+    return "system"
+
+
+def prompt_for_restart_after_update() -> None:
+    environment = detect_restart_environment()
+    restart_target = "this LXC container" if environment == "lxc" else "this system"
+    print()
+    print("Update complete.")
+    print(
+        f"A restart of {restart_target} may still be needed for storage mounts, GPU device passthrough, or remounted paths to be seen cleanly."
+    )
+    answer = input(f"Restart {restart_target} now? [y/N] ").strip().lower()
+    if answer not in {"y", "yes"}:
+        print("Restart later if newly mounted storage or hardware devices are not visible yet.")
+        return
+    print(f"Restarting {restart_target}...")
+    subprocess.run(["reboot"], check=True)
 
 
 if __name__ == "__main__":
