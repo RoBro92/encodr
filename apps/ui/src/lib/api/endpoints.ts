@@ -21,6 +21,7 @@ import type {
   FileSelectionPayload,
   FolderBrowseResponse,
   FolderScanSummary,
+  ScanRecordListResponse,
   JobDetail,
   JobListResponse,
   LibraryRoots,
@@ -46,6 +47,9 @@ import type {
   WorkerInventoryDetail,
   WorkerInventoryListResponse,
   WorkerPreferencePayload,
+  WatchedJob,
+  WatchedJobListResponse,
+  WatchedJobPayload,
   WorkerRunOnceResponse,
   WorkerStateChangeResponse,
   WorkerSelfTestResponse,
@@ -130,6 +134,36 @@ export function browseFolder(client: ApiClient, path?: string): Promise<FolderBr
 export function scanFolder(client: ApiClient, payload: ProbeOrPlanPayload): Promise<FolderScanSummary> {
   return client.request<FolderScanSummary>("/files/scan", {
     method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listScans(client: ApiClient): Promise<ScanRecordListResponse> {
+  return client.request<ScanRecordListResponse>("/files/scans");
+}
+
+export function getScan(client: ApiClient, scanId: string): Promise<FolderScanSummary> {
+  return client.request<FolderScanSummary>(`/files/scans/${scanId}`);
+}
+
+export function listWatchedJobs(client: ApiClient): Promise<WatchedJobListResponse> {
+  return client.request<WatchedJobListResponse>("/files/watchers");
+}
+
+export function createWatchedJob(client: ApiClient, payload: WatchedJobPayload): Promise<WatchedJob> {
+  return client.request<WatchedJob>("/files/watchers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWatchedJob(
+  client: ApiClient,
+  watchedJobId: string,
+  payload: WatchedJobPayload,
+): Promise<WatchedJob> {
+  return client.request<WatchedJob>(`/files/watchers/${watchedJobId}`, {
+    method: "PUT",
     body: JSON.stringify(payload),
   });
 }

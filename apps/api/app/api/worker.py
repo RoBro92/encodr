@@ -375,6 +375,7 @@ def setup_local_worker(
             display_name=payload.display_name,
             preferred_backend=payload.preferred_backend,
             allow_cpu_fallback=payload.allow_cpu_fallback,
+            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
         )
         session.commit()
         return WorkerInventoryDetailResponse(**worker)
@@ -399,6 +400,7 @@ def update_worker_preferences(
             display_name=payload.display_name,
             preferred_backend=payload.preferred_backend,
             allow_cpu_fallback=payload.allow_cpu_fallback,
+            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
         )
         session.commit()
         return WorkerInventoryDetailResponse(**worker)
@@ -422,6 +424,7 @@ def create_remote_worker_onboarding(
             display_name=payload.display_name,
             preferred_backend=payload.preferred_backend,
             allow_cpu_fallback=payload.allow_cpu_fallback,
+            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
         )
         session.commit()
         return RemoteWorkerOnboardingResponse(

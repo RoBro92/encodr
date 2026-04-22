@@ -34,6 +34,12 @@ class WorkerRepository:
         )
         return self.session.scalar(query)
 
+    def get_by_ids(self, worker_ids: list[str]) -> list[Worker]:
+        if not worker_ids:
+            return []
+        query = select(Worker).where(Worker.id.in_(worker_ids))
+        return list(self.session.scalars(query))
+
     def list_workers(
         self,
         *,
@@ -112,6 +118,7 @@ class WorkerRepository:
         enabled: bool,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None,
         host_metadata: dict | None,
     ) -> Worker:
         worker = self.get_local_worker(worker_key)
@@ -132,6 +139,7 @@ class WorkerRepository:
         )
         worker.preferred_backend = preferred_backend
         worker.allow_cpu_fallback = allow_cpu_fallback
+        worker.schedule_windows = schedule_windows
         worker.host_metadata = host_metadata
         if not enabled:
             worker.last_health_status = WorkerHealthStatus.UNKNOWN
@@ -146,6 +154,7 @@ class WorkerRepository:
         display_name: str,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None,
         pairing_token_hash: str,
         pairing_requested_at: datetime,
         pairing_expires_at: datetime,
@@ -159,6 +168,7 @@ class WorkerRepository:
             registration_status=WorkerRegistrationStatus.UNKNOWN,
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            schedule_windows=schedule_windows,
             pairing_token_hash=pairing_token_hash,
             pairing_requested_at=pairing_requested_at,
             pairing_expires_at=pairing_expires_at,
@@ -178,6 +188,7 @@ class WorkerRepository:
         display_name: str | None = None,
         preferred_backend: str | None = None,
         allow_cpu_fallback: bool | None = None,
+        schedule_windows: list[dict] | None = None,
     ) -> Worker:
         if display_name is not None:
             worker.display_name = display_name
@@ -185,6 +196,8 @@ class WorkerRepository:
             worker.preferred_backend = preferred_backend
         if allow_cpu_fallback is not None:
             worker.allow_cpu_fallback = allow_cpu_fallback
+        if schedule_windows is not None:
+            worker.schedule_windows = schedule_windows
         self.session.flush()
         return worker
 

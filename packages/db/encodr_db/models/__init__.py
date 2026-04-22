@@ -19,8 +19,10 @@ from encodr_db.models.manual_review_decision import ManualReviewDecision
 from encodr_db.models.plan_snapshot import PlanSnapshot
 from encodr_db.models.probe_snapshot import ProbeSnapshot
 from encodr_db.models.refresh_token import RefreshToken
+from encodr_db.models.scan_record import ScanRecord
 from encodr_db.models.tracked_file import TrackedFile
 from encodr_db.models.user import User
+from encodr_db.models.watched_job_definition import WatchedJobDefinition
 from encodr_db.models.worker import Worker
 
 __all__ = [
@@ -42,6 +44,8 @@ __all__ = [
     "User",
     "UserRole",
     "VerificationStatus",
+    "ScanRecord",
+    "WatchedJobDefinition",
     "Worker",
     "WorkerHealthStatus",
     "WorkerRegistrationStatus",

@@ -53,7 +53,7 @@ class LibraryService:
                 continue
         raise ApiValidationError("Folder browsing is only available under the configured media mounts.")
 
-    def resolve_directory(self, path: str | None) -> Path:
+    def resolve_directory(self, path: str | None, *, allow_external: bool = False) -> Path:
         if path is None or not path.strip():
             candidate = self.default_root()
         else:
@@ -63,7 +63,8 @@ class LibraryService:
         if not candidate.is_dir():
             raise ApiValidationError("The selected path must be a directory.")
         resolved = candidate.resolve()
-        self.root_for_path(resolved)
+        if not allow_external:
+            self.root_for_path(resolved)
         return resolved
 
     def resolve_file(self, path: str) -> Path:
@@ -111,9 +112,9 @@ class LibraryService:
             "entries": entries,
         }
 
-    def scan_directory(self, path: str) -> dict[str, object]:
-        current = self.resolve_directory(path)
-        active_root = self.root_for_path(current)
+    def scan_directory(self, path: str, *, allow_external: bool = False, source_kind: str = "manual") -> dict[str, object]:
+        current = self.resolve_directory(path, allow_external=allow_external)
+        active_root = self.root_for_path(current) if not allow_external else current
         directories: list[Path] = []
         video_files: list[Path] = []
         for item in current.rglob("*"):
@@ -148,6 +149,7 @@ class LibraryService:
         return {
             "folder_path": current.as_posix(),
             "root_path": active_root.as_posix(),
+            "source_kind": source_kind,
             "directory_count": len(directories),
             "direct_directory_count": len(direct_children),
             "video_file_count": len(video_files),

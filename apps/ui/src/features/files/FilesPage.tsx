@@ -1,43 +1,135 @@
 import { useState } from "react";
 import { Link } from "react-router-dom";
 
-import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
+import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
+import { ScheduleWindowsEditor } from "../../components/ScheduleWindowsEditor";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
   useBatchPlanMutation,
   useCreateBatchJobsMutation,
+  useCreateWatchedJobMutation,
   useDryRunMutation,
   useLibraryRootsQuery,
   useScanFolderMutation,
+  useScansQuery,
+  useUpdateWatchedJobMutation,
+  useWatchedJobsQuery,
+  useWorkersQuery,
 } from "../../lib/api/hooks";
-import { titleCase } from "../../lib/utils/format";
+import type { FolderScanSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
+import { formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
 type LibraryTab = "browse" | "scan" | "dry-run" | "batch-plan";
+
+type WatcherDraft = WatchedJobPayload & {
+  id?: string;
+};
+
+const MEDIA_CLASS_OPTIONS = [
+  { value: "movie", label: "Movies" },
+  { value: "movie_4k", label: "Movies 4K" },
+  { value: "tv", label: "TV" },
+  { value: "tv_4k", label: "TV 4K" },
+  { value: "mixed", label: "Mixed" },
+];
+
+const RULESET_OPTIONS = [
+  { value: "", label: "Use inferred ruleset" },
+  { value: "movies", label: "Movies" },
+  { value: "movies_4k", label: "Movies 4K" },
+  { value: "tv", label: "TV" },
+  { value: "tv_4k", label: "TV 4K" },
+];
+
+const BACKEND_OPTIONS = [
+  { value: "", label: "Use worker default" },
+  { value: "cpu_only", label: "CPU only" },
+  { value: "prefer_intel_igpu", label: "Prefer Intel iGPU" },
+  { value: "prefer_nvidia_gpu", label: "Prefer NVIDIA" },
+  { value: "prefer_amd_gpu", label: "Prefer AMD" },
+];
+
+function inferWatcherDefaults(path: string | null, moviesRoot: string | null, tvRoot: string | null): WatcherDraft {
+  const normalised = (path ?? "").toLowerCase();
+  const underMovies = Boolean(moviesRoot && path?.startsWith(moviesRoot));
+  const underTv = Boolean(tvRoot && path?.startsWith(tvRoot));
+  const looks4k = /(^|\/)(4k|uhd)(\/|$)/i.test(normalised);
+  let mediaClass = "mixed";
+  let ruleset = "";
+
+  if (underMovies) {
+    mediaClass = looks4k ? "movie_4k" : "movie";
+    ruleset = looks4k ? "movies_4k" : "movies";
+  } else if (underTv) {
+    mediaClass = looks4k ? "tv_4k" : "tv";
+    ruleset = looks4k ? "tv_4k" : "tv";
+  }
+
+  return {
+    display_name: path ? path.split("/").filter(Boolean).at(-1) ?? "Watched folder" : "Watched folder",
+    source_path: path ?? "",
+    media_class: mediaClass,
+    ruleset_override: ruleset || undefined,
+    preferred_worker_id: undefined,
+    pinned_worker_id: undefined,
+    preferred_backend: undefined,
+    schedule_windows: [],
+    auto_queue: true,
+    stage_only: false,
+    enabled: true,
+  };
+}
+
+function watcherDraftFromRecord(item: WatchedJob): WatcherDraft {
+  return {
+    id: item.id,
+    display_name: item.display_name,
+    source_path: item.source_path,
+    media_class: item.media_class,
+    ruleset_override: item.ruleset_override ?? undefined,
+    preferred_worker_id: item.preferred_worker_id ?? undefined,
+    pinned_worker_id: item.pinned_worker_id ?? undefined,
+    preferred_backend: item.preferred_backend ?? undefined,
+    schedule_windows: item.schedule_windows,
+    auto_queue: item.auto_queue,
+    stage_only: item.stage_only,
+    enabled: item.enabled,
+  };
+}
 
 export function FilesPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<LibraryTab>("browse");
+  const [activeScanDraft, setActiveScanDraft] = useState<FolderScanSummary | null>(null);
+  const [watcherDraft, setWatcherDraft] = useState<WatcherDraft | null>(null);
 
   const rootsQuery = useLibraryRootsQuery();
+  const scansQuery = useScansQuery();
+  const watchedJobsQuery = useWatchedJobsQuery();
+  const workersQuery = useWorkersQuery();
   const scanMutation = useScanFolderMutation();
   const dryRunMutation = useDryRunMutation();
   const batchPlanMutation = useBatchPlanMutation();
   const batchJobsMutation = useCreateBatchJobsMutation();
+  const createWatchedJobMutation = useCreateWatchedJobMutation();
+  const updateWatchedJobMutation = useUpdateWatchedJobMutation();
 
-  if (rootsQuery.isLoading) {
+  const loading = rootsQuery.isLoading || scansQuery.isLoading || watchedJobsQuery.isLoading || workersQuery.isLoading;
+  if (loading) {
     return <LoadingBlock label="Loading library" />;
   }
 
-  if (rootsQuery.error instanceof Error) {
-    return <ErrorPanel title="Unable to load the library" message={rootsQuery.error.message} />;
+  const error = rootsQuery.error ?? scansQuery.error ?? watchedJobsQuery.error ?? workersQuery.error;
+  if (error instanceof Error) {
+    return <ErrorPanel title="Unable to load the library" message={error.message} />;
   }
 
   const roots = rootsQuery.data;
@@ -45,9 +137,19 @@ export function FilesPage() {
     return <ErrorPanel title="Library is unavailable" message="The API did not return library roots." />;
   }
 
-  const scanResult = scanMutation.data;
+  const recentScans = scansQuery.data?.items ?? [];
+  const watchedJobs = watchedJobsQuery.data?.items ?? [];
+  const workers = workersQuery.data?.items ?? [];
+  const moviesRoot = roots.movies_root;
+  const tvRoot = roots.tv_root;
+  const activeScan = activeScanDraft
+    ? activeScanDraft.scan_id
+      ? recentScans.find((item) => item.scan_id === activeScanDraft.scan_id) ?? activeScanDraft
+      : activeScanDraft
+    : null;
+
   const selectedSet = new Set(selectedPaths);
-  const allSelected = Boolean(scanResult && scanResult.files.length > 0 && selectedPaths.length === scanResult.files.length);
+  const allSelected = Boolean(activeScan && activeScan.files.length > 0 && selectedPaths.length === activeScan.files.length);
   const hasSavedRoots = Boolean(roots.movies_root || roots.tv_root);
   const activeSelection =
     selectedPaths.length > 0
@@ -55,23 +157,28 @@ export function FilesPage() {
       : selectedFolder
         ? { folder_path: selectedFolder }
         : undefined;
-
+  const showWorkspaceTabs = Boolean(selectedFolder);
+  const currentTab = showWorkspaceTabs ? activeTab : "browse";
+  const selectedCount = selectedPaths.length;
+  const selectedCountLabel =
+    selectedCount === 1 ? "1 file selected" : `${selectedCount} files selected`;
   const selectionScopeLabel =
     selectedPaths.length > 0
       ? `${selectedPaths.length} file${selectedPaths.length === 1 ? "" : "s"} selected`
       : selectedFolder
         ? "Entire folder selected"
         : "No folder selected";
-
   const selectionScopeCopy =
     selectedPaths.length > 0
       ? "Dry run, plan, or create jobs for the selected files."
       : selectedFolder
         ? "Dry run, plan, or create jobs for the whole folder."
         : "Choose a folder to begin.";
-  const selectedCount = selectedPaths.length;
-  const showWorkspaceTabs = Boolean(selectedFolder);
-  const currentTab = showWorkspaceTabs ? activeTab : "browse";
+
+  const workerOptions = workers.map((worker) => ({
+    id: worker.id,
+    label: `${worker.display_name} (${worker.worker_type === "local" ? "local" : "remote"})`,
+  }));
 
   function togglePath(path: string) {
     setSelectedPaths((current) =>
@@ -80,10 +187,10 @@ export function FilesPage() {
   }
 
   function selectAllVisible() {
-    if (!scanResult) {
+    if (!activeScan) {
       return;
     }
-    setSelectedPaths(scanResult.files.map((item) => item.path));
+    setSelectedPaths(activeScan.files.map((item) => item.path));
   }
 
   function clearSelection() {
@@ -94,7 +201,48 @@ export function FilesPage() {
     setSelectedFolder(path);
     setSelectedPaths([]);
     setActiveTab("scan");
-    await scanMutation.mutateAsync({ source_path: path });
+    const result = await scanMutation.mutateAsync({ source_path: path });
+    setActiveScanDraft(result);
+  }
+
+  function openSavedScan(scan: FolderScanSummary) {
+    setSelectedFolder(scan.folder_path);
+    setSelectedPaths([]);
+    setActiveTab("scan");
+    setActiveScanDraft(scan);
+  }
+
+  function openWatcherDraft(item?: WatchedJob) {
+    if (item) {
+      setWatcherDraft(watcherDraftFromRecord(item));
+      return;
+    }
+    setWatcherDraft(inferWatcherDefaults(selectedFolder, moviesRoot, tvRoot));
+  }
+
+  async function saveWatcher() {
+    if (!watcherDraft) {
+      return;
+    }
+    const payload: WatchedJobPayload = {
+      display_name: watcherDraft.display_name,
+      source_path: watcherDraft.source_path,
+      media_class: watcherDraft.media_class,
+      ruleset_override: watcherDraft.ruleset_override,
+      preferred_worker_id: watcherDraft.preferred_worker_id,
+      pinned_worker_id: watcherDraft.pinned_worker_id,
+      preferred_backend: watcherDraft.preferred_backend,
+      schedule_windows: watcherDraft.schedule_windows,
+      auto_queue: watcherDraft.auto_queue,
+      stage_only: watcherDraft.stage_only,
+      enabled: watcherDraft.enabled,
+    };
+    if (watcherDraft.id) {
+      await updateWatchedJobMutation.mutateAsync({ watchedJobId: watcherDraft.id, payload });
+    } else {
+      await createWatchedJobMutation.mutateAsync(payload);
+    }
+    setWatcherDraft(null);
   }
 
   function runDryRun() {
@@ -140,14 +288,19 @@ export function FilesPage() {
               Browse folders
             </button>
             {selectedFolder ? (
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={() => void runScan(selectedFolder)}
-                disabled={scanMutation.isPending}
-              >
-                {scanMutation.isPending ? "Scanning…" : "Scan folder"}
-              </button>
+              <>
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => void runScan(selectedFolder)}
+                  disabled={scanMutation.isPending}
+                >
+                  {scanMutation.isPending ? "Scanning…" : "Scan folder"}
+                </button>
+                <button className="button button-primary" type="button" onClick={() => openWatcherDraft()}>
+                  Watch folder
+                </button>
+              </>
             ) : null}
           </div>
         }
@@ -164,6 +317,12 @@ export function FilesPage() {
       ) : null}
       {batchJobsMutation.error instanceof Error ? (
         <ErrorPanel title="Batch job creation failed" message={batchJobsMutation.error.message} />
+      ) : null}
+      {createWatchedJobMutation.error instanceof Error ? (
+        <ErrorPanel title="Unable to create watched job" message={createWatchedJobMutation.error.message} />
+      ) : null}
+      {updateWatchedJobMutation.error instanceof Error ? (
+        <ErrorPanel title="Unable to update watched job" message={updateWatchedJobMutation.error.message} />
       ) : null}
 
       {!hasSavedRoots ? (
@@ -185,8 +344,8 @@ export function FilesPage() {
               <span className="library-root-label">Movies root</span>
               <strong>{roots.movies_root ?? "Not set"}</strong>
               <div className="library-root-actions">
-                {roots.movies_root ? (
-                  <button className="button button-secondary button-small" type="button" onClick={() => void runScan(roots.movies_root!)}>
+                {moviesRoot ? (
+                  <button className="button button-secondary button-small" type="button" onClick={() => void runScan(moviesRoot)}>
                     Open
                   </button>
                 ) : (
@@ -201,8 +360,8 @@ export function FilesPage() {
               <span className="library-root-label">TV root</span>
               <strong>{roots.tv_root ?? "Not set"}</strong>
               <div className="library-root-actions">
-                {roots.tv_root ? (
-                  <button className="button button-secondary button-small" type="button" onClick={() => void runScan(roots.tv_root!)}>
+                {tvRoot ? (
+                  <button className="button button-secondary button-small" type="button" onClick={() => void runScan(tvRoot)}>
                     Open
                   </button>
                 ) : (
@@ -219,6 +378,7 @@ export function FilesPage() {
               <div className="badge-row">
                 <StatusBadge value={selectedFolder ? "selected" : "pending"} />
                 <span className="muted-copy">{selectionScopeLabel}</span>
+                {activeScan?.scanned_at ? <span className="muted-copy">Scanned {formatDateTime(activeScan.scanned_at)}</span> : null}
               </div>
               <strong className="library-path-copy">{selectedFolder ?? "No folder selected"}</strong>
               <p className="muted-copy">{selectionScopeCopy}</p>
@@ -229,19 +389,19 @@ export function FilesPage() {
                 <span className="metric-label">Selected</span>
                 <strong>{selectedCount}</strong>
               </div>
-              {scanResult?.folder_path === selectedFolder ? (
+              {activeScan?.folder_path === selectedFolder ? (
                 <>
                   <div className="metric-pill">
                     <span className="metric-label">Video files</span>
-                    <strong>{scanResult.video_file_count}</strong>
+                    <strong>{activeScan.video_file_count}</strong>
                   </div>
                   <div className="metric-pill">
                     <span className="metric-label">Likely films</span>
-                    <strong>{scanResult.likely_film_count}</strong>
+                    <strong>{activeScan.likely_film_count}</strong>
                   </div>
                   <div className="metric-pill">
                     <span className="metric-label">Likely episodes</span>
-                    <strong>{scanResult.likely_episode_count}</strong>
+                    <strong>{activeScan.likely_episode_count}</strong>
                   </div>
                 </>
               ) : null}
@@ -254,7 +414,7 @@ export function FilesPage() {
                 onClick={() => selectedFolder && void runScan(selectedFolder)}
                 disabled={!selectedFolder || scanMutation.isPending}
               >
-                {scanMutation.isPending ? "Scanning…" : "Scan Folder"}
+                {scanMutation.isPending ? "Scanning…" : "Scan folder"}
               </button>
               <button
                 className="button button-primary"
@@ -284,6 +444,244 @@ export function FilesPage() {
           </div>
         </div>
       </SectionCard>
+
+      <div className="dashboard-grid">
+        <SectionCard
+          title="Recent scans"
+          subtitle="Reopen saved scan results or rescan a folder when it changes."
+        >
+          {recentScans.length === 0 ? (
+            <EmptyState title="No saved scans yet" message="Run a folder scan to keep the result available for later job creation." />
+          ) : (
+            <div className="list-stack">
+              {recentScans.map((scan) => (
+                <div key={scan.scan_id ?? scan.folder_path} className="list-row">
+                  <div>
+                    <strong>{scan.folder_path}</strong>
+                    <p>
+                      {scan.video_file_count} file{scan.video_file_count === 1 ? "" : "s"} • {scan.source_kind === "watched" ? "Watched" : "Manual"} • {formatDateTime(scan.scanned_at)}
+                    </p>
+                    {scan.stale ? <p>Saved result may be stale.</p> : null}
+                  </div>
+                  <div className="list-row-meta">
+                    {scan.stale ? <StatusBadge value="stale" /> : <StatusBadge value="saved" />}
+                    <button className="button button-secondary button-small" type="button" onClick={() => openSavedScan(scan)}>
+                      Reopen
+                    </button>
+                    <button className="button button-secondary button-small" type="button" onClick={() => void runScan(scan.folder_path)}>
+                      Rescan
+                    </button>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </SectionCard>
+
+        <SectionCard
+          title="Watched folders"
+          subtitle="Queue or stage new files automatically from SSD or library folders."
+          actions={
+            <button className="button button-primary button-small" type="button" onClick={() => openWatcherDraft()}>
+              Add watched job
+            </button>
+          }
+        >
+          <div className="card-stack">
+            {watcherDraft ? (
+              <div className="settings-rules-fields settings-rules-fields-compact">
+                <label className="field">
+                  <span>Name</span>
+                  <input
+                    aria-label="Watched job name"
+                    value={watcherDraft.display_name}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, display_name: event.target.value } : current)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Source path</span>
+                  <input
+                    aria-label="Watched source path"
+                    value={watcherDraft.source_path}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, source_path: event.target.value } : current)}
+                  />
+                </label>
+                <label className="field">
+                  <span>Media class</span>
+                  <select
+                    aria-label="Watched media class"
+                    value={watcherDraft.media_class}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, media_class: event.target.value } : current)}
+                  >
+                    {MEDIA_CLASS_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Ruleset</span>
+                  <select
+                    aria-label="Watched ruleset"
+                    value={watcherDraft.ruleset_override ?? ""}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, ruleset_override: event.target.value || undefined } : current)}
+                  >
+                    {RULESET_OPTIONS.map((option) => (
+                      <option key={option.value || "inferred"} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Preferred worker</span>
+                  <select
+                    aria-label="Watched preferred worker"
+                    value={watcherDraft.preferred_worker_id ?? ""}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, preferred_worker_id: event.target.value || undefined } : current)}
+                  >
+                    <option value="">Automatic</option>
+                    {workerOptions.map((worker) => (
+                      <option key={worker.id} value={worker.id}>{worker.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Pinned worker</span>
+                  <select
+                    aria-label="Watched pinned worker"
+                    value={watcherDraft.pinned_worker_id ?? ""}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, pinned_worker_id: event.target.value || undefined } : current)}
+                  >
+                    <option value="">No pin</option>
+                    {workerOptions.map((worker) => (
+                      <option key={worker.id} value={worker.id}>{worker.label}</option>
+                    ))}
+                  </select>
+                </label>
+                <label className="field">
+                  <span>Preferred backend</span>
+                  <select
+                    aria-label="Watched preferred backend"
+                    value={watcherDraft.preferred_backend ?? ""}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, preferred_backend: event.target.value || undefined } : current)}
+                  >
+                    {BACKEND_OPTIONS.map((option) => (
+                      <option key={option.value || "default"} value={option.value}>{option.label}</option>
+                    ))}
+                  </select>
+                </label>
+
+                <ScheduleWindowsEditor
+                  label="Schedule windows"
+                  value={watcherDraft.schedule_windows ?? []}
+                  onChange={(value) => setWatcherDraft((current) => current ? { ...current, schedule_windows: value } : current)}
+                />
+
+                <label className="field field-checkbox">
+                  <span>Auto queue new files</span>
+                  <input
+                    aria-label="Watched auto queue"
+                    type="checkbox"
+                    checked={watcherDraft.auto_queue}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, auto_queue: event.target.checked } : current)}
+                  />
+                </label>
+                <label className="field field-checkbox">
+                  <span>Stage only</span>
+                  <input
+                    aria-label="Watched stage only"
+                    type="checkbox"
+                    checked={watcherDraft.stage_only}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, stage_only: event.target.checked } : current)}
+                  />
+                </label>
+                <label className="field field-checkbox">
+                  <span>Enabled</span>
+                  <input
+                    aria-label="Watched enabled"
+                    type="checkbox"
+                    checked={watcherDraft.enabled}
+                    onChange={(event) => setWatcherDraft((current) => current ? { ...current, enabled: event.target.checked } : current)}
+                  />
+                </label>
+
+                <div className="section-card-actions">
+                  <button
+                    className="button button-primary button-small"
+                    type="button"
+                    onClick={() => void saveWatcher()}
+                    disabled={createWatchedJobMutation.isPending || updateWatchedJobMutation.isPending}
+                  >
+                    {createWatchedJobMutation.isPending || updateWatchedJobMutation.isPending
+                      ? "Saving…"
+                      : watcherDraft.id ? "Save watched job" : "Create watched job"}
+                  </button>
+                  <button className="button button-secondary button-small" type="button" onClick={() => setWatcherDraft(null)}>
+                    Cancel
+                  </button>
+                </div>
+              </div>
+            ) : null}
+
+            {watchedJobs.length === 0 ? (
+              <EmptyState title="No watched folders yet" message="Create a watched job to queue or stage new files automatically from an SSD or library path." />
+            ) : (
+              <div className="list-stack">
+                {watchedJobs.map((item) => (
+                  <div key={item.id} className="list-row">
+                    <div>
+                      <strong>{item.display_name}</strong>
+                      <p>{item.source_path}</p>
+                      <p>
+                        {mediaClassLabel(item.media_class)}
+                        {item.ruleset_override ? ` • ${rulesetLabel(item.ruleset_override)}` : ""}
+                        {item.schedule_summary ? ` • ${item.schedule_summary}` : ""}
+                      </p>
+                      <p>
+                        {item.auto_queue && !item.stage_only ? "Auto queue" : "Stage only"}
+                        {item.last_scan_at ? ` • Last scan ${formatDateTime(item.last_scan_at)}` : ""}
+                        {item.last_seen_count ? ` • ${item.last_seen_count} known file${item.last_seen_count === 1 ? "" : "s"}` : ""}
+                      </p>
+                    </div>
+                    <div className="list-row-meta">
+                      <StatusBadge value={item.enabled ? "enabled" : "disabled"} />
+                      <button className="button button-secondary button-small" type="button" onClick={() => openWatcherDraft(item)}>
+                        Edit
+                      </button>
+                      <button className="button button-secondary button-small" type="button" onClick={() => void runScan(item.source_path)}>
+                        Scan now
+                      </button>
+                      <button
+                        className="button button-secondary button-small"
+                        type="button"
+                        onClick={() => {
+                          void updateWatchedJobMutation.mutateAsync({
+                            watchedJobId: item.id,
+                            payload: {
+                              display_name: item.display_name,
+                              source_path: item.source_path,
+                              media_class: item.media_class,
+                              ruleset_override: item.ruleset_override,
+                              preferred_worker_id: item.preferred_worker_id,
+                              pinned_worker_id: item.pinned_worker_id,
+                              preferred_backend: item.preferred_backend,
+                              schedule_windows: item.schedule_windows,
+                              auto_queue: item.auto_queue,
+                              stage_only: item.stage_only,
+                              enabled: !item.enabled,
+                            },
+                          });
+                        }}
+                        disabled={updateWatchedJobMutation.isPending}
+                      >
+                        {item.enabled ? "Disable" : "Enable"}
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        </SectionCard>
+      </div>
 
       <SectionCard
         title="Library workspace"
@@ -344,32 +742,32 @@ export function FilesPage() {
           ) : null}
 
           {currentTab === "scan" ? (
-            scanMutation.isPending ? (
+            scanMutation.isPending && !activeScan ? (
               <LoadingBlock label="Scanning folder" />
-            ) : scanResult ? (
+            ) : activeScan ? (
               <div className="card-stack">
                 <div className="metric-grid">
                   <div className="metric-panel">
                     <span className="metric-label">Folders</span>
-                    <strong>{scanResult.directory_count}</strong>
+                    <strong>{activeScan.directory_count}</strong>
                   </div>
                   <div className="metric-panel">
                     <span className="metric-label">Video files</span>
-                    <strong>{scanResult.video_file_count}</strong>
+                    <strong>{activeScan.video_file_count}</strong>
                   </div>
                   <div className="metric-panel">
                     <span className="metric-label">Likely films</span>
-                    <strong>{scanResult.likely_film_count}</strong>
+                    <strong>{activeScan.likely_film_count}</strong>
                   </div>
                   <div className="metric-panel">
                     <span className="metric-label">Likely episodes</span>
-                    <strong>{scanResult.likely_episode_count}</strong>
+                    <strong>{activeScan.likely_episode_count}</strong>
                   </div>
                 </div>
 
                 <div className="library-selection-toolbar">
                   <div className="library-selection-copy">
-                    <strong>{selectedPaths.length} selected</strong>
+                    <strong>{selectedCountLabel}</strong>
                     <span className="muted-copy">
                       {selectedPaths.length > 0 ? "Actions will use the selected files." : "No files selected. Actions will use the folder."}
                     </span>
@@ -378,11 +776,14 @@ export function FilesPage() {
                     <button className="button button-secondary button-small" type="button" onClick={allSelected ? clearSelection : selectAllVisible}>
                       {allSelected ? "Clear selection" : "Select all"}
                     </button>
+                    <button className="button button-secondary button-small" type="button" onClick={() => openWatcherDraft()}>
+                      Watch this folder
+                    </button>
                   </div>
                 </div>
 
                 <div className="selection-list">
-                  {scanResult.files.map((file) => (
+                  {activeScan.files.map((file) => (
                     <label key={file.path} className={`selection-row${selectedSet.has(file.path) ? " selection-row-active" : ""}`}>
                       <input
                         type="checkbox"
@@ -538,4 +939,23 @@ export function FilesPage() {
       />
     </div>
   );
+}
+
+function mediaClassLabel(value: string) {
+  return {
+    movie: "Movies",
+    movie_4k: "Movies 4K",
+    tv: "TV",
+    tv_4k: "TV 4K",
+    mixed: "Mixed",
+  }[value] ?? titleCase(value);
+}
+
+function rulesetLabel(value: string) {
+  return {
+    movies: "Movies",
+    movies_4k: "Movies 4K",
+    tv: "TV",
+    tv_4k: "TV 4K",
+  }[value] ?? titleCase(value);
 }

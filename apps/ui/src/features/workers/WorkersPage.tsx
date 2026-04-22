@@ -6,6 +6,7 @@ import { ErrorPanel } from "../../components/ErrorPanel";
 import { KeyValueList } from "../../components/KeyValueList";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
+import { ScheduleWindowsEditor } from "../../components/ScheduleWindowsEditor";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
@@ -18,7 +19,11 @@ import {
   useWorkersQuery,
   useUpdateWorkerPreferencesMutation,
 } from "../../lib/api/hooks";
-import type { RemoteWorkerOnboardingResponse, WorkerPreferencePayload } from "../../lib/types/api";
+import type {
+  RemoteWorkerOnboardingPayload,
+  RemoteWorkerOnboardingResponse,
+  WorkerPreferencePayload,
+} from "../../lib/types/api";
 import { formatBytes, formatDateTime, formatDurationSeconds, formatRelativeBoolean, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -46,12 +51,14 @@ export function WorkersPage() {
     display_name: "This host",
     preferred_backend: "cpu_only",
     allow_cpu_fallback: true,
+    schedule_windows: [],
   });
-  const [remoteDraft, setRemoteDraft] = useState({
+  const [remoteDraft, setRemoteDraft] = useState<RemoteWorkerOnboardingPayload>({
     display_name: "",
-    platform: "windows" as "windows" | "linux" | "macos",
+    platform: "windows",
     preferred_backend: "cpu_only",
     allow_cpu_fallback: true,
+    schedule_windows: [],
   });
   const [onboardingResult, setOnboardingResult] = useState<RemoteWorkerOnboardingResponse | null>(null);
   const workerStatus = workerStatusQuery.data;
@@ -73,6 +80,7 @@ export function WorkersPage() {
         display_name: detail.display_name,
         preferred_backend: detail.preferred_backend ?? "cpu_only",
         allow_cpu_fallback: detail.allow_cpu_fallback ?? true,
+        schedule_windows: detail.schedule_windows ?? [],
       });
       return;
     }
@@ -87,11 +95,13 @@ export function WorkersPage() {
       display_name: localWorker?.display_name ?? workerStatus.worker_name,
       preferred_backend: localWorker?.preferred_backend ?? workerStatus.execution_preferences.preferred_backend,
       allow_cpu_fallback: localWorker?.allow_cpu_fallback ?? workerStatus.execution_preferences.allow_cpu_fallback,
+      schedule_windows: localWorker?.schedule_windows ?? [],
     });
   }, [
     localWorker?.allow_cpu_fallback,
     localWorker?.display_name,
     localWorker?.preferred_backend,
+    localWorker?.schedule_windows,
     workerStatus,
   ]);
 
@@ -174,6 +184,7 @@ export function WorkersPage() {
                   { label: "Queue", value: workerStatus.local_worker_queue },
                   { label: "Available backends", value: hardwareSummary || "CPU only" },
                   { label: "CPU fallback", value: workerStatus.execution_preferences.allow_cpu_fallback ? "Allowed" : "Disabled" },
+                  { label: "Schedule", value: localWorker?.schedule_summary ?? "Any time" },
                 ]}
               />
               {showLocalSetup || !localWorker ? (
@@ -207,6 +218,11 @@ export function WorkersPage() {
                       onChange={(event) => setLocalDraft((current) => ({ ...current, allow_cpu_fallback: event.target.checked }))}
                     />
                   </label>
+                  <ScheduleWindowsEditor
+                    label="Schedule windows"
+                    value={localDraft.schedule_windows ?? []}
+                    onChange={(value) => setLocalDraft((current) => ({ ...current, schedule_windows: value }))}
+                  />
                 </div>
               ) : null}
               {showLocalSetup || !localWorker ? (
@@ -240,7 +256,7 @@ export function WorkersPage() {
                     <span>Worker label</span>
                     <input
                       aria-label="Remote worker label"
-                      value={remoteDraft.display_name}
+                      value={remoteDraft.display_name ?? ""}
                       onChange={(event) => setRemoteDraft((current) => ({ ...current, display_name: event.target.value }))}
                     />
                   </label>
@@ -277,6 +293,11 @@ export function WorkersPage() {
                       onChange={(event) => setRemoteDraft((current) => ({ ...current, allow_cpu_fallback: event.target.checked }))}
                     />
                   </label>
+                  <ScheduleWindowsEditor
+                    label="Schedule windows"
+                    value={remoteDraft.schedule_windows ?? []}
+                    onChange={(value) => setRemoteDraft((current) => ({ ...current, schedule_windows: value }))}
+                  />
                 </div>
               ) : null}
               {showRemoteSetup || noWorkersConfigured ? (
@@ -347,11 +368,13 @@ export function WorkersPage() {
                         <StatusBadge value={item.worker_type} />
                         <StatusBadge value={item.worker_state} />
                         <StatusBadge value={item.enabled ? "enabled" : "disabled"} />
+                        {item.schedule_summary ? <StatusBadge value="scheduled" /> : null}
                       </div>
                     </div>
                     <div className="record-list-meta">
                       <span className="record-list-kicker">{item.worker_type === "local" ? "This host" : "Remote worker"}</span>
                       <span>{item.current_job_id ? `${formatBackendLabel(item.current_backend)} • ${item.current_progress_percent ?? 0}%` : formatDateTime(item.last_seen_at)}</span>
+                      {item.schedule_summary ? <span>{item.schedule_summary}</span> : null}
                       <span className="record-list-emphasis">{item.health_summary ?? "No health summary reported."}</span>
                     </div>
                   </Link>
@@ -409,6 +432,7 @@ export function WorkersPage() {
                   { label: "Enabled", value: formatRelativeBoolean(detail.enabled) },
                   { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
                   { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
+                  { label: "Schedule", value: detail.schedule_summary ?? "Any time" },
                   { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
                   { label: "Last seen", value: formatDateTime(detail.last_seen_at) },
                   { label: "Host", value: detail.host_summary?.hostname ?? "Not reported" },
@@ -448,6 +472,11 @@ export function WorkersPage() {
                       onChange={(event) => setDetailDraft((current) => current ? { ...current, allow_cpu_fallback: event.target.checked } : current)}
                     />
                   </label>
+                  <ScheduleWindowsEditor
+                    label="Schedule windows"
+                    value={detailDraft.schedule_windows ?? []}
+                    onChange={(value) => setDetailDraft((current) => current ? { ...current, schedule_windows: value } : current)}
+                  />
                   <div className="section-card-actions">
                     <button
                       className="button button-primary button-small"

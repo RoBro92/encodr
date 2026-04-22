@@ -6,6 +6,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator, model_validator
 
+from app.schemas.schedules import ScheduleWindowRequest, ScheduleWindowResponse
+
 
 class HealthStatus(str, Enum):
     HEALTHY = "healthy"
@@ -64,6 +66,7 @@ class WorkerPreferenceRequest(BaseModel):
         "prefer_amd_gpu",
     ]
     allow_cpu_fallback: bool = True
+    schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
 
     @field_validator("display_name", mode="before")
     @classmethod
@@ -129,6 +132,7 @@ class WorkerRuntimeSummaryResponse(BaseModel):
     current_progress_updated_at: datetime | None = None
     telemetry: dict[str, Any] | None = None
     last_completed_job_id: str | None = None
+    schedule_windows: list[ScheduleWindowResponse] = Field(default_factory=list)
 
 
 class WorkerBinarySummaryResponse(BaseModel):
@@ -224,6 +228,8 @@ class WorkerInventorySummaryResponse(BaseModel):
     host_summary: WorkerHostSummaryResponse
     preferred_backend: str | None = None
     allow_cpu_fallback: bool | None = None
+    schedule_windows: list[ScheduleWindowResponse] = Field(default_factory=list)
+    schedule_summary: str | None = None
     current_job_id: str | None = None
     current_backend: str | None = None
     current_stage: str | None = None

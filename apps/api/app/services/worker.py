@@ -28,8 +28,9 @@ from encodr_db.models import (
     WorkerType,
 )
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
-from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary, resolve_local_worker_configuration
+from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary, job_allows_worker, resolve_local_worker_configuration, worker_is_dispatchable
 from encodr_shared import collect_runtime_telemetry, read_version
+from encodr_shared.scheduling import normalise_schedule_windows, schedule_windows_summary
 from encodr_shared.worker_runtime import (
     discover_runtime_devices,
     probe_binary,
@@ -620,9 +621,19 @@ class WorkerService:
             (
                 candidate
                 for candidate in repository.fetch_next_pending_remote_jobs(worker)
+                if job_allows_worker(
+                    candidate,
+                    worker,
+                    preferred_worker=(
+                        WorkerRepository(session).get_by_id(candidate.preferred_worker_id)
+                        if candidate.preferred_worker_id
+                        else None
+                    ),
+                )
                 if self._remote_worker_can_run_job(
                     worker,
                     ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
+                    preferred_backend=candidate.preferred_backend_override,
                 )
             ),
             None,
@@ -657,7 +668,7 @@ class WorkerService:
 
         if job.assigned_worker_id is None:
             repository.assign_worker(job, worker=worker)
-        requested_backend = normalise_backend_preference(worker.preferred_backend or "cpu_only")
+        requested_backend = normalise_backend_preference(job.preferred_backend_override or worker.preferred_backend or "cpu_only")
         repository.mark_running_for_worker(job, worker=worker, requested_backend=requested_backend)
         claimed_at = job.started_at or datetime.now(timezone.utc)
         return {
@@ -819,11 +830,16 @@ class WorkerService:
         display_name: str | None,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None = None,
     ) -> dict[str, object]:
         self._validate_local_backend_preferences(
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
         )
+        try:
+            cleaned_schedule = normalise_schedule_windows(schedule_windows)
+        except ValueError as error:
+            raise ApiConflictError(str(error)) from error
         repository = WorkerRepository(session)
         worker = repository.upsert_local_worker(
             worker_key=self.config_bundle.workers.local.id,
@@ -831,6 +847,7 @@ class WorkerService:
             enabled=True,
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            schedule_windows=cleaned_schedule,
             host_metadata={"hostname": self.config_bundle.workers.local.host},
         )
         return self._local_worker_inventory(worker=worker, detail=True)
@@ -843,6 +860,7 @@ class WorkerService:
         display_name: str | None,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None = None,
     ) -> dict[str, object]:
         repository = WorkerRepository(session)
         worker = repository.get_by_id(worker_id) or repository.get_by_key(worker_id)
@@ -853,11 +871,16 @@ class WorkerService:
                 preferred_backend=preferred_backend,
                 allow_cpu_fallback=allow_cpu_fallback,
             )
+        try:
+            cleaned_schedule = normalise_schedule_windows(schedule_windows)
+        except ValueError as error:
+            raise ApiConflictError(str(error)) from error
         repository.update_preferences(
             worker,
             display_name=display_name,
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            schedule_windows=cleaned_schedule,
         )
         if worker.worker_type == WorkerType.LOCAL:
             return self._local_worker_inventory(worker=worker, detail=True)
@@ -871,17 +894,23 @@ class WorkerService:
         display_name: str | None,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None = None,
     ) -> dict[str, object]:
         repository = WorkerRepository(session)
         issued_at = datetime.now(timezone.utc)
         expires_at = issued_at + timedelta(hours=24)
         pairing_token = self.worker_token_service.generate_worker_token()
         worker_key = self._build_remote_worker_key(display_name)
+        try:
+            cleaned_schedule = normalise_schedule_windows(schedule_windows)
+        except ValueError as error:
+            raise ApiConflictError(str(error)) from error
         worker = repository.create_pending_remote_worker(
             worker_key=worker_key,
             display_name=display_name or self._default_remote_display_name(platform),
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            schedule_windows=cleaned_schedule,
             pairing_token_hash=self.worker_token_service.hash_worker_token(pairing_token),
             pairing_requested_at=issued_at,
             pairing_expires_at=expires_at,
@@ -1002,6 +1031,8 @@ class WorkerService:
             },
             "preferred_backend": worker.preferred_backend,
             "allow_cpu_fallback": worker.allow_cpu_fallback,
+            "schedule_windows": worker.schedule_windows or [],
+            "schedule_summary": schedule_windows_summary(worker.schedule_windows),
             "current_job_id": status["current_job_id"],
             "current_backend": status["current_backend"],
             "current_stage": status["current_stage"],
@@ -1020,6 +1051,7 @@ class WorkerService:
                         "media_mounts": [str(path) for path in local_config.media_mounts],
                         "preferred_backend": worker.preferred_backend,
                         "allow_cpu_fallback": worker.allow_cpu_fallback,
+                        "schedule_windows": worker.schedule_windows or [],
                         "current_job_id": status["current_job_id"],
                         "current_backend": status["current_backend"],
                         "current_stage": status["current_stage"],
@@ -1062,6 +1094,8 @@ class WorkerService:
             "host_summary": self._clean_host_summary(worker.host_metadata),
             "preferred_backend": worker.preferred_backend,
             "allow_cpu_fallback": worker.allow_cpu_fallback,
+            "schedule_windows": worker.schedule_windows or [],
+            "schedule_summary": schedule_windows_summary(worker.schedule_windows),
             "current_job_id": runtime_summary.get("current_job_id"),
             "current_backend": runtime_summary.get("current_backend"),
             "current_stage": runtime_summary.get("current_stage"),
@@ -1101,7 +1135,13 @@ class WorkerService:
         if not capability_summary.get("execution_modes"):
             raise ApiConflictError("The worker has not reported any execution modes.")
 
-    def _remote_worker_can_run_job(self, worker: Worker, plan: ProcessingPlan) -> bool:
+    def _remote_worker_can_run_job(
+        self,
+        worker: Worker,
+        plan: ProcessingPlan,
+        *,
+        preferred_backend: str | None = None,
+    ) -> bool:
         capability_summary = self._clean_capability_summary(worker.capability_payload)
         binary_support = capability_summary.get("binary_support", {})
         execution_modes = capability_summary.get("execution_modes", [])
@@ -1114,7 +1154,7 @@ class WorkerService:
         if not plan.video.transcode_required:
             return "remux" in execution_modes or "transcode" in execution_modes
 
-        preferred_backend = normalise_backend_preference(worker.preferred_backend or "cpu_only")
+        preferred_backend = normalise_backend_preference(preferred_backend or worker.preferred_backend or "cpu_only")
         allow_cpu_fallback = bool(worker.allow_cpu_fallback)
         codec = (plan.video.target_codec or "hevc").strip().lower()
         hardware_hints = {str(item) for item in capability_summary.get("hardware_hints", [])}

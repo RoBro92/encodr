@@ -29,6 +29,7 @@ from encodr_core.replacement import ReplacementResult, ReplacementService, Repla
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
 from encodr_db.models import Job, Worker, WorkerRegistrationStatus, WorkerType
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
+from encodr_db.runtime.dispatch import job_allows_worker
 from encodr_shared import collect_runtime_telemetry, load_execution_preferences
 
 logger = logging.getLogger("encodr.worker.loop")
@@ -165,6 +166,7 @@ def resolve_local_worker_configuration(
             enabled=True,
             preferred_backend=str(execution_preferences["preferred_backend"]),
             allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+            schedule_windows=None,
             host_metadata={"hostname": config_bundle.workers.local.host},
         )
     if worker is None:
@@ -548,14 +550,27 @@ class LocalWorkerLoop:
                     started_at=run_started_at,
                     completed_at=completed_at,
                 )
+            worker_repository = WorkerRepository(session)
             job = next(
                 (
                     candidate
                     for candidate in jobs.fetch_next_pending_local_jobs()
+                    if job_allows_worker(
+                        candidate,
+                        local_worker_config.worker,
+                        preferred_worker=(
+                            worker_repository.get_by_id(candidate.preferred_worker_id)
+                            if candidate.preferred_worker_id
+                            else None
+                        ),
+                    )
                     if _job_is_locally_compatible(
                         plan=ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
                         ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
-                        preferred_backend=local_worker_config.preferred_backend,
+                        preferred_backend=_effective_preferred_backend(
+                            candidate,
+                            default_backend=local_worker_config.preferred_backend,
+                        ),
                         allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
                     )
                 ),
@@ -580,14 +595,20 @@ class LocalWorkerLoop:
                 media_file=media_file,
                 ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
                 scratch_dir=self.config_bundle.app.scratch_dir,
-                preferred_backend=local_worker_config.preferred_backend,
+                preferred_backend=_effective_preferred_backend(
+                    job,
+                    default_backend=local_worker_config.preferred_backend,
+                ),
                 allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
                 job_id=job.id,
             )
             jobs.mark_running_for_worker(
                 job,
                 worker=local_worker_config.worker,
-                requested_backend=local_worker_config.preferred_backend,
+                requested_backend=_effective_preferred_backend(
+                    job,
+                    default_backend=local_worker_config.preferred_backend,
+                ),
             )
             self.status_tracker.record_job_started(
                 job_id=job.id,
@@ -611,7 +632,10 @@ class LocalWorkerLoop:
                 media_file=media_file,
                 ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
                 scratch_dir=self.config_bundle.app.scratch_dir,
-                preferred_backend=local_worker_config.preferred_backend,
+                preferred_backend=_effective_preferred_backend(
+                    job,
+                    default_backend=local_worker_config.preferred_backend,
+                ),
                 allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
                 progress_callback=progress_reporter,
             )
@@ -742,3 +766,7 @@ def _should_bootstrap_legacy_local_worker(
         return True
     has_jobs = session.scalar(select(Job.id).limit(1)) is not None
     return bool(has_jobs)
+
+
+def _effective_preferred_backend(job: Job, *, default_backend: str) -> str:
+    return normalise_backend_preference(job.preferred_backend_override or default_backend)

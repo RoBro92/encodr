@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from encodr_db.models.manual_review_decision import ManualReviewDecision
     from encodr_db.models.plan_snapshot import PlanSnapshot
     from encodr_db.models.tracked_file import TrackedFile
+    from encodr_db.models.watched_job_definition import WatchedJobDefinition
     from encodr_db.models.worker import Worker
 
 
@@ -39,14 +40,29 @@ class Job(Base, IdMixin, TimestampMixin):
         ForeignKey("workers.id", ondelete="SET NULL"),
         index=True,
     )
+    preferred_worker_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workers.id", ondelete="SET NULL"),
+        index=True,
+    )
+    pinned_worker_id: Mapped[str | None] = mapped_column(
+        ForeignKey("workers.id", ondelete="SET NULL"),
+        index=True,
+    )
     last_worker_id: Mapped[str | None] = mapped_column(
         ForeignKey("workers.id", ondelete="SET NULL"),
+        index=True,
+    )
+    watched_job_id: Mapped[str | None] = mapped_column(
+        ForeignKey("watched_job_definitions.id", ondelete="SET NULL"),
         index=True,
     )
     requested_worker_type: Mapped[WorkerType | None] = mapped_column(
         enum_type(WorkerType, "worker_type"),
         index=True,
     )
+    preferred_backend_override: Mapped[str | None] = mapped_column(String(64), index=True)
+    schedule_windows: Mapped[list[dict] | None] = mapped_column(json_type())
+    schedule_summary: Mapped[str | None] = mapped_column(String(255))
     worker_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[JobStatus] = mapped_column(
         enum_type(JobStatus, "job_status"),
@@ -63,6 +79,10 @@ class Job(Base, IdMixin, TimestampMixin):
     progress_fps: Mapped[float | None] = mapped_column(Float)
     progress_speed: Mapped[float | None] = mapped_column(Float)
     progress_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    scheduled_for_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    interrupted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), index=True)
+    interruption_reason: Mapped[str | None] = mapped_column(Text)
+    interruption_retryable: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
     requested_execution_backend: Mapped[str | None] = mapped_column(String(64), index=True)
     actual_execution_backend: Mapped[str | None] = mapped_column(String(64), index=True)
     actual_execution_accelerator: Mapped[str | None] = mapped_column(String(64))
@@ -108,8 +128,11 @@ class Job(Base, IdMixin, TimestampMixin):
         back_populates="assigned_jobs",
         foreign_keys=[assigned_worker_id],
     )
+    preferred_worker: Mapped["Worker | None"] = relationship(foreign_keys=[preferred_worker_id])
+    pinned_worker: Mapped["Worker | None"] = relationship(foreign_keys=[pinned_worker_id])
     last_worker: Mapped["Worker | None"] = relationship(
         back_populates="processed_jobs",
         foreign_keys=[last_worker_id],
     )
+    watched_job: Mapped["WatchedJobDefinition | None"] = relationship(back_populates="created_jobs")
     manual_review_decisions: Mapped[list["ManualReviewDecision"]] = relationship(back_populates="job")

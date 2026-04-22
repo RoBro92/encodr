@@ -37,6 +37,7 @@ class Worker(Base, IdMixin, TimestampMixin):
     )
     preferred_backend: Mapped[str] = mapped_column(String(64), nullable=False, default="cpu_only")
     allow_cpu_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    schedule_windows: Mapped[list[dict] | None] = mapped_column(json_type())
     auth_token_hash: Mapped[str | None] = mapped_column(String(128), index=True)
     pairing_token_hash: Mapped[str | None] = mapped_column(String(128), index=True)
     pairing_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

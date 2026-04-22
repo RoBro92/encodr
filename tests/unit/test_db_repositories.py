@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -8,9 +9,25 @@ from sqlalchemy.orm import Session
 from encodr_core.config import load_config_bundle
 from encodr_core.planning import PlanAction, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
+from encodr_shared.scheduling import schedule_windows_allow_now
 from encodr_db import Base
-from encodr_db.models import ComplianceState, FileLifecycleState, JobStatus
-from encodr_db.repositories import JobRepository, PlanSnapshotRepository, ProbeSnapshotRepository, TrackedFileRepository
+from encodr_db.models import (
+    ComplianceState,
+    FileLifecycleState,
+    JobStatus,
+    Worker,
+    WorkerHealthStatus,
+    WorkerRegistrationStatus,
+    WorkerType,
+)
+from encodr_db.repositories import (
+    JobRepository,
+    PlanSnapshotRepository,
+    ProbeSnapshotRepository,
+    ScanRecordRepository,
+    TrackedFileRepository,
+    WatchedJobRepository,
+)
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "ffprobe"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -84,6 +101,43 @@ def test_job_creation_from_plan_snapshot() -> None:
         assert job.worker_name == "worker-local"
         assert job.replace_in_place is True
         assert job.require_verification is True
+
+
+def test_job_creation_starts_scheduled_when_outside_window() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+        now = datetime.now(timezone.utc)
+        days = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+        current_day = days[now.weekday()]
+        next_day = next(day for day in days if day != current_day)
+        schedule_windows = [
+            {
+                "days": [next_day],
+                "start_time": "00:00",
+                "end_time": "23:59",
+            }
+        ]
+
+        assert schedule_windows_allow_now(schedule_windows, now=now) is False
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        job = jobs.create_job_from_plan(
+            tracked_file,
+            plan_snapshot,
+            schedule_windows=schedule_windows,
+        )
+
+        assert job.status == JobStatus.SCHEDULED
+        assert job.scheduled_for_at is not None
+        assert job.schedule_summary
 
 
 def test_file_state_updates_from_plan_result() -> None:
@@ -171,6 +225,128 @@ def test_basic_file_and_job_filtering() -> None:
         assert [item.id for item in compliant_files] == [first_file.id]
         assert [item.id for item in protected_files] == [second_file.id]
         assert len(pending_jobs) == 2
+
+
+def test_scan_records_are_listed_newest_first() -> None:
+    with database_session() as session:
+        scans = ScanRecordRepository(session)
+        older = scans.add_scan_record(
+            source_path="/media/Movies",
+            root_path="/media",
+            source_kind="manual",
+            watched_job_id=None,
+            directory_count=1,
+            direct_directory_count=1,
+            video_file_count=1,
+            likely_show_count=0,
+            likely_season_count=0,
+            likely_episode_count=0,
+            likely_film_count=1,
+            files_payload=[{"path": "/media/Movies/Old.mkv"}],
+            scanned_at=datetime(2026, 4, 21, 10, 0, tzinfo=timezone.utc),
+        )
+        newer = scans.add_scan_record(
+            source_path="/media/Movies/New",
+            root_path="/media",
+            source_kind="watched",
+            watched_job_id="watch-1",
+            directory_count=2,
+            direct_directory_count=1,
+            video_file_count=2,
+            likely_show_count=0,
+            likely_season_count=0,
+            likely_episode_count=0,
+            likely_film_count=2,
+            files_payload=[{"path": "/media/Movies/New/New.mkv"}],
+            scanned_at=datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc),
+        )
+
+        recent = scans.list_recent()
+        reopened = scans.get_by_id(older.id)
+
+        assert [item.id for item in recent[:2]] == [newer.id, older.id]
+        assert reopened is not None
+        assert reopened.files_payload[0]["path"] == "/media/Movies/Old.mkv"
+
+
+def test_watched_job_state_tracks_last_scan_and_known_paths() -> None:
+    with database_session() as session:
+        watched_jobs = WatchedJobRepository(session)
+        watched = watched_jobs.create_or_update(
+            watched_job_id=None,
+            display_name="SSD ingest",
+            source_path="/ssd/downloads",
+            media_class="movie",
+            ruleset_override="movies",
+            preferred_worker_id=None,
+            pinned_worker_id=None,
+            preferred_backend="cpu_only",
+            schedule_windows=[],
+            auto_queue=True,
+            stage_only=False,
+            enabled=True,
+        )
+
+        scanned_at = datetime(2026, 4, 22, 12, 30, tzinfo=timezone.utc)
+        updated = watched_jobs.update_last_scan(
+            watched,
+            last_scan_record_id="scan-1",
+            last_seen_paths=["/ssd/downloads/Film One (2024).mkv"],
+            scanned_at=scanned_at,
+            enqueue_at=scanned_at,
+        )
+
+        assert updated.last_scan_record_id == "scan-1"
+        assert updated.last_seen_paths == ["/ssd/downloads/Film One (2024).mkv"]
+        assert updated.last_scan_at == scanned_at
+        assert updated.last_enqueue_at == scanned_at
+
+
+def test_interrupted_jobs_clear_assignment_and_stop_counting_as_active() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("tv_episode.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(
+            media,
+            bundle,
+            source_path="/media/TV/Example Show/Season 01/Example Show - s01e01 - Pilot.mkv",
+        )
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        worker = Worker(
+            worker_key="remote-1",
+            display_name="Remote 1",
+            worker_type=WorkerType.REMOTE,
+            enabled=True,
+            registration_status=WorkerRegistrationStatus.REGISTERED,
+            preferred_backend="cpu_only",
+            allow_cpu_fallback=True,
+            last_health_status=WorkerHealthStatus.HEALTHY,
+        )
+        session.add(worker)
+        session.flush()
+        jobs.assign_worker(job, worker=worker)
+
+        assert jobs.has_active_job_for_tracked_file(tracked_file.id) is True
+
+        interrupted = jobs.mark_interrupted(
+            job,
+            interrupted_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+            reason="Worker stopped responding.",
+        )
+
+        assert interrupted.status == JobStatus.INTERRUPTED
+        assert interrupted.assigned_worker_id is None
+        assert interrupted.interruption_retryable is True
+        assert interrupted.interruption_reason == "Worker stopped responding."
+        assert jobs.has_active_job_for_tracked_file(tracked_file.id) is False
 
 
 def database_session() -> Session:

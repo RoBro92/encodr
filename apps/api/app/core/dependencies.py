@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.core.security import PasswordHashService, TokenService, WorkerTokenService
 from app.core.worker_auth import WorkerAuthRuntimeSettings
+from app.services.orchestration import OrchestrationService
 from encodr_core.config import ConfigBundle
 from encodr_db.models import AuditEventType, AuditOutcome, User, UserRole, Worker, WorkerRegistrationStatus
 from encodr_db.repositories import AuditEventRepository, UserRepository, WorkerRepository
@@ -52,6 +53,10 @@ def get_config_bundle(request: Request) -> ConfigBundle:
 
 def get_local_worker_loop(request: Request) -> LocalWorkerLoop:
     return request.app.state.local_worker_loop
+
+
+def get_orchestration_service(request: Request) -> OrchestrationService:
+    return request.app.state.orchestration_service
 
 
 def require_current_user(

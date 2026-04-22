@@ -24,9 +24,11 @@ import { APP_ROUTES } from "../../lib/utils/routes";
 const JOB_STATUS_OPTIONS = [
   { label: "Any status", value: "" },
   { label: "Pending", value: "pending" },
+  { label: "Scheduled", value: "scheduled" },
   { label: "Running", value: "running" },
   { label: "Completed", value: "completed" },
   { label: "Failed", value: "failed" },
+  { label: "Interrupted", value: "interrupted" },
   { label: "Manual review", value: "manual_review" },
   { label: "Skipped", value: "skipped" },
 ];
@@ -78,7 +80,7 @@ export function JobsPage() {
   const orderedJobs = sortJobsForDisplay(jobs);
   const detail = detailQuery.data;
   const metrics = summariseJobs(jobs);
-  const canRetry = detail ? ["failed", "manual_review", "skipped"].includes(detail.status) : false;
+  const canRetry = detail ? ["failed", "interrupted", "manual_review", "skipped"].includes(detail.status) : false;
   const selectedJobId = detail?.id;
 
   return (
@@ -288,6 +290,23 @@ export function JobsPage() {
                 {detail.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
               </div>
 
+              {detail.status === "scheduled" && detail.schedule_summary ? (
+                <div className="info-strip info-strip-warning">
+                  <strong>Scheduled</strong>
+                  <span>
+                    This job is waiting for its allowed execution window.
+                    {detail.scheduled_for_at ? ` Next opening: ${formatDateTime(detail.scheduled_for_at)}.` : ""}
+                  </span>
+                </div>
+              ) : null}
+
+              {detail.status === "interrupted" && detail.interruption_reason ? (
+                <div className="info-strip info-strip-warning">
+                  <strong>Interrupted</strong>
+                  <span>{detail.interruption_reason}</span>
+                </div>
+              ) : null}
+
               {detail.failure_message ? (
                 <div className="info-strip info-strip-danger">
                   <strong>Failure</strong>
@@ -358,6 +377,12 @@ export function JobsPage() {
                   },
                   { label: "Started", value: formatDateTime(detail.started_at) },
                   { label: "Completed", value: formatDateTime(detail.completed_at) },
+                  { label: "Preferred worker", value: detail.preferred_worker_id ?? "Automatic" },
+                  { label: "Pinned worker", value: detail.pinned_worker_id ?? "No pin" },
+                  { label: "Preferred backend override", value: detail.preferred_backend_override ? formatBackendLabel(detail.preferred_backend_override) : "None" },
+                  { label: "Schedule", value: detail.schedule_summary ?? "Any time" },
+                  { label: "Scheduled for", value: formatDateTime(detail.scheduled_for_at) },
+                  { label: "Interrupted at", value: formatDateTime(detail.interrupted_at) },
                   { label: "Output path", value: detail.final_output_path ?? detail.output_path ?? "Not written yet" },
                 ]}
               />
@@ -606,10 +631,10 @@ function summariseJobs(
   return {
     total: jobs.length,
     running: jobs.filter((job) => job.status === "running").length,
-    active: jobs.filter((job) => ["pending", "running"].includes(job.status)).length,
+    active: jobs.filter((job) => ["pending", "scheduled", "running"].includes(job.status)).length,
     attention: jobs.filter(
       (job) =>
-        ["failed", "manual_review", "skipped"].includes(job.status) ||
+        ["failed", "interrupted", "manual_review", "skipped"].includes(job.status) ||
         job.requires_review ||
         Boolean(job.tracked_file_is_protected),
     ).length,
@@ -635,6 +660,12 @@ function jobOutcomeLabel(job: {
   if (job.status === "completed") {
     return "Completed";
   }
+  if (job.status === "scheduled") {
+    return "Scheduled";
+  }
+  if (job.status === "interrupted") {
+    return "Interrupted";
+  }
   if (job.status === "running") {
     return "Running";
   }
@@ -645,10 +676,12 @@ function sortJobsForDisplay(jobs: JobSummary[]) {
   const rank: Record<string, number> = {
     running: 0,
     pending: 1,
-    failed: 2,
-    manual_review: 3,
-    skipped: 4,
-    completed: 5,
+    scheduled: 2,
+    failed: 3,
+    interrupted: 4,
+    manual_review: 5,
+    skipped: 6,
+    completed: 7,
   };
   return [...jobs].sort((left, right) => {
     const statusDelta = (rank[left.status] ?? 99) - (rank[right.status] ?? 99);

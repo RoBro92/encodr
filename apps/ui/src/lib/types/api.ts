@@ -126,8 +126,13 @@ export type FolderBrowseResponse = {
 };
 
 export type FolderScanSummary = {
+  scan_id: string | null;
   folder_path: string;
   root_path: string;
+  source_kind: string;
+  watched_job_id: string | null;
+  scanned_at: string | null;
+  stale: boolean;
   directory_count: number;
   direct_directory_count: number;
   video_file_count: number;
@@ -136,6 +141,56 @@ export type FolderScanSummary = {
   likely_episode_count: number;
   likely_film_count: number;
   files: FolderBrowseEntry[];
+};
+
+export type ScanRecordListResponse = {
+  items: FolderScanSummary[];
+};
+
+export type ScheduleWindow = {
+  days: string[];
+  start_time: string;
+  end_time: string;
+};
+
+export type WatchedJob = {
+  id: string;
+  display_name: string;
+  source_path: string;
+  media_class: string;
+  ruleset_override: string | null;
+  preferred_worker_id: string | null;
+  pinned_worker_id: string | null;
+  preferred_backend: string | null;
+  schedule_windows: ScheduleWindow[];
+  schedule_summary: string | null;
+  auto_queue: boolean;
+  stage_only: boolean;
+  enabled: boolean;
+  last_scan_record_id: string | null;
+  last_scan_at: string | null;
+  last_enqueue_at: string | null;
+  last_seen_count: number;
+  created_at: string;
+  updated_at: string;
+};
+
+export type WatchedJobPayload = {
+  display_name: string;
+  source_path: string;
+  media_class: string;
+  ruleset_override?: string | null;
+  preferred_worker_id?: string | null;
+  pinned_worker_id?: string | null;
+  preferred_backend?: string | null;
+  schedule_windows?: ScheduleWindow[];
+  auto_queue: boolean;
+  stage_only: boolean;
+  enabled: boolean;
+};
+
+export type WatchedJobListResponse = {
+  items: WatchedJob[];
 };
 
 export type DryRunItem = {
@@ -211,6 +266,19 @@ export type JobSummary = {
   video_space_saved_bytes: number | null;
   non_video_space_saved_bytes: number | null;
   compression_reduction_percent: number | null;
+  assigned_worker_id: string | null;
+  last_worker_id: string | null;
+  preferred_worker_id: string | null;
+  pinned_worker_id: string | null;
+  preferred_backend_override: string | null;
+  schedule_windows: ScheduleWindow[];
+  schedule_summary: string | null;
+  scheduled_for_at: string | null;
+  interrupted_at: string | null;
+  interruption_reason: string | null;
+  interruption_retryable: boolean;
+  watched_job_id: string | null;
+  requested_worker_type: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -464,6 +532,7 @@ export type WorkerRuntimeSummary = {
   media_mounts: string[];
   preferred_backend: string | null;
   allow_cpu_fallback: boolean | null;
+  schedule_windows: ScheduleWindow[];
   current_job_id: string | null;
   current_backend: string | null;
   current_stage: string | null;
@@ -498,6 +567,8 @@ export type WorkerInventorySummary = {
   host_summary: WorkerHostSummary;
   preferred_backend: string | null;
   allow_cpu_fallback: boolean | null;
+  schedule_windows: ScheduleWindow[];
+  schedule_summary: string | null;
   current_job_id: string | null;
   current_backend: string | null;
   current_stage: string | null;
@@ -535,6 +606,7 @@ export type WorkerPreferencePayload = {
   display_name?: string | null;
   preferred_backend: string;
   allow_cpu_fallback: boolean;
+  schedule_windows?: ScheduleWindow[];
 };
 
 export type RemoteWorkerOnboardingPayload = WorkerPreferencePayload & {
@@ -761,9 +833,18 @@ export type FileSelectionPayload = {
 export type CreateJobPayload = {
   tracked_file_id?: string;
   plan_snapshot_id?: string;
+  preferred_worker_id?: string | null;
+  pinned_worker_id?: string | null;
+  preferred_backend_override?: string | null;
+  schedule_windows?: ScheduleWindow[];
 };
 
-export type CreateBatchJobsPayload = FileSelectionPayload;
+export type CreateBatchJobsPayload = FileSelectionPayload & {
+  preferred_worker_id?: string | null;
+  pinned_worker_id?: string | null;
+  preferred_backend_override?: string | null;
+  schedule_windows?: ScheduleWindow[];
+};
 
 export type CountByValue = {
   value: string;

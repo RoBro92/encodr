@@ -146,6 +146,10 @@ class SetupStateService:
             return None
         return state["processing_rules"].get(selected_ruleset)
 
+    def rules_for_ruleset(self, ruleset: RulesetName) -> ProcessingRuleValues | None:
+        state = self._load_state_payload()
+        return state["processing_rules"].get(ruleset)
+
     def profile_name_for_ruleset(self, ruleset: RulesetName) -> str | None:
         return self._profile_name_for_ruleset(ruleset)
 
