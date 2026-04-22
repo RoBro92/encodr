@@ -25,6 +25,7 @@ from app.services.setup import SetupStateService
 from encodr_core.config import ConfigBundle
 from encodr_db.models import JobStatus
 from encodr_db.repositories import JobRepository, UserRepository
+from encodr_db.runtime import resolve_local_worker_configuration
 from encodr_shared.worker_runtime import discover_runtime_devices, probe_execution_backends
 from encodr_shared.update import UpdateChecker
 
@@ -347,7 +348,22 @@ class SystemService:
             for probe in probe_execution_backends(self.config_bundle.app.media.ffmpeg_path)
         ]
         runtime_device_paths = discover_runtime_devices()
-        execution_preferences = SetupStateService(config_bundle=self.config_bundle).get_execution_preferences()
+        local_worker = None
+        if self.session_factory is not None:
+            with self.session_factory() as session:
+                local_worker = resolve_local_worker_configuration(
+                    session,
+                    config_bundle=self.config_bundle,
+                    worker_name=self.config_bundle.workers.local.id,
+                ).worker
+        execution_preferences = (
+            {
+                "preferred_backend": local_worker.preferred_backend,
+                "allow_cpu_fallback": local_worker.allow_cpu_fallback,
+            }
+            if local_worker is not None
+            else {"preferred_backend": "cpu_only", "allow_cpu_fallback": True}
+        )
         first_user_setup_required = user_count == 0 if user_count is not None else False
 
         warnings: list[str] = []
@@ -355,8 +371,12 @@ class SystemService:
             warnings.append("Database connectivity is unavailable.")
         if db_reachable and not schema_reachable:
             warnings.append("Database is reachable but the expected schema is unavailable.")
-        if not self.config_bundle.workers.local.enabled:
+        if local_worker is None:
+            warnings.append("This host is not configured as a worker.")
+        elif not local_worker.enabled:
             warnings.append("The local worker is disabled.")
+        elif not self.config_bundle.workers.local.enabled:
+            warnings.append("The local worker runtime is disabled.")
         if storage["status"] != HealthStatus.HEALTHY:
             warnings.append(str(storage["summary"]))
         for backend in execution_backends:
@@ -391,7 +411,7 @@ class SystemService:
             "scratch_dir": self.config_bundle.app.scratch_dir.as_posix(),
             "data_dir": self.config_bundle.app.data_dir.as_posix(),
             "media_mounts": [path.as_posix() for path in self.config_bundle.workers.local.media_mounts],
-            "local_worker_enabled": self.config_bundle.workers.local.enabled,
+            "local_worker_enabled": bool(local_worker is not None and local_worker.enabled and self.config_bundle.workers.local.enabled),
             "first_user_setup_required": first_user_setup_required,
             "storage_setup_incomplete": storage["status"] != HealthStatus.HEALTHY,
             "user_count": user_count,

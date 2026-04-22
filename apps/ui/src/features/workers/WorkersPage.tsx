@@ -1,3 +1,4 @@
+import { useEffect, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { EmptyState } from "../../components/EmptyState";
@@ -8,23 +9,94 @@ import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
+  useCreateRemoteWorkerOnboardingMutation,
   useDisableWorkerMutation,
   useEnableWorkerMutation,
+  useSetupLocalWorkerMutation,
   useWorkerDetailQuery,
+  useWorkerStatusQuery,
   useWorkersQuery,
+  useUpdateWorkerPreferencesMutation,
 } from "../../lib/api/hooks";
+import type { RemoteWorkerOnboardingResponse, WorkerPreferencePayload } from "../../lib/types/api";
 import { formatBytes, formatDateTime, formatDurationSeconds, formatRelativeBoolean, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
+const BACKEND_OPTIONS = [
+  { label: "CPU only", value: "cpu_only" },
+  { label: "Prefer Intel iGPU", value: "prefer_intel_igpu" },
+  { label: "Prefer NVIDIA", value: "prefer_nvidia_gpu" },
+  { label: "Prefer AMD", value: "prefer_amd_gpu" },
+];
+
 export function WorkersPage() {
   const { workerId } = useParams();
+  const workerStatusQuery = useWorkerStatusQuery();
   const workersQuery = useWorkersQuery();
   const detailQuery = useWorkerDetailQuery(workerId);
   const enableMutation = useEnableWorkerMutation();
   const disableMutation = useDisableWorkerMutation();
+  const setupLocalWorkerMutation = useSetupLocalWorkerMutation();
+  const updateWorkerPreferencesMutation = useUpdateWorkerPreferencesMutation();
+  const createRemoteWorkerMutation = useCreateRemoteWorkerOnboardingMutation();
+  const [showLocalSetup, setShowLocalSetup] = useState(false);
+  const [showRemoteSetup, setShowRemoteSetup] = useState(false);
+  const [detailDraft, setDetailDraft] = useState<WorkerPreferencePayload | null>(null);
+  const [localDraft, setLocalDraft] = useState<WorkerPreferencePayload>({
+    display_name: "This host",
+    preferred_backend: "cpu_only",
+    allow_cpu_fallback: true,
+  });
+  const [remoteDraft, setRemoteDraft] = useState({
+    display_name: "",
+    platform: "windows" as "windows" | "linux" | "macos",
+    preferred_backend: "cpu_only",
+    allow_cpu_fallback: true,
+  });
+  const [onboardingResult, setOnboardingResult] = useState<RemoteWorkerOnboardingResponse | null>(null);
+  const workerStatus = workerStatusQuery.data;
+  const workers = workersQuery.data?.items ?? [];
+  const localWorker = workers.find((item) => item.worker_type === "local") ?? null;
+  const detail = detailQuery.data ?? null;
+  const selectedBootstrap = onboardingResult && detail && onboardingResult.worker.id === detail.id ? onboardingResult : null;
+  const noWorkersConfigured = workers.length === 0;
+  const hardwareSummary = workerStatus
+    ? workerStatus.hardware_probes
+      .filter((item) => item.backend !== "cpu" && item.usable_by_ffmpeg)
+      .map((item) => formatBackendLabel(item.backend))
+      .join(", ")
+    : "";
 
-  const error = workersQuery.error ?? detailQuery.error;
-  if (workersQuery.isLoading) {
+  useEffect(() => {
+    if (detail) {
+      setDetailDraft({
+        display_name: detail.display_name,
+        preferred_backend: detail.preferred_backend ?? "cpu_only",
+        allow_cpu_fallback: detail.allow_cpu_fallback ?? true,
+      });
+      return;
+    }
+    setDetailDraft(null);
+  }, [detail]);
+
+  useEffect(() => {
+    if (!workerStatus) {
+      return;
+    }
+    setLocalDraft({
+      display_name: localWorker?.display_name ?? workerStatus.worker_name,
+      preferred_backend: localWorker?.preferred_backend ?? workerStatus.execution_preferences.preferred_backend,
+      allow_cpu_fallback: localWorker?.allow_cpu_fallback ?? workerStatus.execution_preferences.allow_cpu_fallback,
+    });
+  }, [
+    localWorker?.allow_cpu_fallback,
+    localWorker?.display_name,
+    localWorker?.preferred_backend,
+    workerStatus,
+  ]);
+
+  const error = workerStatusQuery.error ?? workersQuery.error ?? detailQuery.error;
+  if (workerStatusQuery.isLoading || workersQuery.isLoading) {
     return <LoadingBlock label="Loading workers" />;
   }
 
@@ -32,49 +104,32 @@ export function WorkersPage() {
     return <ErrorPanel title="Unable to load workers" message={error.message} />;
   }
 
-  const workers = (workersQuery.data?.items ?? []).map((item) => ({
-    ...item,
-    displayHealthStatus:
-      item.worker_type === "remote" && !item.last_heartbeat_at ? "not_configured" : item.health_status,
-    displayHealthSummary:
-      item.worker_type === "remote" && !item.last_heartbeat_at
-        ? "Remote worker has not reported a heartbeat yet."
-        : item.health_summary ?? "No health summary reported.",
-  }));
-  const detail = detailQuery.data
-    ? {
-        ...detailQuery.data,
-        host_summary: detailQuery.data.host_summary ?? {
-          hostname: null,
-          platform: null,
-          agent_version: null,
-          python_version: null,
-        },
-        capability_summary: detailQuery.data.capability_summary ?? {
-          execution_modes: [],
-          supported_video_codecs: [],
-          supported_audio_codecs: [],
-          hardware_hints: [],
-          binary_support: {},
-          max_concurrent_jobs: null,
-          tags: [],
-        },
-        runtime_summary: detailQuery.data.runtime_summary ?? null,
-        binary_summary: detailQuery.data.binary_summary ?? [],
-        recent_jobs: detailQuery.data.recent_jobs ?? [],
-        displayHealthStatus:
-          detailQuery.data.worker_type === "remote" && !detailQuery.data.last_heartbeat_at
-            ? "not_configured"
-            : detailQuery.data.health_status,
-      }
-    : null;
+  if (!workerStatus) {
+    return <ErrorPanel title="Workers are unavailable" message="The API did not return worker status information." />;
+  }
 
   return (
     <div className="page-stack">
       <PageHeader
         eyebrow="Workers"
         title="Workers"
-        description="Check worker health, availability, and readiness."
+        description="Manage execution nodes, backend preference, and worker onboarding."
+        actions={(
+          <div className="section-card-actions">
+            <button className="button button-secondary button-small" type="button" onClick={() => {
+              setShowLocalSetup((current) => !current);
+              setShowRemoteSetup(false);
+            }}>
+              {localWorker ? "Edit this host" : "Add this host as worker"}
+            </button>
+            <button className="button button-primary button-small" type="button" onClick={() => {
+              setShowRemoteSetup((current) => !current);
+              setShowLocalSetup(false);
+            }}>
+              Add remote worker
+            </button>
+          </div>
+        )}
       />
 
       {enableMutation.error instanceof Error ? (
@@ -83,11 +138,196 @@ export function WorkersPage() {
       {disableMutation.error instanceof Error ? (
         <ErrorPanel title="Disable worker failed" message={disableMutation.error.message} />
       ) : null}
+      {setupLocalWorkerMutation.error instanceof Error ? (
+        <ErrorPanel title="Unable to add this host as worker" message={setupLocalWorkerMutation.error.message} />
+      ) : null}
+      {updateWorkerPreferencesMutation.error instanceof Error ? (
+        <ErrorPanel title="Unable to save worker settings" message={updateWorkerPreferencesMutation.error.message} />
+      ) : null}
+      {createRemoteWorkerMutation.error instanceof Error ? (
+        <ErrorPanel title="Unable to create remote worker onboarding" message={createRemoteWorkerMutation.error.message} />
+      ) : null}
+
+      {(showLocalSetup || showRemoteSetup || noWorkersConfigured || onboardingResult) ? (
+        <section className="dashboard-grid">
+          <SectionCard
+            title="This host"
+            subtitle={localWorker ? "Local worker configuration" : "This host is not a worker yet."}
+            actions={localWorker ? (
+              <button
+                className={`button ${localWorker.enabled ? "button-secondary" : "button-primary"} button-small`}
+                type="button"
+                onClick={() => (localWorker.enabled ? disableMutation.mutate(localWorker.id) : enableMutation.mutate(localWorker.id))}
+                disabled={enableMutation.isPending || disableMutation.isPending}
+              >
+                {localWorker.enabled ? "Disable worker" : "Enable worker"}
+              </button>
+            ) : null}
+          >
+            <div className="card-stack">
+              <div className="info-strip">
+                <strong>{formatWorkerStateLabel(workerStatus.configuration_state)}</strong>
+                <span>{workerStatus.summary}</span>
+              </div>
+              <KeyValueList
+                items={[
+                  { label: "Queue", value: workerStatus.local_worker_queue },
+                  { label: "Available backends", value: hardwareSummary || "CPU only" },
+                  { label: "CPU fallback", value: workerStatus.execution_preferences.allow_cpu_fallback ? "Allowed" : "Disabled" },
+                ]}
+              />
+              {showLocalSetup || !localWorker ? (
+                <div className="settings-rules-fields settings-rules-fields-compact">
+                  <label className="field">
+                    <span>Worker label</span>
+                    <input
+                      aria-label="Local worker label"
+                      value={localDraft.display_name ?? ""}
+                      onChange={(event) => setLocalDraft((current) => ({ ...current, display_name: event.target.value }))}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Preferred backend</span>
+                    <select
+                      aria-label="Local worker preferred backend"
+                      value={localDraft.preferred_backend}
+                      onChange={(event) => setLocalDraft((current) => ({ ...current, preferred_backend: event.target.value }))}
+                    >
+                      {BACKEND_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field field-checkbox">
+                    <span>Allow CPU fallback</span>
+                    <input
+                      aria-label="Local worker CPU fallback"
+                      type="checkbox"
+                      checked={localDraft.allow_cpu_fallback}
+                      onChange={(event) => setLocalDraft((current) => ({ ...current, allow_cpu_fallback: event.target.checked }))}
+                    />
+                  </label>
+                </div>
+              ) : null}
+              {showLocalSetup || !localWorker ? (
+                <div className="section-card-actions">
+                  <button
+                    className="button button-primary button-small"
+                    type="button"
+                    onClick={() => {
+                      setupLocalWorkerMutation.mutate(localDraft, {
+                        onSuccess: () => setShowLocalSetup(false),
+                      });
+                    }}
+                    disabled={setupLocalWorkerMutation.isPending}
+                  >
+                    {setupLocalWorkerMutation.isPending ? "Saving…" : localWorker ? "Save local worker" : "Add this host as worker"}
+                  </button>
+                </div>
+              ) : null}
+            </div>
+          </SectionCard>
+
+          <SectionCard title="Remote workers" subtitle="Pair external execution nodes back to this Encodr server.">
+            <div className="card-stack">
+              <div className="info-strip" role="note">
+                <strong>Service agent model</strong>
+                <span>Remote workers run as background services. No desktop application is required.</span>
+              </div>
+              {showRemoteSetup || noWorkersConfigured ? (
+                <div className="settings-rules-fields settings-rules-fields-compact">
+                  <label className="field">
+                    <span>Worker label</span>
+                    <input
+                      aria-label="Remote worker label"
+                      value={remoteDraft.display_name}
+                      onChange={(event) => setRemoteDraft((current) => ({ ...current, display_name: event.target.value }))}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Platform</span>
+                    <select
+                      aria-label="Remote worker platform"
+                      value={remoteDraft.platform}
+                      onChange={(event) => setRemoteDraft((current) => ({ ...current, platform: event.target.value as "windows" | "linux" | "macos" }))}
+                    >
+                      <option value="windows">Windows</option>
+                      <option value="linux">Linux</option>
+                      <option value="macos">macOS</option>
+                    </select>
+                  </label>
+                  <label className="field">
+                    <span>Preferred backend</span>
+                    <select
+                      aria-label="Remote worker preferred backend"
+                      value={remoteDraft.preferred_backend}
+                      onChange={(event) => setRemoteDraft((current) => ({ ...current, preferred_backend: event.target.value }))}
+                    >
+                      {BACKEND_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field field-checkbox">
+                    <span>Allow CPU fallback</span>
+                    <input
+                      aria-label="Remote worker CPU fallback"
+                      type="checkbox"
+                      checked={remoteDraft.allow_cpu_fallback}
+                      onChange={(event) => setRemoteDraft((current) => ({ ...current, allow_cpu_fallback: event.target.checked }))}
+                    />
+                  </label>
+                </div>
+              ) : null}
+              {showRemoteSetup || noWorkersConfigured ? (
+                <div className="section-card-actions">
+                  <button
+                    className="button button-primary button-small"
+                    type="button"
+                    onClick={() => {
+                      createRemoteWorkerMutation.mutate(remoteDraft, {
+                        onSuccess: (result) => {
+                          setOnboardingResult(result);
+                          setShowRemoteSetup(false);
+                        },
+                      });
+                    }}
+                    disabled={createRemoteWorkerMutation.isPending}
+                  >
+                    {createRemoteWorkerMutation.isPending ? "Generating…" : "Generate bootstrap command"}
+                  </button>
+                </div>
+              ) : null}
+              {onboardingResult ? (
+                <div className="card-stack">
+                  <div className="info-strip">
+                    <strong>{onboardingResult.worker.display_name}</strong>
+                    <span>Pending pairing until {formatDateTime(onboardingResult.pairing_token_expires_at)}</span>
+                  </div>
+                  <label className="field">
+                    <span>Bootstrap command</span>
+                    <textarea readOnly value={onboardingResult.bootstrap_command} rows={6} />
+                  </label>
+                  {onboardingResult.notes.length > 0 ? (
+                    <div className="list-stack">
+                      {onboardingResult.notes.map((note) => (
+                        <div key={note} className="list-row">
+                          <span>{note}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+              ) : null}
+            </div>
+          </SectionCard>
+        </section>
+      ) : null}
 
       <section className={`jobs-review-layout${detail || (workerId && detailQuery.isLoading) ? "" : " jobs-review-layout-single"}`}>
         <SectionCard title="Workers" subtitle={`${workers.length} worker${workers.length === 1 ? "" : "s"} in view`}>
           {workers.length === 0 ? (
-            <EmptyState title="No workers yet" message="Workers appear here when Encodr detects or registers them." />
+            <EmptyState title="No workers configured" message="Add this host as a worker or generate a remote worker bootstrap command to start taking jobs." />
           ) : (
             <div className="record-list" role="list" aria-label="Workers list">
               {workers.map((item) => {
@@ -105,14 +345,14 @@ export function WorkersPage() {
                       </div>
                       <div className="badge-row">
                         <StatusBadge value={item.worker_type} />
-                        <StatusBadge value={item.displayHealthStatus} />
+                        <StatusBadge value={item.worker_state} />
                         <StatusBadge value={item.enabled ? "enabled" : "disabled"} />
                       </div>
                     </div>
                     <div className="record-list-meta">
-                      <span className="record-list-kicker">{item.worker_type === "local" ? "Local worker" : "Remote worker"}</span>
-                      <span>{formatDateTime(item.last_seen_at)}</span>
-                      <span className="record-list-emphasis">{item.displayHealthSummary}</span>
+                      <span className="record-list-kicker">{item.worker_type === "local" ? "This host" : "Remote worker"}</span>
+                      <span>{item.current_job_id ? `${formatBackendLabel(item.current_backend)} • ${item.current_progress_percent ?? 0}%` : formatDateTime(item.last_seen_at)}</span>
+                      <span className="record-list-emphasis">{item.health_summary ?? "No health summary reported."}</span>
                     </div>
                   </Link>
                 );
@@ -130,34 +370,32 @@ export function WorkersPage() {
             title="Worker detail"
             subtitle={detail.display_name}
             actions={
-              detail.worker_type === "remote" ? (
-                detail.enabled ? (
-                  <button
-                    className="button button-secondary button-small"
-                    type="button"
-                    onClick={() => disableMutation.mutate(detail.id)}
-                    disabled={disableMutation.isPending}
-                  >
-                    {disableMutation.isPending ? "Disabling…" : "Disable worker"}
-                  </button>
-                ) : (
-                  <button
-                    className="button button-primary button-small"
-                    type="button"
-                    onClick={() => enableMutation.mutate(detail.id)}
-                    disabled={enableMutation.isPending}
-                  >
-                    {enableMutation.isPending ? "Enabling…" : "Enable worker"}
-                  </button>
-                )
-              ) : null
+              detail.enabled ? (
+                <button
+                  className="button button-secondary button-small"
+                  type="button"
+                  onClick={() => disableMutation.mutate(detail.id)}
+                  disabled={disableMutation.isPending}
+                >
+                  {disableMutation.isPending ? "Disabling…" : "Disable worker"}
+                </button>
+              ) : (
+                <button
+                  className="button button-primary button-small"
+                  type="button"
+                  onClick={() => enableMutation.mutate(detail.id)}
+                  disabled={enableMutation.isPending}
+                >
+                  {enableMutation.isPending ? "Enabling…" : "Enable worker"}
+                </button>
+              )
             }
           >
             <div className="card-stack">
-              {detail.displayHealthStatus === "not_configured" ? (
+              {detail.worker_state === "remote_pending_pairing" ? (
                 <div className="info-strip" role="note">
-                  <strong>Not configured</strong>
-                  <span>Remote worker setup is incomplete until Encodr receives a real heartbeat.</span>
+                  <strong>Pending pairing</strong>
+                  <span>Run the bootstrap command on the target host, then wait for the first heartbeat.</span>
                 </div>
               ) : null}
 
@@ -165,9 +403,12 @@ export function WorkersPage() {
                 items={[
                   { label: "Worker key", value: detail.worker_key },
                   { label: "Type", value: <StatusBadge value={detail.worker_type} /> },
+                  { label: "State", value: <StatusBadge value={detail.worker_state} /> },
                   { label: "Registration", value: <StatusBadge value={detail.registration_status} /> },
-                  { label: "Health", value: <StatusBadge value={detail.displayHealthStatus} /> },
+                  { label: "Health", value: <StatusBadge value={detail.health_status} /> },
                   { label: "Enabled", value: formatRelativeBoolean(detail.enabled) },
+                  { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
+                  { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
                   { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
                   { label: "Last seen", value: formatDateTime(detail.last_seen_at) },
                   { label: "Host", value: detail.host_summary?.hostname ?? "Not reported" },
@@ -175,6 +416,55 @@ export function WorkersPage() {
                   { label: "Agent version", value: detail.host_summary?.agent_version ?? "Not reported" },
                 ]}
               />
+
+              {detailDraft ? (
+                <div className="settings-rules-fields settings-rules-fields-compact">
+                  <label className="field">
+                    <span>Worker label</span>
+                    <input
+                      aria-label="Worker detail label"
+                      value={detailDraft.display_name ?? ""}
+                      onChange={(event) => setDetailDraft((current) => current ? { ...current, display_name: event.target.value } : current)}
+                    />
+                  </label>
+                  <label className="field">
+                    <span>Preferred backend</span>
+                    <select
+                      aria-label="Worker detail preferred backend"
+                      value={detailDraft.preferred_backend}
+                      onChange={(event) => setDetailDraft((current) => current ? { ...current, preferred_backend: event.target.value } : current)}
+                    >
+                      {BACKEND_OPTIONS.map((option) => (
+                        <option key={option.value} value={option.value}>{option.label}</option>
+                      ))}
+                    </select>
+                  </label>
+                  <label className="field field-checkbox">
+                    <span>Allow CPU fallback</span>
+                    <input
+                      aria-label="Worker detail CPU fallback"
+                      type="checkbox"
+                      checked={detailDraft.allow_cpu_fallback}
+                      onChange={(event) => setDetailDraft((current) => current ? { ...current, allow_cpu_fallback: event.target.checked } : current)}
+                    />
+                  </label>
+                  <div className="section-card-actions">
+                    <button
+                      className="button button-primary button-small"
+                      type="button"
+                      onClick={() => {
+                        updateWorkerPreferencesMutation.mutate({
+                          workerId: detail.id,
+                          payload: detailDraft,
+                        });
+                      }}
+                      disabled={updateWorkerPreferencesMutation.isPending}
+                    >
+                      {updateWorkerPreferencesMutation.isPending ? "Saving…" : "Save worker settings"}
+                    </button>
+                  </div>
+                </div>
+              ) : null}
 
               <div className="metric-grid metric-grid-compact">
                 <div className="metric-panel">
@@ -259,6 +549,22 @@ export function WorkersPage() {
                 </SectionCard>
               ) : null}
 
+              {selectedBootstrap ? (
+                <SectionCard title="Bootstrap command" subtitle="Run this on the target worker host.">
+                  <div className="card-stack">
+                    <label className="field">
+                      <span>Command</span>
+                      <textarea readOnly value={selectedBootstrap.bootstrap_command} rows={6} />
+                    </label>
+                    {selectedBootstrap.notes.map((note) => (
+                      <div key={note} className="info-strip" role="note">
+                        <span>{note}</span>
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+              ) : null}
+
               {detail.recent_jobs.length > 0 ? (
                 <SectionCard title="Recent jobs">
                   <div className="list-stack">
@@ -283,6 +589,10 @@ export function WorkersPage() {
                 </SectionCard>
               ) : null}
             </div>
+          </SectionCard>
+        ) : workers.length > 0 ? (
+          <SectionCard title="Worker detail" subtitle="Select a worker to view health, telemetry, and backend settings.">
+            <EmptyState title="No worker selected" message="Choose a worker from the list to inspect its health or change its backend preference." />
           </SectionCard>
         ) : null}
       </section>
@@ -366,4 +676,23 @@ function formatBackendLabel(value: string | null | undefined) {
     amd_gpu: "AMD",
     prefer_amd_gpu: "AMD",
   }[value] ?? value.replace(/_/g, " ");
+}
+
+function formatWorkerStateLabel(value: string | null | undefined) {
+  if (!value) {
+    return "Unknown";
+  }
+  return {
+    local_not_configured: "Not configured",
+    local_configured_disabled: "Configured but disabled",
+    local_healthy: "Healthy",
+    local_degraded: "Degraded",
+    local_unavailable: "Unavailable",
+    remote_pending_pairing: "Pending pairing",
+    remote_registered: "Registered",
+    remote_healthy: "Healthy",
+    remote_degraded: "Degraded",
+    remote_offline: "Offline",
+    remote_disabled: "Disabled",
+  }[value] ?? titleCase(value);
 }

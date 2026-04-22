@@ -40,12 +40,16 @@ class RemoteExecutionService:
         job_id: str,
         plan_payload: dict,
         media_payload: dict,
+        preferred_backend: str | None = None,
+        allow_cpu_fallback: bool | None = None,
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ExecutionResult:
         plan = ProcessingPlan.model_validate(plan_payload)
         media_file = MediaFile.model_validate(media_payload)
         verifier = OutputVerifier(probe_client=FFprobeClient(binary_path=self.settings.ffprobe_path))
 
+        requested_backend = preferred_backend or self.settings.preferred_backend
+        allow_fallback = self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback
         try:
             result = self.runner.execute_plan(
                 plan,
@@ -55,8 +59,8 @@ class RemoteExecutionService:
                 job_id=job_id,
                 total_duration_seconds=media_file.container.duration_seconds,
                 progress_callback=progress_callback,
-                preferred_backend=self.settings.preferred_backend,
-                allow_cpu_fallback=self.settings.allow_cpu_fallback,
+                preferred_backend=requested_backend,
+                allow_cpu_fallback=allow_fallback,
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
@@ -118,9 +122,13 @@ class RemoteExecutionService:
         job_id: str,
         plan_payload: dict,
         media_payload: dict,
+        preferred_backend: str | None = None,
+        allow_cpu_fallback: bool | None = None,
     ) -> dict[str, object]:
         plan = ProcessingPlan.model_validate(plan_payload)
         media_file = MediaFile.model_validate(media_payload)
+        requested_backend = preferred_backend or self.settings.preferred_backend
+        allow_fallback = self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback
         try:
             command_plan = build_execution_command_plan(
                 plan,
@@ -128,8 +136,8 @@ class RemoteExecutionService:
                 scratch_dir=self.settings.scratch_dir or ".",
                 ffmpeg_path=self.settings.ffmpeg_path,
                 job_id=job_id,
-                preferred_backend=self.settings.preferred_backend,
-                allow_cpu_fallback=self.settings.allow_cpu_fallback,
+                preferred_backend=requested_backend,
+                allow_cpu_fallback=allow_fallback,
             )
         except BackendSelectionError as error:
             return {

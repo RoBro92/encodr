@@ -4,7 +4,7 @@ from datetime import datetime
 from enum import Enum
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field, field_validator
+from pydantic import BaseModel, Field, field_validator, model_validator
 
 
 class HealthStatus(str, Enum):
@@ -53,6 +53,27 @@ class ExecutionBackendStatusResponse(BaseModel):
 class ExecutionPreferenceResponse(BaseModel):
     preferred_backend: str
     allow_cpu_fallback: bool
+
+
+class WorkerPreferenceRequest(BaseModel):
+    display_name: str | None = Field(default=None, min_length=1, max_length=255)
+    preferred_backend: Literal[
+        "cpu_only",
+        "prefer_intel_igpu",
+        "prefer_nvidia_gpu",
+        "prefer_amd_gpu",
+    ]
+    allow_cpu_fallback: bool = True
+
+    @field_validator("display_name", mode="before")
+    @classmethod
+    def strip_optional_display_name(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
 
 
 class QueueHealthSummaryResponse(BaseModel):
@@ -130,9 +151,12 @@ class WorkerRecentJobResponse(BaseModel):
 
 
 class WorkerStatusResponse(BaseModel):
+    worker_id: str | None = None
     status: HealthStatus
     summary: str
     worker_name: str
+    configured: bool
+    configuration_state: str
     mode: str
     local_only: bool
     enabled: bool
@@ -187,6 +211,7 @@ class WorkerInventorySummaryResponse(BaseModel):
     worker_key: str
     display_name: str
     worker_type: str
+    worker_state: str
     source: str
     enabled: bool
     registration_status: str
@@ -197,6 +222,14 @@ class WorkerInventorySummaryResponse(BaseModel):
     last_registration_at: datetime | None = None
     capability_summary: WorkerCapabilitySummaryResponse
     host_summary: WorkerHostSummaryResponse
+    preferred_backend: str | None = None
+    allow_cpu_fallback: bool | None = None
+    current_job_id: str | None = None
+    current_backend: str | None = None
+    current_stage: str | None = None
+    current_progress_percent: int | None = None
+    onboarding_platform: str | None = None
+    pairing_expires_at: datetime | None = None
     pending_assignment_count: int = 0
     last_completed_job_id: str | None = None
 
@@ -215,7 +248,8 @@ class WorkerInventoryListResponse(BaseModel):
 
 
 class WorkerRegistrationRequest(BaseModel):
-    registration_secret: str = Field(min_length=1, max_length=512)
+    registration_secret: str | None = Field(default=None, min_length=1, max_length=512)
+    pairing_token: str | None = Field(default=None, min_length=1, max_length=512)
     worker_key: str = Field(min_length=1, max_length=255)
     display_name: str = Field(min_length=1, max_length=255)
     worker_type: Literal["remote"]
@@ -226,15 +260,31 @@ class WorkerRegistrationRequest(BaseModel):
     health_status: HealthStatus = HealthStatus.UNKNOWN
     health_summary: str | None = Field(default=None, max_length=2000)
 
-    @field_validator("registration_secret", "worker_key", "display_name", mode="before")
+    @field_validator("registration_secret", "pairing_token", mode="before")
     @classmethod
-    def strip_required_fields(cls, value: Any) -> Any:
+    def strip_optional_secrets(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
+
+    @field_validator("worker_key", "display_name", mode="before")
+    @classmethod
+    def strip_mandatory_fields(cls, value: Any) -> Any:
         if isinstance(value, str):
             cleaned = value.strip()
             if not cleaned:
                 raise ValueError("Field must not be empty.")
             return cleaned
         return value
+
+    @model_validator(mode="after")
+    def ensure_one_registration_method(self) -> "WorkerRegistrationRequest":
+        if not self.registration_secret and not self.pairing_token:
+            raise ValueError("Either a registration secret or pairing token is required.")
+        return self
 
 
 class WorkerRegistrationResponse(BaseModel):
@@ -245,6 +295,7 @@ class WorkerRegistrationResponse(BaseModel):
     worker_token: str
     registration_status: str
     enabled: bool
+    execution_preferences: ExecutionPreferenceResponse
     health_status: HealthStatus
     health_summary: str | None = None
     issued_at: datetime
@@ -264,6 +315,7 @@ class WorkerHeartbeatResponse(BaseModel):
     worker_key: str
     enabled: bool
     registration_status: str
+    execution_preferences: ExecutionPreferenceResponse
     health_status: HealthStatus
     health_summary: str | None = None
     heartbeat_at: datetime
@@ -272,6 +324,22 @@ class WorkerHeartbeatResponse(BaseModel):
 class WorkerStateChangeResponse(BaseModel):
     worker: WorkerInventoryDetailResponse
     status: str
+
+
+class LocalWorkerSetupRequest(WorkerPreferenceRequest):
+    enabled: bool = True
+
+
+class RemoteWorkerOnboardingRequest(WorkerPreferenceRequest):
+    platform: Literal["windows", "linux", "macos"]
+
+
+class RemoteWorkerOnboardingResponse(BaseModel):
+    worker: WorkerInventoryDetailResponse
+    status: Literal["pending_pairing"]
+    pairing_token_expires_at: datetime
+    bootstrap_command: str
+    notes: list[str] = Field(default_factory=list)
 
 
 class WorkerAssignedJobResponse(BaseModel):

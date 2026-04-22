@@ -14,7 +14,10 @@ from app.core.dependencies import (
     require_authenticated_worker,
 )
 from app.schemas.worker import (
+    LocalWorkerSetupRequest,
     QueueHealthSummaryResponse,
+    RemoteWorkerOnboardingRequest,
+    RemoteWorkerOnboardingResponse,
     WorkerAssignedJobResponse,
     WorkerHeartbeatRequest,
     WorkerHeartbeatResponse,
@@ -29,6 +32,7 @@ from app.schemas.worker import (
     WorkerJobPollResponse,
     WorkerJobResultRequest,
     WorkerJobResultResponse,
+    WorkerPreferenceRequest,
     WorkerRegistrationRequest,
     WorkerRegistrationResponse,
     WorkerRunOnceResponse,
@@ -84,6 +88,7 @@ def register_worker(
             display_name=payload.display_name,
             worker_type=payload.worker_type,
             registration_secret=payload.registration_secret,
+            pairing_token=payload.pairing_token,
             capability_summary=payload.capability_summary.model_dump(mode="json"),
             host_summary=payload.host_summary.model_dump(mode="json"),
             runtime_summary=payload.runtime_summary.model_dump(mode="json") if payload.runtime_summary is not None else None,
@@ -313,7 +318,7 @@ def enable_worker(
     current_user: User = Depends(require_admin_user),
 ) -> WorkerStateChangeResponse:
     try:
-        worker = service.set_remote_worker_enabled(
+        worker = service.set_worker_enabled(
             session,
             worker_id=worker_id,
             enabled=True,
@@ -339,7 +344,7 @@ def disable_worker(
     current_user: User = Depends(require_admin_user),
 ) -> WorkerStateChangeResponse:
     try:
-        worker = service.set_remote_worker_enabled(
+        worker = service.set_worker_enabled(
             session,
             worker_id=worker_id,
             enabled=False,
@@ -350,6 +355,81 @@ def disable_worker(
         return WorkerStateChangeResponse(
             worker=WorkerInventoryDetailResponse(**worker),
             status="disabled",
+        )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@workers_router.post("/local/setup", response_model=WorkerInventoryDetailResponse, dependencies=[Depends(require_admin_user)])
+def setup_local_worker(
+    payload: LocalWorkerSetupRequest,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerInventoryDetailResponse:
+    del current_user
+    try:
+        worker = service.setup_local_worker(
+            session,
+            display_name=payload.display_name,
+            preferred_backend=payload.preferred_backend,
+            allow_cpu_fallback=payload.allow_cpu_fallback,
+        )
+        session.commit()
+        return WorkerInventoryDetailResponse(**worker)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@workers_router.put("/{worker_id}/preferences", response_model=WorkerInventoryDetailResponse, dependencies=[Depends(require_admin_user)])
+def update_worker_preferences(
+    worker_id: str,
+    payload: WorkerPreferenceRequest,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerInventoryDetailResponse:
+    del current_user
+    try:
+        worker = service.update_worker_preferences(
+            session,
+            worker_id=worker_id,
+            display_name=payload.display_name,
+            preferred_backend=payload.preferred_backend,
+            allow_cpu_fallback=payload.allow_cpu_fallback,
+        )
+        session.commit()
+        return WorkerInventoryDetailResponse(**worker)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@workers_router.post("/remote/onboarding", response_model=RemoteWorkerOnboardingResponse, dependencies=[Depends(require_admin_user)])
+def create_remote_worker_onboarding(
+    payload: RemoteWorkerOnboardingRequest,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> RemoteWorkerOnboardingResponse:
+    del current_user
+    try:
+        result = service.create_remote_onboarding(
+            session,
+            platform=payload.platform,
+            display_name=payload.display_name,
+            preferred_backend=payload.preferred_backend,
+            allow_cpu_fallback=payload.allow_cpu_fallback,
+        )
+        session.commit()
+        return RemoteWorkerOnboardingResponse(
+            worker=WorkerInventoryDetailResponse(**result["worker"]),
+            status=result["status"],
+            pairing_token_expires_at=result["pairing_token_expires_at"],
+            bootstrap_command=result["bootstrap_command"],
+            notes=result["notes"],
         )
     except ApiServiceError as error:
         session.rollback()

@@ -436,7 +436,8 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /execution backends/i })).toBeInTheDocument();
     expect(screen.getByText(/operator-managed passthrough/i)).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: /preferred execution backend/i })).toBeInTheDocument();
+    expect(screen.getByText(/backend preference is now set per worker/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /workers/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/encodr update --apply/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
   });
@@ -1060,6 +1061,7 @@ describe("Encodr UI shell", () => {
 
   it("marks a remote worker without a heartbeat as not configured", async () => {
     mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus({ configuration_state: "local_not_configured" }) },
       {
         method: "GET",
         path: "/api/workers",
@@ -1071,6 +1073,7 @@ describe("Encodr UI shell", () => {
               worker_key: "remote-1",
               display_name: "Remote worker",
               worker_type: "remote",
+              worker_state: "remote_registered",
               health_status: "healthy",
               last_seen_at: null,
               last_heartbeat_at: null,
@@ -1084,11 +1087,12 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/workers", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/not configured/i)).toBeInTheDocument();
+    expect(screen.getByText(/registered/i)).toBeInTheDocument();
   });
 
   it("shows worker current activity, telemetry, and recent jobs in worker detail", async () => {
     mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
       {
         method: "GET",
         path: "/api/workers/worker-local-1",
@@ -1222,11 +1226,14 @@ function analyticsDashboard() {
   };
 }
 
-function workerStatus() {
+function workerStatus(overrides: Record<string, unknown> = {}) {
   return {
+    worker_id: "worker-local-1",
     status: "healthy",
     summary: "The local worker is healthy and available.",
     worker_name: "worker-local",
+    configured: true,
+    configuration_state: "local_healthy",
     mode: "single-node-local",
     local_only: true,
     enabled: true,
@@ -1281,6 +1288,7 @@ function workerStatus() {
     ],
     queue_health: queueHealth(),
     self_test_available: true,
+    ...overrides,
   };
 }
 
@@ -1777,7 +1785,8 @@ function workerInventory() {
     worker_key: "local",
     display_name: "Local worker",
     worker_type: "local",
-    source: "local",
+    worker_state: "local_healthy",
+    source: "configured_local",
     enabled: true,
     registration_status: "registered",
     health_status: "healthy",
@@ -1785,6 +1794,14 @@ function workerInventory() {
     last_seen_at: "2026-04-20T10:05:00Z",
     last_heartbeat_at: "2026-04-20T10:05:00Z",
     last_registration_at: "2026-04-20T10:00:00Z",
+    preferred_backend: "cpu_only",
+    allow_cpu_fallback: true,
+    current_job_id: null,
+    current_backend: null,
+    current_stage: null,
+    current_progress_percent: null,
+    onboarding_platform: null,
+    pairing_expires_at: null,
     capability_summary: {
       execution_modes: ["local"],
       supported_video_codecs: ["hevc"],

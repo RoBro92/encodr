@@ -35,6 +35,8 @@ import type {
   DryRunBatchResponse,
   RecentAnalytics,
   RuntimeStatus,
+  RemoteWorkerOnboardingPayload,
+  RemoteWorkerOnboardingResponse,
   StorageStatus,
   UpdateStatus,
   ReviewDecisionPayload,
@@ -43,6 +45,7 @@ import type {
   ReviewListResponse,
   WorkerInventoryDetail,
   WorkerInventoryListResponse,
+  WorkerPreferencePayload,
   WorkerRunOnceResponse,
   WorkerStateChangeResponse,
   WorkerSelfTestResponse,
@@ -177,6 +180,34 @@ export function enableWorker(client: ApiClient, workerId: string): Promise<Worke
 
 export function disableWorker(client: ApiClient, workerId: string): Promise<WorkerStateChangeResponse> {
   return client.request<WorkerStateChangeResponse>(`/workers/${workerId}/disable`, { method: "POST" });
+}
+
+export function setupLocalWorker(client: ApiClient, payload: WorkerPreferencePayload): Promise<WorkerInventoryDetail> {
+  return client.request<WorkerInventoryDetail>("/workers/local/setup", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWorkerPreferences(
+  client: ApiClient,
+  workerId: string,
+  payload: WorkerPreferencePayload,
+): Promise<WorkerInventoryDetail> {
+  return client.request<WorkerInventoryDetail>(`/workers/${workerId}/preferences`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createRemoteWorkerOnboarding(
+  client: ApiClient,
+  payload: RemoteWorkerOnboardingPayload,
+): Promise<RemoteWorkerOnboardingResponse> {
+  return client.request<RemoteWorkerOnboardingResponse>("/workers/remote/onboarding", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listReviewItems(

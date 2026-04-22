@@ -1,7 +1,8 @@
 from __future__ import annotations
 
-from pathlib import Path
 from datetime import datetime, timezone
+from pathlib import Path
+import re
 
 import pytest
 
@@ -144,12 +145,33 @@ def test_admin_worker_list_and_detail_show_local_and_remote_workers(
 
     assert list_response.status_code == 200
     items = list_response.json()["items"]
-    assert any(item["worker_type"] == "local" for item in items)
+    assert all(item["worker_type"] == "remote" for item in items)
     assert any(item["worker_type"] == "remote" for item in items)
     assert detail_response.status_code == 200
     assert detail_response.json()["worker_type"] == "remote"
-    assert local_response.status_code == 200
-    assert local_response.json()["worker_type"] == "local"
+    assert local_response.status_code == 404
+
+    setup_response = context.client.post(
+        "/api/workers/local/setup",
+        json={
+            "display_name": "This host",
+            "preferred_backend": "cpu_only",
+            "allow_cpu_fallback": True,
+        },
+        headers=auth.headers,
+    )
+    assert setup_response.status_code == 200
+    local_id = setup_response.json()["id"]
+
+    list_after_setup = context.client.get("/api/workers", headers=auth.headers)
+    assert list_after_setup.status_code == 200
+    setup_items = list_after_setup.json()["items"]
+    assert any(item["worker_type"] == "local" for item in setup_items)
+
+    local_detail = context.client.get(f"/api/workers/{local_id}", headers=auth.headers)
+    assert local_detail.status_code == 200
+    assert local_detail.json()["worker_type"] == "local"
+    assert local_detail.json()["preferred_backend"] == "cpu_only"
 
 
 def test_admin_worker_endpoints_require_user_auth(
@@ -193,6 +215,76 @@ def test_remote_worker_enable_disable_flow_is_audited(
     with session_factory() as session:
         events = AuditEventRepository(session).list_events(limit=20)
         assert any(event.event_type == AuditEventType.WORKER_STATE_CHANGE for event in events)
+
+
+def test_remote_worker_onboarding_generates_pending_pairing_and_registration_uses_pairing_token(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    onboarding_response = context.client.post(
+        "/api/workers/remote/onboarding",
+        json={
+            "display_name": "Linux worker 01",
+            "platform": "linux",
+            "preferred_backend": "prefer_nvidia_gpu",
+            "allow_cpu_fallback": False,
+        },
+        headers=auth.headers,
+    )
+
+    assert onboarding_response.status_code == 200
+    onboarding_payload = onboarding_response.json()
+    assert onboarding_payload["status"] == "pending_pairing"
+    assert "install-worker-agent-unix.sh" in onboarding_payload["bootstrap_command"]
+    assert onboarding_payload["worker"]["worker_state"] == "remote_pending_pairing"
+    assert onboarding_payload["worker"]["preferred_backend"] == "prefer_nvidia_gpu"
+    assert onboarding_payload["worker"]["allow_cpu_fallback"] is False
+    worker_id = onboarding_payload["worker"]["id"]
+    worker_key = onboarding_payload["worker"]["worker_key"]
+    pairing_token_match = re.search(r"--pairing-token\s+(?P<token>'[^']+'|\S+)", onboarding_payload["bootstrap_command"])
+    assert pairing_token_match is not None
+    pairing_token = pairing_token_match.group("token").strip("'")
+
+    list_response = context.client.get("/api/workers", headers=auth.headers)
+    assert list_response.status_code == 200
+    assert any(item["id"] == worker_id for item in list_response.json()["items"])
+
+    registration = context.client.post(
+        "/api/worker/register",
+        json={
+            **registration_payload("valid-secret"),
+            "registration_secret": None,
+            "pairing_token": pairing_token,
+            "worker_key": "ignored-worker-key",
+            "display_name": "Ignored display name",
+            "host_summary": {
+                "hostname": "linux-worker-01",
+                "platform": "Linux",
+                "agent_version": CURRENT_VERSION,
+                "python_version": "3.11",
+            },
+        },
+    )
+
+    assert registration.status_code == 201
+    registration_payload_json = registration.json()
+    assert registration_payload_json["worker_id"] == worker_id
+    assert registration_payload_json["worker_key"] == worker_key
+    assert registration_payload_json["display_name"] == "Linux worker 01"
+    assert registration_payload_json["execution_preferences"]["preferred_backend"] == "prefer_nvidia_gpu"
+    assert registration_payload_json["execution_preferences"]["allow_cpu_fallback"] is False
+
+    with session_factory() as session:
+        worker = WorkerRepository(session).get_by_id(worker_id)
+        assert worker is not None
+        assert worker.pairing_token_hash is None
+        assert worker.preferred_backend == "prefer_nvidia_gpu"
+        assert worker.allow_cpu_fallback is False
+        assert worker.auth_token_hash is not None
 
 
 def test_remote_worker_can_request_claim_and_submit_job_result(

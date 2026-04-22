@@ -19,6 +19,7 @@ The installer will:
 - print the local URL, detected IP addresses, and next steps
 - install the latest tagged release by default
 - create `/media` and `/temp` if they do not already exist
+- leave the local worker disabled until you explicitly enable it
 
 No manual config editing is required before first use.
 
@@ -46,6 +47,8 @@ cd encodr
 4. run `encodr mount-setup --validate-only`
 5. run `encodr doctor` or `encodr status`
 6. probe and plan a test file before touching a real library
+7. if you want this host to execute jobs, open Workers and choose `Add this host as worker`
+8. if you want external execution nodes, generate a remote bootstrap command from Workers
 
 Encodr expects:
 
@@ -78,3 +81,8 @@ For normal upgrades after install, prefer:
 encodr update
 encodr update --apply
 ```
+
+See also:
+
+- [Workers](./WORKERS.md)
+- [Windows Worker Setup](./WINDOWS_WORKER_SETUP.md)

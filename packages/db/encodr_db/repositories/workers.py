@@ -23,6 +23,17 @@ class WorkerRepository:
         query = select(Worker).where(Worker.auth_token_hash == token_hash)
         return self.session.scalar(query)
 
+    def get_by_pairing_token_hash(self, token_hash: str) -> Worker | None:
+        query = select(Worker).where(Worker.pairing_token_hash == token_hash)
+        return self.session.scalar(query)
+
+    def get_local_worker(self, worker_key: str) -> Worker | None:
+        query = select(Worker).where(
+            Worker.worker_key == worker_key,
+            Worker.worker_type == WorkerType.LOCAL,
+        )
+        return self.session.scalar(query)
+
     def list_workers(
         self,
         *,
@@ -48,6 +59,8 @@ class WorkerRepository:
         worker_key: str,
         display_name: str,
         auth_token_hash: str,
+        preferred_backend: str = "cpu_only",
+        allow_cpu_fallback: bool = True,
         host_metadata: dict | None,
         capability_payload: dict | None,
         runtime_payload: dict | None,
@@ -57,6 +70,7 @@ class WorkerRepository:
         registered_at: datetime,
     ) -> Worker:
         worker = self.get_by_key(worker_key)
+        created = worker is None
         if worker is None:
             worker = Worker(
                 worker_key=worker_key,
@@ -66,9 +80,18 @@ class WorkerRepository:
             self.session.add(worker)
 
         worker.display_name = display_name
-        worker.enabled = True
-        worker.registration_status = WorkerRegistrationStatus.REGISTERED
+        worker.enabled = True if created else worker.enabled
+        worker.registration_status = (
+            WorkerRegistrationStatus.REGISTERED
+            if worker.enabled
+            else WorkerRegistrationStatus.DISABLED
+        )
+        worker.preferred_backend = preferred_backend
+        worker.allow_cpu_fallback = allow_cpu_fallback
         worker.auth_token_hash = auth_token_hash
+        worker.pairing_token_hash = None
+        worker.pairing_requested_at = None
+        worker.pairing_expires_at = None
         worker.host_metadata = host_metadata
         worker.capability_payload = capability_payload
         worker.runtime_payload = runtime_payload
@@ -78,6 +101,90 @@ class WorkerRepository:
         worker.last_heartbeat_at = registered_at
         worker.last_health_status = health_status
         worker.last_health_summary = health_summary
+        self.session.flush()
+        return worker
+
+    def upsert_local_worker(
+        self,
+        *,
+        worker_key: str,
+        display_name: str,
+        enabled: bool,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+        host_metadata: dict | None,
+    ) -> Worker:
+        worker = self.get_local_worker(worker_key)
+        if worker is None:
+            worker = Worker(
+                worker_key=worker_key,
+                display_name=display_name,
+                worker_type=WorkerType.LOCAL,
+            )
+            self.session.add(worker)
+
+        worker.display_name = display_name
+        worker.enabled = enabled
+        worker.registration_status = (
+            WorkerRegistrationStatus.REGISTERED
+            if enabled
+            else WorkerRegistrationStatus.DISABLED
+        )
+        worker.preferred_backend = preferred_backend
+        worker.allow_cpu_fallback = allow_cpu_fallback
+        worker.host_metadata = host_metadata
+        if not enabled:
+            worker.last_health_status = WorkerHealthStatus.UNKNOWN
+            worker.last_health_summary = "Local worker is configured but disabled."
+        self.session.flush()
+        return worker
+
+    def create_pending_remote_worker(
+        self,
+        *,
+        worker_key: str,
+        display_name: str,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+        pairing_token_hash: str,
+        pairing_requested_at: datetime,
+        pairing_expires_at: datetime,
+        onboarding_platform: str,
+    ) -> Worker:
+        worker = Worker(
+            worker_key=worker_key,
+            display_name=display_name,
+            worker_type=WorkerType.REMOTE,
+            enabled=True,
+            registration_status=WorkerRegistrationStatus.UNKNOWN,
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+            pairing_token_hash=pairing_token_hash,
+            pairing_requested_at=pairing_requested_at,
+            pairing_expires_at=pairing_expires_at,
+            onboarding_platform=onboarding_platform,
+            last_health_status=WorkerHealthStatus.UNKNOWN,
+            last_health_summary="Worker is waiting to pair with Encodr.",
+            host_metadata={"expected_platform": onboarding_platform},
+        )
+        self.session.add(worker)
+        self.session.flush()
+        return worker
+
+    def update_preferences(
+        self,
+        worker: Worker,
+        *,
+        display_name: str | None = None,
+        preferred_backend: str | None = None,
+        allow_cpu_fallback: bool | None = None,
+    ) -> Worker:
+        if display_name is not None:
+            worker.display_name = display_name
+        if preferred_backend is not None:
+            worker.preferred_backend = preferred_backend
+        if allow_cpu_fallback is not None:
+            worker.allow_cpu_fallback = allow_cpu_fallback
         self.session.flush()
         return worker
 
@@ -115,13 +222,21 @@ class WorkerRepository:
         enabled: bool,
     ) -> Worker:
         worker.enabled = enabled
-        worker.registration_status = (
-            WorkerRegistrationStatus.REGISTERED
-            if enabled
-            else WorkerRegistrationStatus.DISABLED
-        )
+        if enabled:
+            if worker.worker_type == WorkerType.LOCAL:
+                worker.registration_status = WorkerRegistrationStatus.REGISTERED
+            elif worker.auth_token_hash is not None:
+                worker.registration_status = WorkerRegistrationStatus.REGISTERED
+            else:
+                worker.registration_status = WorkerRegistrationStatus.UNKNOWN
+        else:
+            worker.registration_status = WorkerRegistrationStatus.DISABLED
         if not enabled:
             worker.last_health_status = WorkerHealthStatus.UNKNOWN
-            worker.last_health_summary = "Worker is disabled by an administrator."
+            worker.last_health_summary = (
+                "Local worker is configured but disabled."
+                if worker.worker_type == WorkerType.LOCAL
+                else "Worker is disabled by an administrator."
+            )
         self.session.flush()
         return worker

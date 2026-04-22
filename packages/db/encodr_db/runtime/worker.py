@@ -7,6 +7,7 @@ import time
 from pathlib import Path
 from collections.abc import Callable
 
+from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from encodr_core.config import ConfigBundle
@@ -26,8 +27,8 @@ from encodr_core.planning import ProcessingPlan
 from encodr_core.probe import ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
-from encodr_db.models import Job
-from encodr_db.repositories import JobRepository, TrackedFileRepository
+from encodr_db.models import Job, Worker, WorkerRegistrationStatus, WorkerType
+from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_shared import collect_runtime_telemetry, load_execution_preferences
 
 logger = logging.getLogger("encodr.worker.loop")
@@ -139,6 +140,44 @@ class WorkerStatusTracker:
         self._snapshot.current_progress_percent = int(percent) if percent is not None else None
         self._snapshot.current_progress_updated_at = updated_at
         self._snapshot.telemetry = collect_runtime_telemetry(current_backend=self._snapshot.current_backend)
+
+
+@dataclass(frozen=True, slots=True)
+class LocalWorkerConfiguration:
+    worker: Worker | None
+    preferred_backend: str
+    allow_cpu_fallback: bool
+
+
+def resolve_local_worker_configuration(
+    session: Session,
+    *,
+    config_bundle: ConfigBundle,
+    worker_name: str,
+) -> LocalWorkerConfiguration:
+    repository = WorkerRepository(session)
+    worker = repository.get_local_worker(config_bundle.workers.local.id)
+    if worker is None and _should_bootstrap_legacy_local_worker(session, config_bundle=config_bundle):
+        execution_preferences = load_execution_preferences(config_bundle.app.data_dir)
+        worker = repository.upsert_local_worker(
+            worker_key=config_bundle.workers.local.id,
+            display_name=worker_name,
+            enabled=True,
+            preferred_backend=str(execution_preferences["preferred_backend"]),
+            allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+            host_metadata={"hostname": config_bundle.workers.local.host},
+        )
+    if worker is None:
+        return LocalWorkerConfiguration(
+            worker=None,
+            preferred_backend="cpu_only",
+            allow_cpu_fallback=True,
+        )
+    return LocalWorkerConfiguration(
+        worker=worker,
+        preferred_backend=worker.preferred_backend or "cpu_only",
+        allow_cpu_fallback=bool(worker.allow_cpu_fallback),
+    )
 
 
 class WorkerExecutionService:
@@ -489,7 +528,26 @@ class LocalWorkerLoop:
         run_started_at = datetime.now(timezone.utc)
         with self.session_factory() as session:
             jobs = JobRepository(session)
-            execution_preferences = load_execution_preferences(self.config_bundle.app.data_dir)
+            local_worker_config = resolve_local_worker_configuration(
+                session,
+                config_bundle=self.config_bundle,
+                worker_name=self.worker_name,
+            )
+            if (
+                local_worker_config.worker is None
+                or not local_worker_config.worker.enabled
+                or local_worker_config.worker.registration_status == WorkerRegistrationStatus.DISABLED
+            ):
+                completed_at = datetime.now(timezone.utc)
+                self.status_tracker.record_idle_run(
+                    started_at=run_started_at,
+                    completed_at=completed_at,
+                )
+                return WorkerRunSummary(
+                    processed_job=False,
+                    started_at=run_started_at,
+                    completed_at=completed_at,
+                )
             job = next(
                 (
                     candidate
@@ -497,8 +555,8 @@ class LocalWorkerLoop:
                     if _job_is_locally_compatible(
                         plan=ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
                         ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
-                        preferred_backend=str(execution_preferences["preferred_backend"]),
-                        allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+                        preferred_backend=local_worker_config.preferred_backend,
+                        allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
                     )
                 ),
                 None,
@@ -522,18 +580,22 @@ class LocalWorkerLoop:
                 media_file=media_file,
                 ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
                 scratch_dir=self.config_bundle.app.scratch_dir,
-                preferred_backend=str(execution_preferences["preferred_backend"]),
-                allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+                preferred_backend=local_worker_config.preferred_backend,
+                allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
                 job_id=job.id,
             )
-            jobs.mark_running(
+            jobs.mark_running_for_worker(
                 job,
-                worker_name=self.worker_name,
-                requested_backend=str(execution_preferences["preferred_backend"]),
+                worker=local_worker_config.worker,
+                requested_backend=local_worker_config.preferred_backend,
             )
             self.status_tracker.record_job_started(
                 job_id=job.id,
-                backend=str(backend_preview["actual_backend"] or backend_preview["requested_backend"] or normalise_backend_preference(str(execution_preferences["preferred_backend"]))),
+                backend=str(
+                    backend_preview["actual_backend"]
+                    or backend_preview["requested_backend"]
+                    or normalise_backend_preference(local_worker_config.preferred_backend)
+                ),
                 started_at=job.started_at or run_started_at,
             )
             # Commit the running transition before execution starts so Postgres-backed
@@ -549,8 +611,8 @@ class LocalWorkerLoop:
                 media_file=media_file,
                 ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
                 scratch_dir=self.config_bundle.app.scratch_dir,
-                preferred_backend=str(execution_preferences["preferred_backend"]),
-                allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+                preferred_backend=local_worker_config.preferred_backend,
+                allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
                 progress_callback=progress_reporter,
             )
             session.commit()
@@ -667,3 +729,16 @@ def _preview_local_backend(
         "fallback_used": command_plan.fallback_used,
         "selection_reason": command_plan.backend_selection_reason,
     }
+
+
+def _should_bootstrap_legacy_local_worker(
+    session: Session,
+    *,
+    config_bundle: ConfigBundle,
+) -> bool:
+    if not config_bundle.workers.local.enabled:
+        return False
+    if (config_bundle.app.data_dir / "setup-state.json").exists():
+        return True
+    has_jobs = session.scalar(select(Job.id).limit(1)) is not None
+    return bool(has_jobs)

@@ -316,9 +316,12 @@ export type WorkerRunOnceResponse = {
 };
 
 export type WorkerStatus = {
+  worker_id: string | null;
   status: string;
   summary: string;
   worker_name: string;
+  configured: boolean;
+  configuration_state: string;
   mode: string;
   local_only: boolean;
   enabled: boolean;
@@ -482,6 +485,7 @@ export type WorkerInventorySummary = {
   worker_key: string;
   display_name: string;
   worker_type: string;
+  worker_state: string;
   source: string;
   enabled: boolean;
   registration_status: string;
@@ -492,6 +496,14 @@ export type WorkerInventorySummary = {
   last_registration_at: string | null;
   capability_summary: WorkerCapabilitySummary;
   host_summary: WorkerHostSummary;
+  preferred_backend: string | null;
+  allow_cpu_fallback: boolean | null;
+  current_job_id: string | null;
+  current_backend: string | null;
+  current_stage: string | null;
+  current_progress_percent: number | null;
+  onboarding_platform: string | null;
+  pairing_expires_at: string | null;
   pending_assignment_count: number;
   last_completed_job_id: string | null;
 };
@@ -517,6 +529,24 @@ export type WorkerInventoryDetail = WorkerInventorySummary & {
 
 export type WorkerInventoryListResponse = {
   items: WorkerInventorySummary[];
+};
+
+export type WorkerPreferencePayload = {
+  display_name?: string | null;
+  preferred_backend: string;
+  allow_cpu_fallback: boolean;
+};
+
+export type RemoteWorkerOnboardingPayload = WorkerPreferencePayload & {
+  platform: "windows" | "linux" | "macos";
+};
+
+export type RemoteWorkerOnboardingResponse = {
+  worker: WorkerInventoryDetail;
+  status: "pending_pairing";
+  pairing_token_expires_at: string;
+  bootstrap_command: string;
+  notes: string[];
 };
 
 export type WorkerStateChangeResponse = {

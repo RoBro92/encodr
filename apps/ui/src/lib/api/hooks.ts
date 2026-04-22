@@ -7,6 +7,7 @@ import {
   bootstrapAdmin,
   checkUpdateStatus,
   clearReviewItemProtected,
+  createRemoteWorkerOnboarding,
   createBatchJobs,
   createJobFromReviewItem,
   disableWorker,
@@ -50,13 +51,25 @@ import {
   retryJob,
   runWorkerOnce,
   scanFolder,
+  setupLocalWorker,
   enableWorker,
   updateLibraryRoots,
+  updateWorkerPreferences,
   updateExecutionPreferences,
   updateProcessingRules,
 } from "./endpoints";
 import { useSession } from "../../features/auth/AuthProvider";
-import type { CreateBatchJobsPayload, CreateJobPayload, FileSelectionPayload, LoginPayload, ProbeOrPlanPayload, ProcessingRuleValues, ReviewDecisionPayload } from "../types/api";
+import type {
+  CreateBatchJobsPayload,
+  CreateJobPayload,
+  FileSelectionPayload,
+  LoginPayload,
+  ProbeOrPlanPayload,
+  ProcessingRuleValues,
+  ReviewDecisionPayload,
+  RemoteWorkerOnboardingPayload,
+  WorkerPreferencePayload,
+} from "../types/api";
 
 export function useBootstrapStatusQuery(enabled = true) {
   const { apiClient } = useSession();
@@ -243,6 +256,54 @@ export function useDisableWorkerMutation() {
         queryClient.invalidateQueries({ queryKey: ["workers"] }),
         queryClient.invalidateQueries({ queryKey: ["worker"] }),
         queryClient.invalidateQueries({ queryKey: ["system"] }),
+      ]);
+    },
+  });
+}
+
+export function useSetupLocalWorkerMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: WorkerPreferencePayload) => setupLocalWorker(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
+        queryClient.invalidateQueries({ queryKey: ["system"] }),
+        queryClient.invalidateQueries({ queryKey: ["config", "execution-preferences"] }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateWorkerPreferencesMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workerId, payload }: { workerId: string; payload: WorkerPreferencePayload }) =>
+      updateWorkerPreferences(apiClient, workerId, payload),
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
+        queryClient.invalidateQueries({ queryKey: ["workers", "detail", variables.workerId] }),
+        queryClient.invalidateQueries({ queryKey: ["system"] }),
+        queryClient.invalidateQueries({ queryKey: ["config", "execution-preferences"] }),
+      ]);
+    },
+  });
+}
+
+export function useCreateRemoteWorkerOnboardingMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: RemoteWorkerOnboardingPayload) => createRemoteWorkerOnboarding(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
       ]);
     },
   });
