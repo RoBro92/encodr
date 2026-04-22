@@ -116,6 +116,31 @@ def test_update_checker_understands_github_release_payload() -> None:
     assert result.release_notes_url == f"https://github.com/RoBro92/encodr/releases/tag/v{latest_version}"
 
 
+def test_update_checker_extracts_breaking_changes_summary() -> None:
+    latest_version = next_patch_version(CURRENT_VERSION)
+    checker = UpdateChecker(
+        current_version=CURRENT_VERSION,
+        settings=UpdateCheckSettings(
+            enabled=True,
+            metadata_url="https://api.github.com/repos/RoBro92/encodr/releases/latest",
+            channel="internal",
+            timeout_seconds=2,
+        ),
+        fetcher=lambda _url, _timeout: {
+            "tag_name": f"v{latest_version}",
+            "name": f"Encodr v{latest_version}",
+            "body": "## Breaking changes\nRestart after update if new GPU passthrough is expected.\nRecheck mounts after reboot.\n\n## Improvements\nTruthful backend detection.",
+        },
+    )
+
+    result = checker.check_now()
+
+    assert result.status == "ok"
+    assert result.breaking_changes_summary == (
+        "Restart after update if new GPU passthrough is expected.\nRecheck mounts after reboot."
+    )
+
+
 def test_update_checker_reports_upstream_error() -> None:
     checker = UpdateChecker(
         current_version=CURRENT_VERSION,

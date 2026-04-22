@@ -244,7 +244,9 @@ describe("Encodr UI shell", () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
       { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
       { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
       {
         method: "GET",
@@ -300,7 +302,9 @@ describe("Encodr UI shell", () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
       { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
       { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
       {
         method: "PUT",
@@ -357,7 +361,9 @@ describe("Encodr UI shell", () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
       { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
       { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
       {
         method: "PUT",
@@ -403,6 +409,36 @@ describe("Encodr UI shell", () => {
         }),
       );
     });
+  });
+
+  it("shows execution backend detection and update status in settings", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      {
+        method: "GET",
+        path: "/api/system/update",
+        body: {
+          ...updateStatus(),
+          latest_version: nextPatchVersion(CURRENT_VERSION),
+          update_available: true,
+          release_summary: "Runtime detection and update guidance improvements.",
+          breaking_changes_summary: "Restart after update if newly passed-through devices are not visible.",
+        },
+      },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /execution backends/i })).toBeInTheDocument();
+    expect(screen.getByText(/operator-managed passthrough/i)).toBeInTheDocument();
+    expect(screen.getByRole("combobox", { name: /preferred execution backend/i })).toBeInTheDocument();
+    expect(screen.getAllByText(/encodr update --apply/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
   });
 
   it("renders the redesigned library workspace and lets tabs switch cleanly", async () => {
@@ -959,7 +995,9 @@ describe("Encodr UI shell", () => {
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
       { method: "GET", path: "/api/config/effective", body: effectiveConfig() },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
       { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
       {
         method: "GET",
@@ -1130,6 +1168,27 @@ function workerStatus() {
     last_failure_message: null,
     processed_jobs: 4,
     capabilities: { ffmpeg: true, ffprobe: true, intel_qsv: false },
+    execution_backends: ["remux", "transcode"],
+    hardware_acceleration: [],
+    hardware_probes: executionBackendStatuses(),
+    runtime_device_paths: runtimeDevicePaths(),
+    execution_preferences: executionPreferences(),
+    scratch_path: pathStatus({
+      role: "scratch",
+      display_name: "Scratch workspace",
+      path: "/temp",
+      status: "healthy",
+      writable: true,
+    }),
+    media_paths: [
+      pathStatus({
+        role: "media_mount",
+        display_name: "Media library",
+        path: "/media",
+        status: "healthy",
+        writable: true,
+      }),
+    ],
     queue_health: queueHealth(),
     self_test_available: true,
   };
@@ -1186,8 +1245,108 @@ function runtimeStatus() {
       workers: "/opt/encodr/config/workers.yaml",
     },
     warnings: [],
+    execution_backends: executionBackendStatuses(),
+    runtime_device_paths: runtimeDevicePaths(),
+    execution_preferences: executionPreferences(),
     queue_health: queueHealth(),
   };
+}
+
+function updateStatus() {
+  return {
+    current_version: CURRENT_VERSION,
+    latest_version: CURRENT_VERSION,
+    update_available: false,
+    channel: "internal",
+    status: "ok",
+    release_name: `Encodr v${CURRENT_VERSION}`,
+    release_summary: "Current release installed.",
+    breaking_changes_summary: null,
+    checked_at: "2026-04-21T08:00:00Z",
+    error: null,
+    download_url: null,
+    release_notes_url: null,
+  };
+}
+
+function executionPreferences() {
+  return {
+    preferred_backend: "cpu_only",
+    allow_cpu_fallback: true,
+  };
+}
+
+function runtimeDevicePaths() {
+  return [
+    {
+      path: "/dev/dri/renderD128",
+      exists: true,
+      readable: true,
+      writable: true,
+      is_character_device: true,
+      status: "healthy",
+      message: "Device path is present and readable.",
+      vendor_id: "0x8086",
+      vendor_name: "Intel",
+    },
+  ];
+}
+
+function executionBackendStatuses() {
+  return [
+    {
+      backend: "cpu",
+      preference_key: "cpu_only",
+      detected: true,
+      usable_by_ffmpeg: true,
+      ffmpeg_path_verified: true,
+      status: "healthy",
+      message: "CPU execution is available.",
+      reason_unavailable: null,
+      recommended_usage: "Use CPU execution as the safe fallback on any host.",
+      device_paths: [],
+      details: {},
+    },
+    {
+      backend: "intel_igpu",
+      preference_key: "prefer_intel_igpu",
+      detected: true,
+      usable_by_ffmpeg: false,
+      ffmpeg_path_verified: false,
+      status: "failed",
+      message: "Intel iGPU passthrough is not fully usable by FFmpeg.",
+      reason_unavailable: "Intel QSV hardware is visible but FFmpeg could not initialise it.",
+      recommended_usage: "Expose /dev/dri render devices to the runtime and confirm FFmpeg QSV or VAAPI support.",
+      device_paths: runtimeDevicePaths(),
+      details: {},
+    },
+    {
+      backend: "nvidia_gpu",
+      preference_key: "prefer_nvidia_gpu",
+      detected: false,
+      usable_by_ffmpeg: false,
+      ffmpeg_path_verified: false,
+      status: "failed",
+      message: "No NVIDIA runtime device is visible to the runtime.",
+      reason_unavailable: "No NVIDIA runtime device is visible to the runtime.",
+      recommended_usage: "Expose /dev/nvidia* devices and the NVIDIA container runtime before selecting this backend.",
+      device_paths: [],
+      details: {},
+    },
+    {
+      backend: "amd_gpu",
+      preference_key: "prefer_amd_gpu",
+      detected: false,
+      usable_by_ffmpeg: false,
+      ffmpeg_path_verified: false,
+      status: "failed",
+      message: "AMD GPU passthrough is not fully usable by FFmpeg.",
+      reason_unavailable: "AMD render device is not visible to the runtime.",
+      recommended_usage: "Expose the AMD /dev/dri render device and verify VAAPI support before selecting this backend.",
+      device_paths: [],
+      details: {},
+    },
+  ];
 }
 
 function storageStatus() {

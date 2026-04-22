@@ -1,11 +1,10 @@
 from __future__ import annotations
 
 import platform
-from pathlib import Path
 
 from app.config import WorkerAgentSettings
 from app.version import read_agent_version
-from encodr_shared.worker_runtime import detect_ffmpeg_hwaccels, probe_binary, probe_directory, probe_intel_qsv
+from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_execution_backends
 
 
 def build_capability_summary(settings: WorkerAgentSettings) -> dict[str, object]:
@@ -14,13 +13,13 @@ def build_capability_summary(settings: WorkerAgentSettings) -> dict[str, object]
     execution_modes: list[str] = []
     if ffmpeg.discoverable:
         execution_modes.extend(["remux", "transcode"])
-    qsv_probe = probe_intel_qsv(settings.ffmpeg_path) if ffmpeg.discoverable else None
+    backend_probes = probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else []
 
-    hardware_hints: list[str] = []
-    if qsv_probe is not None and qsv_probe.usable:
-        hardware_hints.append("intel_qsv")
-    elif "vaapi" in detect_ffmpeg_hwaccels(settings.ffmpeg_path) and any(Path("/dev/dri").glob("renderD*")):
-        hardware_hints.append("vaapi")
+    hardware_hints: list[str] = [
+        probe.backend
+        for probe in backend_probes
+        if probe.backend != "cpu" and probe.usable
+    ]
     if not hardware_hints:
         hardware_hints.append("cpu_only")
 

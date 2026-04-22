@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import builtins
 import os
 from pathlib import Path
 import subprocess
@@ -340,6 +341,79 @@ def test_command_addhost_rejects_invalid_host(
     output = capsys.readouterr().out
     assert result == 1
     assert "Host names must not include a scheme, spaces, or commas." in output
+
+
+def test_command_update_prompts_for_restart_after_successful_apply(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+
+    class FakeStatus(SimpleNamespace):
+        pass
+
+    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(
+        encodr_cli,
+        "build_update_checker",
+        lambda _bundle: SimpleNamespace(
+            check_now=lambda: FakeStatus(
+                current_version=CURRENT_VERSION,
+                latest_version="0.3.3",
+                update_available=True,
+                channel="internal",
+                status="ok",
+                release_name="Encodr v0.3.3",
+                release_summary="Platform hardening fixes.",
+                breaking_changes_summary=None,
+                checked_at=None,
+                error=None,
+                download_url="https://example.invalid/encodr.tar.gz",
+            )
+        ),
+    )
+    monkeypatch.setattr(encodr_cli, "apply_archive_update", lambda **_kwargs: None)
+    monkeypatch.setattr(encodr_cli, "command_doctor", lambda _args: 0)
+    monkeypatch.setattr(encodr_cli, "detect_restart_environment", lambda: "lxc")
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "n")
+
+    commands: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = encodr_cli.command_update(
+        argparse.Namespace(project_root=str(project_root), apply=True, yes=True),
+    )
+
+    output = capsys.readouterr().out
+    assert result == 0
+    assert commands == [["docker", "compose", "up", "-d", "--build"]]
+    assert "A restart of this LXC container may still be needed" in output
+    assert "Restart later if newly mounted storage or hardware devices are not visible yet." in output
+
+
+def test_prompt_for_restart_after_update_reboots_when_confirmed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    commands: list[list[str]] = []
+    monkeypatch.setattr(encodr_cli, "detect_restart_environment", lambda: "system")
+    monkeypatch.setattr(builtins, "input", lambda _prompt="": "yes")
+
+    def fake_run(command: list[str], **_kwargs):
+        commands.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    encodr_cli.prompt_for_restart_after_update()
+
+    assert commands == [["reboot"]]
 
 
 def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> None:

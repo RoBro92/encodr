@@ -113,28 +113,59 @@ class WorkerAgentService:
             return None
 
         job = assignment["job"]
-        self.api_client.claim_job(worker_token=session.worker_token, job_id=str(job["job_id"]))
+        job_id = str(job["job_id"])
+        self.api_client.claim_job(worker_token=session.worker_token, job_id=job_id)
         progress_reporter = self._build_progress_reporter(
             worker_token=session.worker_token,
-            job_id=str(job["job_id"]),
+            job_id=job_id,
         )
         execute_kwargs = {
-            "job_id": str(job["job_id"]),
+            "job_id": job_id,
             "plan_payload": dict(job["plan_payload"]),
             "media_payload": dict(job["media_payload"]),
         }
         if "progress_callback" in inspect.signature(self.execution_service.execute).parameters:
             execute_kwargs["progress_callback"] = progress_reporter
-        result = self.execution_service.execute(**execute_kwargs)
-        response = self.api_client.submit_job_result(
-            worker_token=session.worker_token,
-            job_id=str(job["job_id"]),
-            payload={
-                "result_payload": result.model_dump(mode="json"),
-                "runtime_summary": build_runtime_summary(self.settings) | {"last_completed_job_id": str(job["job_id"])},
-            },
-        )
-        return response
+        try:
+            result = self.execution_service.execute(**execute_kwargs)
+            response = self.api_client.submit_job_result(
+                worker_token=session.worker_token,
+                job_id=job_id,
+                payload={
+                    "result_payload": result.model_dump(mode="json"),
+                    "runtime_summary": build_runtime_summary(self.settings) | {"last_completed_job_id": job_id},
+                },
+            )
+            return response
+        except Exception as error:
+            self._best_effort_report_failure(
+                session=session,
+                job_id=job_id,
+                failure_message=str(error),
+                failure_category="worker_agent_error",
+            )
+            raise
+
+    def _best_effort_report_failure(
+        self,
+        *,
+        session: WorkerSession,
+        job_id: str,
+        failure_message: str,
+        failure_category: str,
+    ) -> None:
+        try:
+            self.api_client.report_job_failure(
+                worker_token=session.worker_token,
+                job_id=job_id,
+                payload={
+                    "failure_message": failure_message,
+                    "failure_category": failure_category,
+                    "runtime_summary": build_runtime_summary(self.settings),
+                },
+            )
+        except Exception:
+            return
 
     def _build_progress_reporter(self, *, worker_token: str, job_id: str):
         last_sent_at: datetime | None = None

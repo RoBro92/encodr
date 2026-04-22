@@ -22,6 +22,8 @@ from app.schemas.worker import (
     WorkerInventoryListResponse,
     WorkerInventorySummaryResponse,
     WorkerJobClaimResponse,
+    WorkerJobFailureRequest,
+    WorkerJobFailureResponse,
     WorkerJobProgressRequest,
     WorkerJobProgressResponse,
     WorkerJobPollResponse,
@@ -180,6 +182,30 @@ def report_remote_job_progress(
         )
         session.commit()
         return WorkerJobProgressResponse(**response)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@worker_router.post("/jobs/{job_id}/failure", response_model=WorkerJobFailureResponse)
+def report_remote_job_failure(
+    job_id: str,
+    payload: WorkerJobFailureRequest,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_worker: Worker = Depends(require_authenticated_worker),
+) -> WorkerJobFailureResponse:
+    try:
+        response = service.report_job_failure(
+            session,
+            worker=current_worker,
+            job_id=job_id,
+            failure_message=payload.failure_message,
+            failure_category=payload.failure_category,
+            runtime_summary=payload.runtime_summary.model_dump(mode="json") if payload.runtime_summary is not None else None,
+        )
+        session.commit()
+        return WorkerJobFailureResponse(**response)
     except ApiServiceError as error:
         session.rollback()
         _raise_service_error(error)

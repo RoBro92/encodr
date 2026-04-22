@@ -2,7 +2,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel
 
-from app.schemas.worker import HealthStatus, QueueHealthSummaryResponse
+from app.schemas.worker import (
+    DevicePathStatusResponse,
+    ExecutionBackendStatusResponse,
+    ExecutionPreferenceResponse,
+    HealthStatus,
+    QueueHealthSummaryResponse,
+)
 
 
 class PathStatusResponse(BaseModel):
@@ -54,6 +60,9 @@ class RuntimeStatusResponse(BaseModel):
     user_count: int | None = None
     config_sources: dict[str, str]
     warnings: list[str]
+    execution_backends: list[ExecutionBackendStatusResponse]
+    runtime_device_paths: list[DevicePathStatusResponse]
+    execution_preferences: ExecutionPreferenceResponse
     queue_health: QueueHealthSummaryResponse
 
 
@@ -65,6 +74,7 @@ class UpdateStatusResponse(BaseModel):
     status: str
     release_name: str | None = None
     release_summary: str | None = None
+    breaking_changes_summary: str | None = None
     checked_at: str | None = None
     error: str | None = None
     download_url: str | None = None

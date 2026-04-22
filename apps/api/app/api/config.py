@@ -4,7 +4,12 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, model_validator
 
 from app.core.dependencies import get_config_bundle, get_session_factory, require_admin_user
-from app.schemas.config import EffectiveConfigResponse, LibraryRootsResponse, ProcessingRulesResponse
+from app.schemas.config import (
+    EffectiveConfigResponse,
+    ExecutionPreferencesResponse,
+    LibraryRootsResponse,
+    ProcessingRulesResponse,
+)
 from app.services.errors import ApiServiceError
 from app.services.library import LibraryService
 from app.services.setup import SetupStateService
@@ -96,6 +101,11 @@ class UpdateProcessingRulesRequest(BaseModel):
     tv_4k: UpdateProcessingRulesetRequest | None = None
 
 
+class UpdateExecutionPreferencesRequest(BaseModel):
+    preferred_backend: str
+    allow_cpu_fallback: bool = True
+
+
 @router.get("/setup/library-roots", response_model=LibraryRootsResponse)
 def get_library_roots(
     config_bundle: ConfigBundle = Depends(get_config_bundle),
@@ -165,5 +175,35 @@ def update_processing_rules(
             tv_4k=payload.tv_4k.model_dump(mode="json") if payload.tv_4k is not None else None,
         )
         return ProcessingRulesResponse(**state)
+    except ApiServiceError as error:
+        _raise_service_error(error)
+
+
+@router.get("/setup/execution-preferences", response_model=ExecutionPreferencesResponse)
+def get_execution_preferences(
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
+    current_user: User = Depends(require_admin_user),
+) -> ExecutionPreferencesResponse:
+    del current_user
+    try:
+        payload = SetupStateService(config_bundle=config_bundle).get_execution_preferences()
+        return ExecutionPreferencesResponse(**payload)
+    except ApiServiceError as error:
+        _raise_service_error(error)
+
+
+@router.put("/setup/execution-preferences", response_model=ExecutionPreferencesResponse)
+def update_execution_preferences(
+    payload: UpdateExecutionPreferencesRequest,
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
+    current_user: User = Depends(require_admin_user),
+) -> ExecutionPreferencesResponse:
+    del current_user
+    try:
+        state = SetupStateService(config_bundle=config_bundle).update_execution_preferences(
+            preferred_backend=payload.preferred_backend,  # type: ignore[arg-type]
+            allow_cpu_fallback=payload.allow_cpu_fallback,
+        )
+        return ExecutionPreferencesResponse(**state)
     except ApiServiceError as error:
         _raise_service_error(error)

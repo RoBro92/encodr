@@ -12,6 +12,7 @@ from sqlalchemy.orm import Session, sessionmaker
 from app.schemas.worker import HealthStatus
 from app.services.audit import AuditService
 from app.services.errors import ApiAuthenticationError, ApiConflictError, ApiNotFoundError
+from app.services.setup import SetupStateService
 from encodr_core.config import ConfigBundle
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
 from encodr_core.planning import ProcessingPlan
@@ -27,7 +28,12 @@ from encodr_db.models import (
 )
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary
-from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_intel_qsv
+from encodr_shared.worker_runtime import (
+    discover_runtime_devices,
+    probe_binary,
+    probe_directory,
+    probe_execution_backends,
+)
 
 
 class WorkerService:
@@ -74,19 +80,29 @@ class WorkerService:
             probe_directory(path, writable_required=True)
             for path in self.config_bundle.workers.local.media_mounts
         ]
-        qsv_probe = probe_intel_qsv(self.config_bundle.app.media.ffmpeg_path)
+        execution_backend_probes = [
+            self._serialise_backend_probe(item)
+            for item in probe_execution_backends(self.config_bundle.app.media.ffmpeg_path)
+        ]
+        runtime_device_paths = discover_runtime_devices()
         execution_backends: list[str] = []
         if ffmpeg["status"] == HealthStatus.HEALTHY:
             execution_backends.extend(["remux", "transcode"])
         hardware_acceleration = [
-            qsv_probe.backend
-            for qsv_probe in [qsv_probe]
-            if qsv_probe.usable
+            item["backend"]
+            for item in execution_backend_probes
+            if item["backend"] != "cpu" and item["usable_by_ffmpeg"]
         ]
         scratch_ready = scratch_path["status"] == "healthy"
         media_ready = all(item["status"] == "healthy" for item in media_paths) if media_paths else False
         binaries_healthy = (
             ffmpeg["status"] == HealthStatus.HEALTHY and ffprobe["status"] == HealthStatus.HEALTHY
+        )
+        execution_preferences = SetupStateService(config_bundle=self.config_bundle).get_execution_preferences()
+        preferred_backend = str(execution_preferences["preferred_backend"])
+        preferred_backend_probe = next(
+            (item for item in execution_backend_probes if item["preference_key"] == preferred_backend),
+            None,
         )
         eligible = bool(self.config_bundle.workers.local.enabled and binaries_healthy and scratch_ready and media_ready)
         if not self.config_bundle.workers.local.enabled:
@@ -107,16 +123,10 @@ class WorkerService:
             "media_paths": media_paths,
             "execution_backends": execution_backends,
             "hardware_acceleration": hardware_acceleration,
-            "hardware_probes": [
-                {
-                    "backend": qsv_probe.backend,
-                    "detected": qsv_probe.detected,
-                    "usable": qsv_probe.usable,
-                    "status": qsv_probe.status,
-                    "message": qsv_probe.message,
-                    "details": qsv_probe.details,
-                }
-            ],
+            "hardware_probes": execution_backend_probes,
+            "runtime_device_paths": runtime_device_paths,
+            "execution_preferences": execution_preferences,
+            "preferred_backend_probe": preferred_backend_probe,
             "eligible": eligible,
             "eligibility_summary": eligibility_summary,
         }
@@ -215,10 +225,22 @@ class WorkerService:
         live_capabilities = {
             "ffmpeg": bool(ffmpeg["discoverable"]),
             "ffprobe": bool(ffprobe["discoverable"]),
-            "intel_qsv": "intel_qsv" in runtime_probes["hardware_acceleration"],
-            "nvenc": False,
-            "vaapi": "vaapi" in runtime_probes["hardware_acceleration"],
-            "amd_amf": False,
+            "intel_qsv": any(
+                item["backend"] == "intel_igpu" and item["usable_by_ffmpeg"]
+                for item in runtime_probes["hardware_probes"]
+            ),
+            "nvenc": any(
+                item["backend"] == "nvidia_gpu" and item["usable_by_ffmpeg"]
+                for item in runtime_probes["hardware_probes"]
+            ),
+            "vaapi": any(
+                item["backend"] in {"intel_igpu", "amd_gpu"} and item["usable_by_ffmpeg"]
+                for item in runtime_probes["hardware_probes"]
+            ),
+            "amd_amf": any(
+                item["backend"] == "amd_gpu" and item["usable_by_ffmpeg"]
+                for item in runtime_probes["hardware_probes"]
+            ),
         }
 
         return {
@@ -238,6 +260,8 @@ class WorkerService:
             "execution_backends": runtime_probes["execution_backends"],
             "hardware_acceleration": runtime_probes["hardware_acceleration"],
             "hardware_probes": runtime_probes["hardware_probes"],
+            "runtime_device_paths": runtime_probes["runtime_device_paths"],
+            "execution_preferences": runtime_probes["execution_preferences"],
             "scratch_path": runtime_probes["scratch_path"],
             "media_paths": runtime_probes["media_paths"],
             "last_run_started_at": snapshot.last_run_started_at,
@@ -525,6 +549,63 @@ class WorkerService:
             "completed_at": job.completed_at,
         }
 
+    def report_job_failure(
+        self,
+        session: Session,
+        *,
+        worker: Worker,
+        job_id: str,
+        failure_message: str,
+        failure_category: str,
+        runtime_summary: dict | None,
+    ) -> dict[str, object]:
+        repository = JobRepository(session)
+        tracked_files = TrackedFileRepository(session)
+        job = repository.get_by_id(job_id)
+        if job is None:
+            raise ApiNotFoundError("Job could not be found.")
+        if job.assigned_worker_id != worker.id:
+            raise ApiConflictError("Job is not assigned to this worker.")
+        if job.status != JobStatus.RUNNING:
+            raise ApiConflictError("Only running jobs can be marked failed by a worker.")
+
+        completed_at = datetime.now(timezone.utc)
+        result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            final_output_path=None,
+            original_backup_path=None,
+            output_size_bytes=None,
+            exit_code=None,
+            stdout=None,
+            stderr=None,
+            failure_message=failure_message,
+            failure_category=failure_category,
+            verification=None,
+            replacement=None,
+            started_at=job.started_at or completed_at,
+            completed_at=completed_at,
+        )
+        repository.mark_result(job, result)
+        job.last_worker_id = worker.id
+        job.worker_name = worker.display_name
+        tracked_files.update_file_state_from_execution_result(
+            job.tracked_file,
+            ProcessingPlan.model_validate(job.plan_snapshot.payload),
+            result,
+        )
+
+        if runtime_summary is not None:
+            worker.runtime_payload = runtime_summary
+
+        return {
+            "job_id": job.id,
+            "final_status": job.status.value,
+            "completed_at": job.completed_at,
+        }
+
     def report_job_progress(
         self,
         session: Session,
@@ -740,7 +821,11 @@ class WorkerService:
 
     def _local_capability_summary(self) -> dict[str, object]:
         runtime_probes = self._local_runtime_probes()
-        hardware_hints = list(runtime_probes["hardware_acceleration"])
+        hardware_hints = [
+            item["backend"]
+            for item in runtime_probes["hardware_probes"]
+            if item["backend"] != "cpu" and item["usable_by_ffmpeg"]
+        ]
         if not hardware_hints:
             hardware_hints.append("cpu_only")
         return {
@@ -754,6 +839,28 @@ class WorkerService:
             },
             "max_concurrent_jobs": self.config_bundle.workers.local.max_concurrent_jobs,
             "tags": ["local"],
+        }
+
+    @staticmethod
+    def _serialise_backend_probe(probe) -> dict[str, object]:
+        preference_key = {
+            "cpu": "cpu_only",
+            "intel_igpu": "prefer_intel_igpu",
+            "nvidia_gpu": "prefer_nvidia_gpu",
+            "amd_gpu": "prefer_amd_gpu",
+        }.get(probe.backend, probe.backend)
+        return {
+            "backend": probe.backend,
+            "preference_key": preference_key,
+            "detected": probe.detected,
+            "usable_by_ffmpeg": probe.usable,
+            "ffmpeg_path_verified": bool(probe.details.get("ffmpeg_path_verified", probe.usable)),
+            "status": probe.status,
+            "message": probe.message,
+            "reason_unavailable": probe.details.get("reason_unavailable"),
+            "recommended_usage": probe.details.get("recommended_usage"),
+            "device_paths": probe.details.get("device_paths", []),
+            "details": probe.details,
         }
 
     @staticmethod

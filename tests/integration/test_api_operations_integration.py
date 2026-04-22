@@ -388,6 +388,36 @@ def test_processing_rules_can_be_updated_and_are_used_for_planning(
     assert dry_run_payload["items"][0]["action"] == "remux"
 
 
+def test_execution_preferences_can_be_read_and_updated(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _, _, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    get_response = context.client.get("/api/config/setup/execution-preferences", headers=auth.headers)
+    assert get_response.status_code == 200
+    assert get_response.json() == {
+        "preferred_backend": "cpu_only",
+        "allow_cpu_fallback": True,
+    }
+
+    update_response = context.client.put(
+        "/api/config/setup/execution-preferences",
+        json={
+            "preferred_backend": "prefer_intel_igpu",
+            "allow_cpu_fallback": False,
+        },
+        headers=auth.headers,
+    )
+    assert update_response.status_code == 200
+    assert update_response.json() == {
+        "preferred_backend": "prefer_intel_igpu",
+        "allow_cpu_fallback": False,
+    }
+
+
 def test_processing_rules_use_the_most_specific_matching_root(
     tmp_path: Path,
     repo_root: Path,

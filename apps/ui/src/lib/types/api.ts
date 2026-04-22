@@ -256,6 +256,37 @@ export type BinaryStatus = {
   message: string;
 };
 
+export type DevicePathStatus = {
+  path: string;
+  exists: boolean;
+  readable: boolean;
+  writable: boolean;
+  is_character_device: boolean;
+  status: string;
+  message: string;
+  vendor_id: string | null;
+  vendor_name: string | null;
+};
+
+export type ExecutionBackendStatus = {
+  backend: string;
+  preference_key: string;
+  detected: boolean;
+  usable_by_ffmpeg: boolean;
+  ffmpeg_path_verified: boolean;
+  status: string;
+  message: string;
+  reason_unavailable: string | null;
+  recommended_usage: string | null;
+  device_paths: DevicePathStatus[];
+  details: Record<string, unknown>;
+};
+
+export type ExecutionPreferences = {
+  preferred_backend: string;
+  allow_cpu_fallback: boolean;
+};
+
 export type QueueHealthSummary = {
   status: string;
   summary: string;
@@ -298,6 +329,13 @@ export type WorkerStatus = {
   last_failure_message: string | null;
   processed_jobs: number;
   capabilities: Record<string, boolean>;
+  execution_backends: string[];
+  hardware_acceleration: string[];
+  hardware_probes: ExecutionBackendStatus[];
+  runtime_device_paths: DevicePathStatus[];
+  execution_preferences: ExecutionPreferences;
+  scratch_path: Record<string, unknown>;
+  media_paths: Array<Record<string, unknown>>;
   queue_health: QueueHealthSummary;
   self_test_available: boolean;
 };
@@ -351,6 +389,9 @@ export type RuntimeStatus = {
   user_count: number | null;
   config_sources: Record<string, string>;
   warnings: string[];
+  execution_backends: ExecutionBackendStatus[];
+  runtime_device_paths: DevicePathStatus[];
+  execution_preferences: ExecutionPreferences;
   queue_health: QueueHealthSummary;
 };
 
@@ -362,6 +403,7 @@ export type UpdateStatus = {
   status: string;
   release_name: string | null;
   release_summary: string | null;
+  breaking_changes_summary: string | null;
   checked_at: string | null;
   error: string | null;
   download_url: string | null;
@@ -605,6 +647,8 @@ export type LibraryRoots = {
   movies_root: string | null;
   tv_root: string | null;
 };
+
+export type ExecutionPreferencesResponse = ExecutionPreferences;
 
 export type ProcessingRuleValues = {
   target_video_codec: string;

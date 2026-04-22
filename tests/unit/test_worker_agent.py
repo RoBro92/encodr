@@ -170,17 +170,11 @@ def test_worker_agent_does_not_claim_vaapi_without_render_device(
         binary.chmod(0o755)
     (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
 
-    monkeypatch.setattr(worker_agent_capabilities, "detect_ffmpeg_hwaccels", lambda _path: ["vaapi"])
     monkeypatch.setattr(
         worker_agent_capabilities,
-        "probe_intel_qsv",
-        lambda _path: type(
-            "Probe",
-            (),
-            {"usable": False, "backend": "intel_qsv", "detected": False, "status": "failed", "message": "", "details": {}},
-        )(),
+        "probe_execution_backends",
+        lambda _path: [],
     )
-    monkeypatch.setattr(worker_agent_capabilities.Path, "glob", lambda _self, _pattern: iter(()))
 
     summary = build_capability_summary(settings)
 
@@ -296,6 +290,102 @@ def test_worker_agent_process_once_claims_and_submits_result(tmp_path: Path) -> 
     assert response["final_status"] == "completed"
     assert any(call["url"].endswith("/worker/jobs/job-1/claim") for call in requester.calls)
     assert any(call["url"].endswith("/worker/jobs/job-1/result") for call in requester.calls)
+
+
+def test_worker_agent_reports_failure_when_execution_raises(tmp_path: Path) -> None:
+    class FailingExecutionService:
+        def execute(self, *, job_id: str, plan_payload: dict, media_payload: dict) -> ExecutionResult:
+            del job_id, plan_payload, media_payload
+            raise RuntimeError("ffmpeg crashed")
+
+    requester = FakeRequester()
+
+    def request_json(*, method: str, url: str, body: dict | None = None, bearer_token: str | None = None) -> dict:
+        requester.calls.append({"method": method, "url": url, "body": body, "bearer_token": bearer_token})
+        if url.endswith("/worker/jobs/request"):
+            return {
+                "status": "assigned",
+                "job": {
+                    "job_id": "job-1",
+                    "tracked_file_id": "file-1",
+                    "plan_snapshot_id": "plan-1",
+                    "source_path": "/media/input.mkv",
+                    "plan_payload": {
+                        "action": "remux",
+                        "replace": {
+                            "in_place": True,
+                            "require_verification": True,
+                            "keep_original_until_verified": True,
+                            "delete_replaced_source": False,
+                        },
+                        "container": {"target_container": "mkv"},
+                        "selected_streams": {
+                            "video_stream_indices": [0],
+                            "audio_stream_indices": [1],
+                            "subtitle_stream_indices": [],
+                            "attachment_stream_indices": [],
+                            "data_stream_indices": [],
+                        },
+                        "video": {"transcode_required": False, "target_codec": None},
+                        "policy_context": {"policy_version": 1, "selected_profile_name": "movies-default"},
+                        "should_treat_as_protected": False,
+                    },
+                    "media_payload": {
+                        "file_path": "/media/input.mkv",
+                        "file_name": "input.mkv",
+                        "is_4k": False,
+                        "container": {"size_bytes": 123},
+                        "video_streams": [{"index": 0, "codec_name": "hevc", "width": 1920, "height": 1080}],
+                        "audio_streams": [{"index": 1, "codec_name": "eac3", "language": "eng", "channel_layout": "5.1"}],
+                        "subtitle_streams": [],
+                        "attachment_streams": [],
+                        "data_streams": [],
+                    },
+                    "requested_worker_type": None,
+                    "assignment_state": "assigned",
+                    "assigned_worker_id": "worker-1",
+                },
+            }
+        if "/worker/jobs/" in url and url.endswith("/failure"):
+            return {
+                "job_id": "job-1",
+                "final_status": "failed",
+                "completed_at": "2026-04-20T12:03:00Z",
+            }
+        return FakeRequester.request_json(requester, method=method, url=url, body=body, bearer_token=bearer_token)
+
+    requester.request_json = request_json  # type: ignore[attr-defined]
+    client = WorkerApiClient(base_url="http://encodr.test/api", requester=requester)
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_KEY": "remote-amd-01",
+            "ENCODR_WORKER_AGENT_DISPLAY_NAME": "Remote AMD Worker",
+            "ENCODR_WORKER_AGENT_TOKEN_FILE": str(tmp_path / "worker.token"),
+            "ENCODR_WORKER_AGENT_FFMPEG_PATH": str(tmp_path / "bin" / "ffmpeg"),
+            "ENCODR_WORKER_AGENT_FFPROBE_PATH": str(tmp_path / "bin" / "ffprobe"),
+            "ENCODR_WORKER_AGENT_SCRATCH_DIR": str(tmp_path / "scratch"),
+        }
+    )
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("persisted-token", encoding="utf-8")
+    (tmp_path / "bin").mkdir(parents=True, exist_ok=True)
+    for name in ("ffmpeg", "ffprobe"):
+        binary = tmp_path / "bin" / name
+        binary.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+        binary.chmod(0o755)
+    (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
+
+    service = WorkerAgentService(settings=settings, api_client=client, execution_service=FailingExecutionService())
+
+    with pytest.raises(RuntimeError, match="ffmpeg crashed"):
+        service.process_once()
+
+    assert any(call["url"].endswith("/worker/jobs/job-1/claim") for call in requester.calls)
+    failure_calls = [call for call in requester.calls if call["url"].endswith("/worker/jobs/job-1/failure")]
+    assert len(failure_calls) == 1
+    assert failure_calls[0]["body"]["failure_category"] == "worker_agent_error"
+    assert failure_calls[0]["body"]["failure_message"] == "ffmpeg crashed"
 
 
 def test_worker_agent_version_lookup_handles_shallow_paths(monkeypatch: pytest.MonkeyPatch) -> None:

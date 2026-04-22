@@ -94,6 +94,14 @@ class WorkerApiClient:
             bearer_token=worker_token,
         )
 
+    def report_job_failure(self, *, worker_token: str, job_id: str, payload: dict) -> dict:
+        return self.requester.request_json(
+            method="POST",
+            url=f"{self.base_url}/worker/jobs/{job_id}/failure",
+            body=payload,
+            bearer_token=worker_token,
+        )
+
     def submit_job_result(self, *, worker_token: str, job_id: str, payload: dict) -> dict:
         return self.requester.request_json(
             method="POST",

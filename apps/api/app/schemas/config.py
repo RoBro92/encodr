@@ -93,6 +93,11 @@ class LibraryRootsResponse(BaseModel):
     tv_root: str | None = None
 
 
+class ExecutionPreferencesResponse(BaseModel):
+    preferred_backend: str
+    allow_cpu_fallback: bool
+
+
 class ProcessingRuleValuesResponse(BaseModel):
     target_video_codec: str
     output_container: str
