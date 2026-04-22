@@ -284,6 +284,18 @@ class WorkerJobProgressResponse(BaseModel):
     updated_at: datetime
 
 
+class WorkerJobFailureRequest(BaseModel):
+    failure_message: str = Field(min_length=1, max_length=4000)
+    failure_category: str = Field(min_length=1, max_length=255)
+    runtime_summary: WorkerRuntimeSummaryResponse | None = None
+
+
+class WorkerJobFailureResponse(BaseModel):
+    job_id: str
+    final_status: str
+    completed_at: datetime | None = None
+
+
 class WorkerJobResultRequest(BaseModel):
     result_payload: dict[str, Any]
     runtime_summary: WorkerRuntimeSummaryResponse | None = None

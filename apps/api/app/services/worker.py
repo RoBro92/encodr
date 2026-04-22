@@ -549,6 +549,63 @@ class WorkerService:
             "completed_at": job.completed_at,
         }
 
+    def report_job_failure(
+        self,
+        session: Session,
+        *,
+        worker: Worker,
+        job_id: str,
+        failure_message: str,
+        failure_category: str,
+        runtime_summary: dict | None,
+    ) -> dict[str, object]:
+        repository = JobRepository(session)
+        tracked_files = TrackedFileRepository(session)
+        job = repository.get_by_id(job_id)
+        if job is None:
+            raise ApiNotFoundError("Job could not be found.")
+        if job.assigned_worker_id != worker.id:
+            raise ApiConflictError("Job is not assigned to this worker.")
+        if job.status != JobStatus.RUNNING:
+            raise ApiConflictError("Only running jobs can be marked failed by a worker.")
+
+        completed_at = datetime.now(timezone.utc)
+        result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            final_output_path=None,
+            original_backup_path=None,
+            output_size_bytes=None,
+            exit_code=None,
+            stdout=None,
+            stderr=None,
+            failure_message=failure_message,
+            failure_category=failure_category,
+            verification=None,
+            replacement=None,
+            started_at=job.started_at or completed_at,
+            completed_at=completed_at,
+        )
+        repository.mark_result(job, result)
+        job.last_worker_id = worker.id
+        job.worker_name = worker.display_name
+        tracked_files.update_file_state_from_execution_result(
+            job.tracked_file,
+            ProcessingPlan.model_validate(job.plan_snapshot.payload),
+            result,
+        )
+
+        if runtime_summary is not None:
+            worker.runtime_payload = runtime_summary
+
+        return {
+            "job_id": job.id,
+            "final_status": job.status.value,
+            "completed_at": job.completed_at,
+        }
+
     def report_job_progress(
         self,
         session: Session,
