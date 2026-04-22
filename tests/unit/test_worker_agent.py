@@ -16,7 +16,7 @@ sys.modules.pop("app", None)
 
 import app.version as worker_agent_version  # type: ignore  # noqa: E402
 import app.capabilities as worker_agent_capabilities  # type: ignore  # noqa: E402
-from app.capabilities import build_capability_summary  # type: ignore  # noqa: E402
+from app.capabilities import build_capability_summary, build_worker_health  # type: ignore  # noqa: E402
 from app.client import WorkerApiClient  # type: ignore  # noqa: E402
 from app.config import load_settings  # type: ignore  # noqa: E402
 from app.service import WorkerAgentService  # type: ignore  # noqa: E402
@@ -179,6 +179,54 @@ def test_worker_agent_does_not_claim_vaapi_without_render_device(
     summary = build_capability_summary(settings)
 
     assert summary["hardware_hints"] == ["cpu_only"]
+
+
+def test_worker_health_normalises_preferred_backend_keys(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_PREFERRED_BACKEND": "prefer_nvidia_gpu",
+            "ENCODR_WORKER_AGENT_ALLOW_CPU_FALLBACK": "false",
+        }
+    )
+    monkeypatch.setattr(
+        worker_agent_capabilities,
+        "probe_binary",
+        lambda _path: type(
+            "BinaryProbe",
+            (),
+            {
+                "discoverable": True,
+                "configured_path": "ffmpeg",
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "status": "healthy",
+                "message": "ok",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        worker_agent_capabilities,
+        "probe_directory",
+        lambda _path, writable_required: {
+            "status": "healthy",
+            "path": ".",
+            "writable_required": writable_required,
+        },
+    )
+    monkeypatch.setattr(
+        worker_agent_capabilities,
+        "probe_execution_backends",
+        lambda _path: [
+            type("Backend", (), {"backend": "nvidia_gpu", "usable": False})(),
+        ],
+    )
+
+    status, summary = build_worker_health(settings)
+
+    assert status == "degraded"
+    assert "CPU fallback is disabled" in summary
 
 
 def test_worker_agent_rejects_non_positive_heartbeat_interval() -> None:

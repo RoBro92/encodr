@@ -136,6 +136,53 @@ def _run_ffmpeg_probe(command: list[str], *, timeout: int = 10) -> tuple[bool, s
     return False, stderr[:1000] if stderr else "FFmpeg hardware probe failed."
 
 
+def _run_text_command(command: list[str], *, timeout: int = 10) -> str:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return ""
+    if completed.returncode != 0:
+        return ""
+    return completed.stdout.strip()
+
+
+def probe_windows_video_adapters() -> list[str]:
+    if os.name != "nt":
+        return []
+    candidates = [
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-CimInstance Win32_VideoController | Select-Object -ExpandProperty AdapterCompatibility",
+        ],
+        [
+            "powershell",
+            "-NoProfile",
+            "-Command",
+            "Get-WmiObject Win32_VideoController | Select-Object -ExpandProperty AdapterCompatibility",
+        ],
+    ]
+    values: list[str] = []
+    for command in candidates:
+        output = _run_text_command(command)
+        if not output:
+            continue
+        for line in output.splitlines():
+            cleaned = line.strip()
+            if cleaned and cleaned not in values:
+                values.append(cleaned)
+        if values:
+            break
+    return values
+
+
 def probe_vaapi(ffmpeg_path: Path | str, *, device_path: Path | str) -> HardwareProbe:
     hwaccels = detect_ffmpeg_hwaccels(ffmpeg_path)
     device = Path(device_path)
@@ -203,20 +250,23 @@ def probe_vaapi(ffmpeg_path: Path | str, *, device_path: Path | str) -> Hardware
 
 def probe_nvenc(ffmpeg_path: Path | str) -> HardwareProbe:
     hwaccels = detect_ffmpeg_hwaccels(ffmpeg_path)
+    windows_adapters = probe_windows_video_adapters()
     device_paths = [
         _device_probe(Path("/dev/nvidiactl")),
         *[_device_probe(path) for path in sorted(Path("/dev").glob("nvidia[0-9]*"))],
     ]
     visible_devices = [item for item in device_paths if item["exists"]]
+    detected = bool(visible_devices) or any("nvidia" in item.lower() for item in windows_adapters)
     if not visible_devices:
-        return HardwareProbe(
-            backend="nvidia_gpu",
-            detected=False,
-            usable=False,
-            status="failed",
-            message="No NVIDIA runtime device is visible to the runtime.",
-            details={"hwaccels": hwaccels, "device_paths": device_paths},
-        )
+        if os.name != "nt" or not detected:
+            return HardwareProbe(
+                backend="nvidia_gpu",
+                detected=False,
+                usable=False,
+                status="failed",
+                message="No NVIDIA runtime device is visible to the runtime.",
+                details={"hwaccels": hwaccels, "device_paths": device_paths, "windows_adapters": windows_adapters},
+            )
 
     resolved_ffmpeg = probe_binary(ffmpeg_path).resolved_path or str(ffmpeg_path)
     usable, error = _run_ffmpeg_probe(
@@ -240,7 +290,7 @@ def probe_nvenc(ffmpeg_path: Path | str) -> HardwareProbe:
     )
     return HardwareProbe(
         backend="nvidia_gpu",
-        detected=True,
+        detected=detected or usable,
         usable=usable,
         status="healthy" if usable else "failed",
         message=(
@@ -251,6 +301,59 @@ def probe_nvenc(ffmpeg_path: Path | str) -> HardwareProbe:
         details={
             "hwaccels": hwaccels,
             "device_paths": device_paths,
+            "windows_adapters": windows_adapters,
+            "stderr": error,
+        },
+    )
+
+
+def probe_amf(ffmpeg_path: Path | str) -> HardwareProbe:
+    hwaccels = detect_ffmpeg_hwaccels(ffmpeg_path)
+    windows_adapters = probe_windows_video_adapters()
+    detected = any("amd" in item.lower() or "advanced micro devices" in item.lower() for item in windows_adapters)
+    if os.name != "nt" and not detected:
+        return HardwareProbe(
+            backend="amd_gpu",
+            detected=False,
+            usable=False,
+            status="failed",
+            message="AMD AMF is only available on supported Windows runtimes.",
+            details={"hwaccels": hwaccels, "windows_adapters": windows_adapters},
+        )
+
+    resolved_ffmpeg = probe_binary(ffmpeg_path).resolved_path or str(ffmpeg_path)
+    usable, error = _run_ffmpeg_probe(
+        [
+            resolved_ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "lavfi",
+            "-i",
+            "testsrc=size=16x16:rate=1",
+            "-frames:v",
+            "1",
+            "-c:v",
+            "h264_amf",
+            "-f",
+            "null",
+            "-",
+        ]
+    )
+    return HardwareProbe(
+        backend="amd_gpu",
+        detected=detected or usable,
+        usable=usable,
+        status="healthy" if usable else "failed",
+        message=(
+            "AMD AMF is available and FFmpeg can initialise it."
+            if usable
+            else "AMD hardware acceleration is visible but FFmpeg could not initialise AMF."
+        ),
+        details={
+            "hwaccels": hwaccels,
+            "windows_adapters": windows_adapters,
             "stderr": error,
         },
     )
@@ -260,6 +363,7 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
     ffmpeg_probe = probe_binary(ffmpeg_path)
     all_devices = discover_runtime_devices()
     hwaccels = detect_ffmpeg_hwaccels(ffmpeg_path) if ffmpeg_probe.discoverable else []
+    windows_adapters = probe_windows_video_adapters()
 
     cpu_probe = HardwareProbe(
         backend="cpu",
@@ -321,7 +425,7 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
     intel_reason = None if intel_usable else (qsv_probe.message if qsv_probe.detected else intel_vaapi_probe.message)
     intel_probe = HardwareProbe(
         backend="intel_igpu",
-        detected=intel_render is not None or qsv_probe.detected,
+        detected=intel_render is not None or qsv_probe.detected or any("intel" in item.lower() for item in windows_adapters),
         usable=intel_usable,
         status="healthy" if intel_usable else "failed",
         message=(
@@ -341,6 +445,7 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
             ),
             "qsv": qsv_probe.details | {"usable": qsv_probe.usable, "message": qsv_probe.message},
             "vaapi": intel_vaapi_probe.details | {"usable": intel_vaapi_probe.usable, "message": intel_vaapi_probe.message},
+            "windows_adapters": windows_adapters,
         },
     )
 
@@ -382,27 +487,36 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
         ),
         details={"device_paths": [_device_probe(amd_render)] if amd_render else [], "hwaccels": hwaccels},
     )
+    amd_amf_probe = probe_amf(ffmpeg_path) if ffmpeg_probe.discoverable else HardwareProbe(
+        backend="amd_gpu",
+        detected=False,
+        usable=False,
+        status="failed",
+        message="FFmpeg is not discoverable, so AMD AMF cannot be tested.",
+        details={"hwaccels": hwaccels},
+    )
     amd_probe = HardwareProbe(
         backend="amd_gpu",
-        detected=amd_render is not None,
-        usable=amd_vaapi_probe.usable,
-        status="healthy" if amd_vaapi_probe.usable else "failed",
+        detected=amd_render is not None or amd_amf_probe.detected,
+        usable=amd_vaapi_probe.usable or amd_amf_probe.usable,
+        status="healthy" if amd_vaapi_probe.usable or amd_amf_probe.usable else "failed",
         message=(
             "AMD GPU video acceleration is available to FFmpeg."
-            if amd_vaapi_probe.usable
+            if amd_vaapi_probe.usable or amd_amf_probe.usable
             else "AMD GPU passthrough is not fully usable by FFmpeg."
         ),
         details={
             "device_paths": [_device_probe(amd_render)] if amd_render else [],
             "ffmpeg_hwaccels": hwaccels,
-            "ffmpeg_path_verified": amd_vaapi_probe.usable,
-            "reason_unavailable": None if amd_vaapi_probe.usable else amd_vaapi_probe.message,
+            "ffmpeg_path_verified": amd_vaapi_probe.usable or amd_amf_probe.usable,
+            "reason_unavailable": None if amd_vaapi_probe.usable or amd_amf_probe.usable else (amd_vaapi_probe.message or amd_amf_probe.message),
             "recommended_usage": (
-                "Use AMD via VAAPI only when the render node is exposed and FFmpeg can initialise it."
-                if amd_vaapi_probe.usable
-                else "Expose the AMD /dev/dri render device and verify VAAPI support before selecting this backend."
+                "Use AMD via VAAPI on Linux runtimes or AMF on supported Windows workers."
+                if amd_vaapi_probe.usable or amd_amf_probe.usable
+                else "Expose the AMD render device on Linux or verify AMF support on Windows before selecting this backend."
             ),
             "vaapi": amd_vaapi_probe.details | {"usable": amd_vaapi_probe.usable, "message": amd_vaapi_probe.message},
+            "amf": amd_amf_probe.details | {"usable": amd_amf_probe.usable, "message": amd_amf_probe.message},
         },
     )
 

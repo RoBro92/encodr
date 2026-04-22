@@ -14,7 +14,7 @@ from app.services.audit import AuditService
 from app.services.errors import ApiAuthenticationError, ApiConflictError, ApiNotFoundError
 from app.services.setup import SetupStateService
 from encodr_core.config import ConfigBundle
-from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
+from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult, normalise_backend_preference
 from encodr_core.planning import ProcessingPlan
 from encodr_db.models import (
     AuditEventType,
@@ -28,6 +28,7 @@ from encodr_db.models import (
 )
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary
+from encodr_shared import collect_runtime_telemetry
 from encodr_shared.worker_runtime import (
     discover_runtime_devices,
     probe_binary,
@@ -104,7 +105,22 @@ class WorkerService:
             (item for item in execution_backend_probes if item["preference_key"] == preferred_backend),
             None,
         )
-        eligible = bool(self.config_bundle.workers.local.enabled and binaries_healthy and scratch_ready and media_ready)
+        transcode_backend_usable = (
+            preferred_backend == "cpu_only"
+            or (
+                preferred_backend_probe is not None
+                and (
+                    preferred_backend_probe["usable_by_ffmpeg"]
+                    or bool(execution_preferences["allow_cpu_fallback"])
+                )
+            )
+        )
+        eligible = bool(
+            self.config_bundle.workers.local.enabled
+            and binaries_healthy
+            and scratch_ready
+            and media_ready
+        )
         if not self.config_bundle.workers.local.enabled:
             eligibility_summary = "The local worker is disabled in configuration."
         elif not binaries_healthy:
@@ -113,6 +129,11 @@ class WorkerService:
             eligibility_summary = "The scratch path is not ready for execution."
         elif not media_ready:
             eligibility_summary = "One or more media mount paths are unavailable."
+        elif not transcode_backend_usable:
+            eligibility_summary = (
+                "The preferred transcode backend is unavailable and CPU fallback is disabled. "
+                "Remux jobs can still run, but transcodes will stay pending."
+            )
         else:
             eligibility_summary = "The local worker can accept execution work."
 
@@ -127,6 +148,7 @@ class WorkerService:
             "runtime_device_paths": runtime_device_paths,
             "execution_preferences": execution_preferences,
             "preferred_backend_probe": preferred_backend_probe,
+            "transcode_backend_usable": transcode_backend_usable,
             "eligible": eligible,
             "eligibility_summary": eligibility_summary,
         }
@@ -203,6 +225,7 @@ class WorkerService:
         snapshot = self.local_worker_loop.status_tracker.snapshot()
         enabled = self.config_bundle.workers.local.enabled
         available = bool(runtime_probes["eligible"])
+        telemetry = snapshot.telemetry or collect_runtime_telemetry(current_backend=snapshot.current_backend)
 
         if not enabled:
             status = HealthStatus.DEGRADED
@@ -213,6 +236,9 @@ class WorkerService:
             status = HealthStatus.FAILED
             summary = "One or more media binaries are unavailable."
         elif not runtime_probes["eligible"]:
+            status = HealthStatus.DEGRADED
+            summary = str(runtime_probes["eligibility_summary"])
+        elif not runtime_probes["transcode_backend_usable"]:
             status = HealthStatus.DEGRADED
             summary = str(runtime_probes["eligibility_summary"])
         elif queue_health["status"] == HealthStatus.DEGRADED:
@@ -270,6 +296,12 @@ class WorkerService:
             "last_result_status": snapshot.last_result_status,
             "last_failure_message": snapshot.last_failure_message,
             "processed_jobs": snapshot.processed_jobs,
+            "current_job_id": snapshot.current_job_id,
+            "current_backend": snapshot.current_backend,
+            "current_stage": snapshot.current_stage,
+            "current_progress_percent": snapshot.current_progress_percent,
+            "current_progress_updated_at": snapshot.current_progress_updated_at,
+            "telemetry": telemetry,
             "capabilities": live_capabilities,
             "queue_health": queue_health,
             "self_test_available": True,
@@ -472,7 +504,17 @@ class WorkerService:
     ) -> dict[str, object]:
         self._ensure_remote_worker_can_execute(worker)
         repository = JobRepository(session)
-        job = repository.fetch_next_pending_remote_job(worker)
+        job = next(
+            (
+                candidate
+                for candidate in repository.fetch_next_pending_remote_jobs(worker)
+                if self._remote_worker_can_run_job(
+                    worker,
+                    ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
+                )
+            ),
+            None,
+        )
         if job is None:
             return {"status": "no_job", "job": None}
 
@@ -503,7 +545,10 @@ class WorkerService:
 
         if job.assigned_worker_id is None:
             repository.assign_worker(job, worker=worker)
-        repository.mark_running_for_worker(job, worker=worker)
+        requested_backend = normalise_backend_preference(
+            str((worker.runtime_payload or {}).get("preferred_backend") or "cpu")
+        )
+        repository.mark_running_for_worker(job, worker=worker, requested_backend=requested_backend)
         claimed_at = job.started_at or datetime.now(timezone.utc)
         return {
             "status": "claimed",
@@ -744,6 +789,14 @@ class WorkerService:
                         "queue": local_config.queue,
                         "scratch_dir": str(local_config.scratch_dir),
                         "media_mounts": [str(path) for path in local_config.media_mounts],
+                        "preferred_backend": status["execution_preferences"]["preferred_backend"],
+                        "allow_cpu_fallback": status["execution_preferences"]["allow_cpu_fallback"],
+                        "current_job_id": status["current_job_id"],
+                        "current_backend": status["current_backend"],
+                        "current_stage": status["current_stage"],
+                        "current_progress_percent": status["current_progress_percent"],
+                        "current_progress_updated_at": status["current_progress_updated_at"],
+                        "telemetry": status["telemetry"],
                         "last_completed_job_id": status["last_processed_job_id"],
                     },
                     "binary_summary": [
@@ -753,6 +806,7 @@ class WorkerService:
                     "assigned_job_ids": [],
                     "last_processed_job_id": status["last_processed_job_id"],
                     "recent_failure_message": status["last_failure_message"],
+                    "recent_jobs": self._recent_job_history(local_worker_name=self.local_worker_loop.worker_name),
                 }
             )
         return item
@@ -786,6 +840,7 @@ class WorkerService:
                     "assigned_job_ids": [job.id for job in worker.assigned_jobs],
                     "last_processed_job_id": runtime_payload.get("last_completed_job_id"),
                     "recent_failure_message": worker.last_health_summary if worker.last_health_status == WorkerHealthStatus.FAILED else None,
+                    "recent_jobs": self._recent_job_history(remote_worker_id=worker.id),
                 }
             )
         return item
@@ -804,6 +859,31 @@ class WorkerService:
             raise ApiConflictError("The worker has not reported usable FFmpeg and FFprobe support.")
         if not capability_summary.get("execution_modes"):
             raise ApiConflictError("The worker has not reported any execution modes.")
+
+    def _remote_worker_can_run_job(self, worker: Worker, plan: ProcessingPlan) -> bool:
+        capability_summary = self._clean_capability_summary(worker.capability_payload)
+        runtime_summary = self._clean_runtime_summary(worker.runtime_payload)
+        binary_support = capability_summary.get("binary_support", {})
+        execution_modes = capability_summary.get("execution_modes", [])
+        if not binary_support.get("ffmpeg") or not binary_support.get("ffprobe"):
+            return False
+        if not execution_modes:
+            return False
+        if not plan.video.transcode_required:
+            return "remux" in execution_modes or "transcode" in execution_modes
+
+        preferred_backend = normalise_backend_preference(str(runtime_summary.get("preferred_backend") or "cpu"))
+        allow_cpu_fallback = bool(runtime_summary.get("allow_cpu_fallback", True))
+        codec = (plan.video.target_codec or "hevc").strip().lower()
+        hardware_hints = {str(item) for item in capability_summary.get("hardware_hints", [])}
+
+        if preferred_backend == "cpu":
+            return "transcode" in execution_modes
+
+        if preferred_backend in hardware_hints and codec in {"h264", "hevc"}:
+            return True
+
+        return allow_cpu_fallback and "transcode" in execution_modes
 
     def _build_remote_job_payload(self, job: Any) -> dict[str, object]:
         media_payload = job.plan_snapshot.probe_snapshot.payload if job.plan_snapshot and job.plan_snapshot.probe_snapshot else {}
@@ -830,7 +910,7 @@ class WorkerService:
             hardware_hints.append("cpu_only")
         return {
             "execution_modes": runtime_probes["execution_backends"],
-            "supported_video_codecs": [],
+            "supported_video_codecs": ["h264", "hevc", "av1"] if runtime_probes["ffmpeg"]["discoverable"] else [],
             "supported_audio_codecs": [],
             "hardware_hints": hardware_hints,
             "binary_support": {
@@ -902,8 +982,57 @@ class WorkerService:
             "queue": payload.get("queue"),
             "scratch_dir": payload.get("scratch_dir"),
             "media_mounts": payload.get("media_mounts", []),
+            "preferred_backend": payload.get("preferred_backend"),
+            "allow_cpu_fallback": payload.get("allow_cpu_fallback"),
+            "current_job_id": payload.get("current_job_id"),
+            "current_backend": payload.get("current_backend"),
+            "current_stage": payload.get("current_stage"),
+            "current_progress_percent": payload.get("current_progress_percent"),
+            "current_progress_updated_at": payload.get("current_progress_updated_at"),
+            "telemetry": payload.get("telemetry"),
             "last_completed_job_id": payload.get("last_completed_job_id"),
         }
+
+    def _recent_job_history(
+        self,
+        *,
+        local_worker_name: str | None = None,
+        remote_worker_id: str | None = None,
+        limit: int = 5,
+    ) -> list[dict[str, object]]:
+        if self.session_factory is None:
+            return []
+        with self.session_factory() as session:
+            jobs = JobRepository(session).list_recent_for_worker(
+                worker_name=local_worker_name,
+                worker_id=remote_worker_id,
+                limit=limit,
+            )
+        items: list[dict[str, object]] = []
+        for job in jobs:
+            duration_seconds = None
+            if job.started_at is not None and job.completed_at is not None:
+                started_at = job.started_at
+                completed_at = job.completed_at
+                if started_at.tzinfo is None:
+                    started_at = started_at.replace(tzinfo=timezone.utc)
+                if completed_at.tzinfo is None:
+                    completed_at = completed_at.replace(tzinfo=timezone.utc)
+                duration_seconds = max(0, int((completed_at - started_at).total_seconds()))
+            items.append(
+                {
+                    "job_id": job.id,
+                    "source_filename": job.tracked_file.source_filename if job.tracked_file is not None else None,
+                    "status": job.status.value,
+                    "actual_execution_backend": job.actual_execution_backend,
+                    "requested_execution_backend": job.requested_execution_backend,
+                    "backend_fallback_used": job.backend_fallback_used,
+                    "completed_at": job.completed_at,
+                    "duration_seconds": duration_seconds,
+                    "failure_message": job.failure_message,
+                }
+            )
+        return items
 
     @staticmethod
     def _to_worker_health(value: HealthStatus) -> WorkerHealthStatus:

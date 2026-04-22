@@ -3,21 +3,13 @@ from __future__ import annotations
 from pathlib import Path
 
 from encodr_core.config.base import OutputContainer
+from encodr_core.execution.backend_selection import (
+    quality_flags_for_backend,
+    select_execution_backend,
+)
 from encodr_core.execution.models import ExecutionCommandPlan
 from encodr_core.planning import ProcessingPlan
 from encodr_core.planning.enums import PlanAction
-
-VIDEO_CODEC_MAP = {
-    "hevc": "libx265",
-    "h264": "libx264",
-    "av1": "libaom-av1",
-}
-
-QUALITY_MODE_MAP = {
-    "high_quality": {"preset": "slow", "crf": "18"},
-    "balanced": {"preset": "medium", "crf": "20"},
-    "efficient": {"preset": "medium", "crf": "23"},
-}
 
 
 def build_execution_command_plan(
@@ -27,6 +19,8 @@ def build_execution_command_plan(
     scratch_dir: Path | str,
     ffmpeg_path: Path | str = "/usr/bin/ffmpeg",
     job_id: str | None = None,
+    preferred_backend: str = "cpu_only",
+    allow_cpu_fallback: bool = True,
 ) -> ExecutionCommandPlan:
     resolved_input = Path(input_path)
     resolved_scratch = Path(scratch_dir)
@@ -79,17 +73,25 @@ def build_execution_command_plan(
             ]
         )
         mode = "remux"
+        requested_backend = "cpu"
+        actual_backend = "cpu"
+        actual_accelerator = "cpu"
+        fallback_used = False
+        backend_selection_reason = "Remux and strip-only paths use CPU copy operations."
     else:
-        codec = VIDEO_CODEC_MAP.get(plan.video.target_codec or "", "libx265")
-        quality = QUALITY_MODE_MAP.get(plan.video.quality_mode or "", QUALITY_MODE_MAP["high_quality"])
+        backend_selection = select_execution_backend(
+            ffmpeg_path=ffmpeg_path,
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+            target_codec=plan.video.target_codec,
+        )
+        command[1:1] = backend_selection.command_prefix
+        if backend_selection.video_filter:
+            command.extend(["-vf", backend_selection.video_filter])
         command.extend(
             [
                 "-c:v",
-                codec,
-                "-preset",
-                quality["preset"],
-                "-crf",
-                quality["crf"],
+                backend_selection.video_encoder,
                 "-c:a",
                 "copy",
                 "-c:s",
@@ -100,7 +102,18 @@ def build_execution_command_plan(
                 "copy",
             ]
         )
+        command.extend(
+            quality_flags_for_backend(
+                accelerator=backend_selection.accelerator,
+                quality_mode=plan.video.quality_mode,
+            )
+        )
         mode = "transcode"
+        requested_backend = backend_selection.requested_backend
+        actual_backend = backend_selection.actual_backend
+        actual_accelerator = backend_selection.accelerator
+        fallback_used = backend_selection.fallback_used
+        backend_selection_reason = backend_selection.selection_reason
 
     command.append(str(output_path))
     return ExecutionCommandPlan(
@@ -108,6 +121,11 @@ def build_execution_command_plan(
         input_path=resolved_input,
         output_path=output_path,
         command=command,
+        requested_backend=requested_backend,
+        actual_backend=actual_backend,
+        actual_accelerator=actual_accelerator,
+        fallback_used=fallback_used,
+        backend_selection_reason=backend_selection_reason,
     )
 
 

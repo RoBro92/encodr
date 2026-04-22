@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin, json_type
@@ -63,6 +63,11 @@ class Job(Base, IdMixin, TimestampMixin):
     progress_fps: Mapped[float | None] = mapped_column(Float)
     progress_speed: Mapped[float | None] = mapped_column(Float)
     progress_updated_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    requested_execution_backend: Mapped[str | None] = mapped_column(String(64), index=True)
+    actual_execution_backend: Mapped[str | None] = mapped_column(String(64), index=True)
+    actual_execution_accelerator: Mapped[str | None] = mapped_column(String(64))
+    backend_fallback_used: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
+    backend_selection_reason: Mapped[str | None] = mapped_column(Text)
     failure_message: Mapped[str | None] = mapped_column(Text)
     failure_category: Mapped[str | None] = mapped_column(String(255), index=True)
     input_size_bytes: Mapped[int | None] = mapped_column(BigInteger)

@@ -13,7 +13,7 @@ import {
   useWorkerDetailQuery,
   useWorkersQuery,
 } from "../../lib/api/hooks";
-import { formatDateTime, formatRelativeBoolean } from "../../lib/utils/format";
+import { formatBytes, formatDateTime, formatDurationSeconds, formatRelativeBoolean, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
 export function WorkersPage() {
@@ -44,6 +44,24 @@ export function WorkersPage() {
   const detail = detailQuery.data
     ? {
         ...detailQuery.data,
+        host_summary: detailQuery.data.host_summary ?? {
+          hostname: null,
+          platform: null,
+          agent_version: null,
+          python_version: null,
+        },
+        capability_summary: detailQuery.data.capability_summary ?? {
+          execution_modes: [],
+          supported_video_codecs: [],
+          supported_audio_codecs: [],
+          hardware_hints: [],
+          binary_support: {},
+          max_concurrent_jobs: null,
+          tags: [],
+        },
+        runtime_summary: detailQuery.data.runtime_summary ?? null,
+        binary_summary: detailQuery.data.binary_summary ?? [],
+        recent_jobs: detailQuery.data.recent_jobs ?? [],
         displayHealthStatus:
           detailQuery.data.worker_type === "remote" && !detailQuery.data.last_heartbeat_at
             ? "not_configured"
@@ -152,9 +170,9 @@ export function WorkersPage() {
                   { label: "Enabled", value: formatRelativeBoolean(detail.enabled) },
                   { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
                   { label: "Last seen", value: formatDateTime(detail.last_seen_at) },
-                  { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
-                  { label: "Platform", value: detail.host_summary.platform ?? "Not reported" },
-                  { label: "Agent version", value: detail.host_summary.agent_version ?? "Not reported" },
+                  { label: "Host", value: detail.host_summary?.hostname ?? "Not reported" },
+                  { label: "Platform", value: detail.host_summary?.platform ?? "Not reported" },
+                  { label: "Agent version", value: detail.host_summary?.agent_version ?? "Not reported" },
                 ]}
               />
 
@@ -172,6 +190,40 @@ export function WorkersPage() {
                   <strong>{detail.last_completed_job_id ?? detail.last_processed_job_id ?? "Not reported"}</strong>
                 </div>
               </div>
+
+              {detail.runtime_summary?.current_job_id || detail.runtime_summary?.telemetry ? (
+                <SectionCard title="Current activity">
+                  <div className="card-stack">
+                    {detail.runtime_summary?.current_job_id ? (
+                      <div className="metric-grid metric-grid-compact">
+                        <div className="metric-panel">
+                          <span className="metric-label">Current job</span>
+                          <strong>{detail.runtime_summary.current_job_id}</strong>
+                        </div>
+                        <div className="metric-panel">
+                          <span className="metric-label">Backend</span>
+                          <strong>{formatBackendLabel(detail.runtime_summary.current_backend)}</strong>
+                        </div>
+                        <div className="metric-panel">
+                          <span className="metric-label">Stage</span>
+                          <strong>{detail.runtime_summary.current_stage ? titleCase(detail.runtime_summary.current_stage) : "Running"}</strong>
+                        </div>
+                        <div className="metric-panel">
+                          <span className="metric-label">Progress</span>
+                          <strong>
+                            {detail.runtime_summary.current_progress_percent != null
+                              ? `${detail.runtime_summary.current_progress_percent}%`
+                              : "Starting"}
+                          </strong>
+                        </div>
+                      </div>
+                    ) : null}
+                    {detail.runtime_summary?.telemetry ? (
+                      <TelemetrySummary telemetry={detail.runtime_summary.telemetry} />
+                    ) : null}
+                  </div>
+                </SectionCard>
+              ) : null}
 
               {detail.capability_summary.execution_modes.length > 0 ||
               detail.capability_summary.supported_video_codecs.length > 0 ||
@@ -206,10 +258,112 @@ export function WorkersPage() {
                   </div>
                 </SectionCard>
               ) : null}
+
+              {detail.recent_jobs.length > 0 ? (
+                <SectionCard title="Recent jobs">
+                  <div className="list-stack">
+                    {detail.recent_jobs.map((job) => (
+                      <div key={job.job_id} className="list-row">
+                        <div>
+                          <strong>{job.source_filename ?? job.job_id}</strong>
+                          <p>
+                            {formatBackendLabel(job.actual_execution_backend ?? job.requested_execution_backend)}
+                            {job.backend_fallback_used ? " • CPU fallback used" : ""}
+                          </p>
+                          <p>
+                            {formatDateTime(job.completed_at)}
+                            {job.duration_seconds != null ? ` • ${formatDurationSeconds(job.duration_seconds)}` : ""}
+                          </p>
+                          {job.failure_message ? <p>{job.failure_message}</p> : null}
+                        </div>
+                        <StatusBadge value={job.status} />
+                      </div>
+                    ))}
+                  </div>
+                </SectionCard>
+              ) : null}
             </div>
           </SectionCard>
         ) : null}
       </section>
     </div>
   );
+}
+
+function TelemetrySummary({ telemetry }: { telemetry: Record<string, unknown> }) {
+  const gpu = telemetry.gpu as Record<string, unknown> | null | undefined;
+  return (
+    <div className="metric-grid metric-grid-compact">
+      <div className="metric-panel">
+        <span className="metric-label">CPU</span>
+        <strong>{formatPercentValue(telemetry.cpu_usage_percent)}</strong>
+      </div>
+      <div className="metric-panel">
+        <span className="metric-label">Process CPU</span>
+        <strong>{formatPercentValue(telemetry.process_cpu_usage_percent)}</strong>
+      </div>
+      <div className="metric-panel">
+        <span className="metric-label">Memory</span>
+        <strong>{formatPercentValue(telemetry.memory_usage_percent)}</strong>
+      </div>
+      <div className="metric-panel">
+        <span className="metric-label">Process memory</span>
+        <strong>{formatBytes(readNumber(telemetry.process_memory_bytes))}</strong>
+      </div>
+      <div className="metric-panel">
+        <span className="metric-label">CPU temp</span>
+        <strong>{formatTemperature(telemetry.cpu_temperature_c)}</strong>
+      </div>
+      <div className="metric-panel">
+        <span className="metric-label">GPU</span>
+        <strong>{formatGpuMetric(gpu)}</strong>
+      </div>
+    </div>
+  );
+}
+
+function formatPercentValue(value: unknown) {
+  const parsed = readNumber(value);
+  return parsed == null ? "Unavailable" : `${parsed.toFixed(1)}%`;
+}
+
+function formatTemperature(value: unknown) {
+  const parsed = readNumber(value);
+  return parsed == null ? "Unavailable" : `${parsed.toFixed(1)}°C`;
+}
+
+function formatGpuMetric(gpu: Record<string, unknown> | null | undefined) {
+  if (!gpu) {
+    return "Unavailable";
+  }
+  const usage = readNumber(gpu.usage_percent);
+  const vendor = typeof gpu.vendor === "string" ? gpu.vendor : "GPU";
+  if (usage != null) {
+    return `${vendor} ${usage.toFixed(1)}%`;
+  }
+  const temperature = readNumber(gpu.temperature_c);
+  if (temperature != null) {
+    return `${vendor} ${temperature.toFixed(1)}°C`;
+  }
+  return typeof gpu.message === "string" ? gpu.message : vendor;
+}
+
+function readNumber(value: unknown) {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function formatBackendLabel(value: string | null | undefined) {
+  if (!value) {
+    return "Not reported";
+  }
+  return {
+    cpu: "CPU",
+    cpu_only: "CPU",
+    intel_igpu: "Intel iGPU",
+    prefer_intel_igpu: "Intel iGPU",
+    nvidia_gpu: "NVIDIA",
+    prefer_nvidia_gpu: "NVIDIA",
+    amd_gpu: "AMD",
+    prefer_amd_gpu: "AMD",
+  }[value] ?? value.replace(/_/g, " ");
 }

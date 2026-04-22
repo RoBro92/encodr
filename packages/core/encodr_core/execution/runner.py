@@ -5,6 +5,7 @@ from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
 
+from encodr_core.execution.backend_selection import BackendSelectionError
 from encodr_core.execution.ffmpeg_builder import build_execution_command_plan
 from encodr_core.execution.ffmpeg_client import FFmpegClient
 from encodr_core.execution.models import ExecutionProgressUpdate, ExecutionResult
@@ -26,15 +27,37 @@ class ExecutionRunner:
         job_id: str | None = None,
         total_duration_seconds: float | None = None,
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+        preferred_backend: str = "cpu_only",
+        allow_cpu_fallback: bool = True,
     ) -> ExecutionResult:
         started_at = datetime.now(timezone.utc)
-        command_plan = build_execution_command_plan(
-            plan,
-            input_path=input_path,
-            scratch_dir=scratch_dir,
-            ffmpeg_path=ffmpeg_path,
-            job_id=job_id,
-        )
+        try:
+            command_plan = build_execution_command_plan(
+                plan,
+                input_path=input_path,
+                scratch_dir=scratch_dir,
+                ffmpeg_path=ffmpeg_path,
+                job_id=job_id,
+                preferred_backend=preferred_backend,
+                allow_cpu_fallback=allow_cpu_fallback,
+            )
+        except BackendSelectionError as error:
+            completed_at = datetime.now(timezone.utc)
+            return ExecutionResult(
+                mode="failed",
+                status="failed",
+                command=[],
+                output_path=None,
+                failure_message=str(error),
+                failure_category="backend_unavailable",
+                requested_backend=error.requested_backend,
+                actual_backend=None,
+                actual_accelerator=None,
+                backend_fallback_used=False,
+                backend_selection_reason=str(error),
+                started_at=started_at,
+                completed_at=completed_at,
+            )
 
         if plan.action == PlanAction.SKIP:
             return ExecutionResult(

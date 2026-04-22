@@ -227,12 +227,19 @@ export function JobsPage() {
                         <StatusBadge value={item.status} />
                         {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
                         {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
+                        {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                          <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
+                        ) : null}
+                        {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
                       </div>
                       {item.status === "running" || item.status === "pending" ? <JobProgressBar job={item} compact /> : null}
                     </div>
                     <div className="record-list-meta">
                       <span className="record-list-kicker">{jobOutcomeLabel(item)}</span>
                       <span>{item.worker_name ?? "No worker yet"}</span>
+                      {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                        <span>{formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)}</span>
+                      ) : null}
                       <span>{formatDateTime(item.updated_at)}</span>
                       {item.failure_message ? (
                         <span className="record-list-emphasis">{truncate(item.failure_message, 84)}</span>
@@ -307,7 +314,22 @@ export function JobsPage() {
                   <span className="metric-label">Stage</span>
                   <strong>{detail.progress_stage ? titleCase(detail.progress_stage) : titleCase(detail.status)}</strong>
                 </div>
+                <div className="metric-pill">
+                  <span className="metric-label">Requested backend</span>
+                  <strong>{formatBackendLabel(detail.requested_execution_backend)}</strong>
+                </div>
+                <div className="metric-pill">
+                  <span className="metric-label">Actual backend</span>
+                  <strong>{formatBackendLabel(detail.actual_execution_backend ?? detail.requested_execution_backend)}</strong>
+                </div>
               </section>
+
+              {detail.backend_selection_reason ? (
+                <div className={`info-strip${detail.backend_fallback_used ? " info-strip-warning" : ""}`} role="note">
+                  <strong>{detail.backend_fallback_used ? "Backend fallback" : "Backend selection"}</strong>
+                  <span>{detail.backend_selection_reason}</span>
+                </div>
+              ) : null}
 
               <KeyValueList
                 items={[
@@ -649,4 +671,20 @@ function formatPercent(value: number | null) {
     return "Not measured";
   }
   return `${value.toFixed(value >= 10 ? 0 : 1)}%`;
+}
+
+function formatBackendLabel(value: string | null | undefined) {
+  if (!value) {
+    return "Not recorded";
+  }
+  return {
+    cpu: "CPU",
+    cpu_only: "CPU",
+    intel_igpu: "Intel iGPU",
+    prefer_intel_igpu: "Intel iGPU",
+    nvidia_gpu: "NVIDIA",
+    prefer_nvidia_gpu: "NVIDIA",
+    amd_gpu: "AMD",
+    prefer_amd_gpu: "AMD",
+  }[value] ?? value.replace(/_/g, " ");
 }

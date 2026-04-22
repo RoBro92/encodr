@@ -99,6 +99,14 @@ class WorkerRuntimeSummaryResponse(BaseModel):
     queue: str | None = None
     scratch_dir: str | None = None
     media_mounts: list[str] = Field(default_factory=list)
+    preferred_backend: str | None = None
+    allow_cpu_fallback: bool | None = None
+    current_job_id: str | None = None
+    current_backend: str | None = None
+    current_stage: str | None = None
+    current_progress_percent: int | None = None
+    current_progress_updated_at: datetime | None = None
+    telemetry: dict[str, Any] | None = None
     last_completed_job_id: str | None = None
 
 
@@ -107,6 +115,18 @@ class WorkerBinarySummaryResponse(BaseModel):
     configured_path: str | None = None
     discoverable: bool | None = None
     message: str | None = None
+
+
+class WorkerRecentJobResponse(BaseModel):
+    job_id: str
+    source_filename: str | None = None
+    status: str
+    actual_execution_backend: str | None = None
+    requested_execution_backend: str | None = None
+    backend_fallback_used: bool = False
+    completed_at: datetime | None = None
+    duration_seconds: int | None = None
+    failure_message: str | None = None
 
 
 class WorkerStatusResponse(BaseModel):
@@ -136,6 +156,12 @@ class WorkerStatusResponse(BaseModel):
     last_result_status: str | None = None
     last_failure_message: str | None = None
     processed_jobs: int = 0
+    current_job_id: str | None = None
+    current_backend: str | None = None
+    current_stage: str | None = None
+    current_progress_percent: int | None = None
+    current_progress_updated_at: datetime | None = None
+    telemetry: dict[str, Any] | None = None
     capabilities: dict[str, bool]
     queue_health: QueueHealthSummaryResponse
     self_test_available: bool = True
@@ -181,6 +207,7 @@ class WorkerInventoryDetailResponse(WorkerInventorySummaryResponse):
     assigned_job_ids: list[str] = Field(default_factory=list)
     last_processed_job_id: str | None = None
     recent_failure_message: str | None = None
+    recent_jobs: list[WorkerRecentJobResponse] = Field(default_factory=list)
 
 
 class WorkerInventoryListResponse(BaseModel):

@@ -6,11 +6,13 @@ from pathlib import Path
 
 from app.config import WorkerAgentSettings
 from encodr_core.execution import (
+    BackendSelectionError,
     ExecutionProgressUpdate,
     ExecutionResult,
     ExecutionRunner,
     FFmpegBinaryNotFoundError,
     FFmpegProcessError,
+    build_execution_command_plan,
     calculate_media_savings,
 )
 from encodr_core.media.models import MediaFile
@@ -53,6 +55,8 @@ class RemoteExecutionService:
                 job_id=job_id,
                 total_duration_seconds=media_file.container.duration_seconds,
                 progress_callback=progress_callback,
+                preferred_backend=self.settings.preferred_backend,
+                allow_cpu_fallback=self.settings.allow_cpu_fallback,
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
@@ -66,6 +70,11 @@ class RemoteExecutionService:
                 failure_message=error.message,
                 failure_category="execution_failed",
                 exit_code=error.details.get("exit_code"),
+                requested_backend=error.details.get("requested_backend"),
+                actual_backend=error.details.get("actual_backend"),
+                actual_accelerator=error.details.get("actual_accelerator"),
+                backend_fallback_used=bool(error.details.get("backend_fallback_used", False)),
+                backend_selection_reason=error.details.get("backend_selection_reason"),
                 started_at=completed_at,
                 completed_at=completed_at,
             )
@@ -103,6 +112,41 @@ class RemoteExecutionService:
             )
         return result
 
+    def preview_backend(
+        self,
+        *,
+        job_id: str,
+        plan_payload: dict,
+        media_payload: dict,
+    ) -> dict[str, object]:
+        plan = ProcessingPlan.model_validate(plan_payload)
+        media_file = MediaFile.model_validate(media_payload)
+        try:
+            command_plan = build_execution_command_plan(
+                plan,
+                input_path=media_file.file_path,
+                scratch_dir=self.settings.scratch_dir or ".",
+                ffmpeg_path=self.settings.ffmpeg_path,
+                job_id=job_id,
+                preferred_backend=self.settings.preferred_backend,
+                allow_cpu_fallback=self.settings.allow_cpu_fallback,
+            )
+        except BackendSelectionError as error:
+            return {
+                "requested_backend": error.requested_backend,
+                "actual_backend": None,
+                "actual_accelerator": None,
+                "fallback_used": False,
+                "selection_reason": str(error),
+            }
+        return {
+            "requested_backend": command_plan.requested_backend,
+            "actual_backend": command_plan.actual_backend,
+            "actual_accelerator": command_plan.actual_accelerator,
+            "fallback_used": command_plan.fallback_used,
+            "selection_reason": command_plan.backend_selection_reason,
+        }
+
     def _verify_and_place(
         self,
         *,
@@ -124,6 +168,11 @@ class RemoteExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message="The execution runner did not produce a staged output path.",
                 failure_category="execution_failed",
+                requested_backend=staged_result.requested_backend,
+                actual_backend=staged_result.actual_backend,
+                actual_accelerator=staged_result.actual_accelerator,
+                backend_fallback_used=staged_result.backend_fallback_used,
+                backend_selection_reason=staged_result.backend_selection_reason,
                 verification=VerificationResult(
                     status=VerificationStatus.FAILED,
                     passed=False,
@@ -153,6 +202,11 @@ class RemoteExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message=failure_message,
                 failure_category="verification_failed",
+                requested_backend=staged_result.requested_backend,
+                actual_backend=staged_result.actual_backend,
+                actual_accelerator=staged_result.actual_accelerator,
+                backend_fallback_used=staged_result.backend_fallback_used,
+                backend_selection_reason=staged_result.backend_selection_reason,
                 **staged_metrics,
                 verification=verification,
                 replacement=ReplacementResult.not_required(),
@@ -196,6 +250,11 @@ class RemoteExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message=replacement.failure_message or "Verified output placement failed.",
                 failure_category="replacement_failed",
+                requested_backend=staged_result.requested_backend,
+                actual_backend=staged_result.actual_backend,
+                actual_accelerator=staged_result.actual_accelerator,
+                backend_fallback_used=staged_result.backend_fallback_used,
+                backend_selection_reason=staged_result.backend_selection_reason,
                 **staged_metrics,
                 verification=verification,
                 replacement=replacement,
@@ -217,6 +276,11 @@ class RemoteExecutionService:
             stdout=staged_result.stdout,
             stderr=staged_result.stderr,
             exit_code=staged_result.exit_code,
+            requested_backend=staged_result.requested_backend,
+            actual_backend=staged_result.actual_backend,
+            actual_accelerator=staged_result.actual_accelerator,
+            backend_fallback_used=staged_result.backend_fallback_used,
+            backend_selection_reason=staged_result.backend_selection_reason,
             **final_metrics,
             verification=verification,
             replacement=replacement,
@@ -267,6 +331,11 @@ class RemoteExecutionService:
                 exit_code=staged_result.exit_code,
                 failure_message="Video reduction could not be measured safely, so the output requires manual review.",
                 failure_category="compression_safety_unmeasurable",
+                requested_backend=staged_result.requested_backend,
+                actual_backend=staged_result.actual_backend,
+                actual_accelerator=staged_result.actual_accelerator,
+                backend_fallback_used=staged_result.backend_fallback_used,
+                backend_selection_reason=staged_result.backend_selection_reason,
                 verification=verification,
                 replacement=ReplacementResult.not_required(),
                 started_at=staged_result.started_at,
@@ -288,6 +357,11 @@ class RemoteExecutionService:
                 f"configured safety limit of {limit}%."
             ),
             failure_category="compression_safety_exceeded",
+            requested_backend=staged_result.requested_backend,
+            actual_backend=staged_result.actual_backend,
+            actual_accelerator=staged_result.actual_accelerator,
+            backend_fallback_used=staged_result.backend_fallback_used,
+            backend_selection_reason=staged_result.backend_selection_reason,
             verification=verification,
             replacement=ReplacementResult.not_required(),
             started_at=staged_result.started_at,

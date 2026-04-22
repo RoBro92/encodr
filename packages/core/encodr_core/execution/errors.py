@@ -31,3 +31,7 @@ class FFmpegBinaryNotFoundError(ExecutionError):
 
 class FFmpegProcessError(ExecutionError):
     pass
+
+
+class ExecutionBackendUnavailableError(ExecutionError):
+    pass

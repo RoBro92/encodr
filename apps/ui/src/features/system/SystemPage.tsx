@@ -10,7 +10,7 @@ import {
   useWorkerSelfTestMutation,
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
-import { formatBytes, formatDateTime, formatDurationSeconds, formatRelativeBoolean } from "../../lib/utils/format";
+import { formatBytes, formatDateTime, formatDurationSeconds, formatRelativeBoolean, titleCase } from "../../lib/utils/format";
 
 export function SystemPage() {
   const workerQuery = useWorkerStatusQuery();
@@ -150,9 +150,26 @@ export function SystemPage() {
                 <HealthMetric label="User count" value={runtime.user_count == null ? "Not available" : String(runtime.user_count)} />
                 <HealthMetric label="Scratch path" value={runtime.scratch_dir} />
                 <HealthMetric label="Data path" value={runtime.data_dir} />
-                <HealthMetric label="Current execution path" value="CPU software" />
+                <HealthMetric
+                  label="Current execution path"
+                  value={worker.current_backend ? formatBackendLabel(worker.current_backend) : "Idle"}
+                />
                 <HealthMetric label="Preferred backend" value={formatBackendLabel(runtime.execution_preferences.preferred_backend)} />
               </div>
+              {worker.current_job_id || worker.telemetry ? (
+                <div className="card-stack">
+                  {worker.current_job_id ? (
+                    <div className="info-strip" role="note">
+                      <strong>Current job</strong>
+                      <span>
+                        {worker.current_job_id} • {worker.current_stage ? titleCase(worker.current_stage) : "Running"}
+                        {worker.current_progress_percent != null ? ` • ${worker.current_progress_percent}%` : ""}
+                      </span>
+                    </div>
+                  ) : null}
+                  {worker.telemetry ? <TelemetryRow telemetry={worker.telemetry} /> : null}
+                </div>
+              ) : null}
               <div className="card-stack">
                 <strong>Config sources</strong>
                 <dl className="key-value-list">
@@ -313,6 +330,50 @@ function formatBackendLabel(value: string): string {
     default:
       return value.replace(/_/g, " ");
   }
+}
+
+function TelemetryRow({ telemetry }: { telemetry: Record<string, unknown> }) {
+  const gpu = telemetry.gpu as Record<string, unknown> | null | undefined;
+  return (
+    <div className="metric-grid metric-grid-compact">
+      <HealthMetric label="CPU" value={formatPercentMetric(telemetry.cpu_usage_percent)} />
+      <HealthMetric label="Process CPU" value={formatPercentMetric(telemetry.process_cpu_usage_percent)} />
+      <HealthMetric label="Memory" value={formatPercentMetric(telemetry.memory_usage_percent)} />
+      <HealthMetric label="Process memory" value={formatBytes(readNumber(telemetry.process_memory_bytes))} />
+      <HealthMetric label="CPU temp" value={formatTemperatureMetric(telemetry.cpu_temperature_c)} />
+      <HealthMetric label="GPU" value={formatGpuMetric(gpu)} />
+    </div>
+  );
+}
+
+function formatPercentMetric(value: unknown): string {
+  const number = readNumber(value);
+  return number == null ? "Unavailable" : `${number.toFixed(1)}%`;
+}
+
+function formatTemperatureMetric(value: unknown): string {
+  const number = readNumber(value);
+  return number == null ? "Unavailable" : `${number.toFixed(1)}°C`;
+}
+
+function formatGpuMetric(gpu: Record<string, unknown> | null | undefined): string {
+  if (!gpu) {
+    return "Unavailable";
+  }
+  const vendor = typeof gpu.vendor === "string" ? gpu.vendor : "GPU";
+  const usage = readNumber(gpu.usage_percent);
+  if (usage != null) {
+    return `${vendor} ${usage.toFixed(1)}%`;
+  }
+  const temperature = readNumber(gpu.temperature_c);
+  if (temperature != null) {
+    return `${vendor} ${temperature.toFixed(1)}°C`;
+  }
+  return typeof gpu.message === "string" ? gpu.message : vendor;
+}
+
+function readNumber(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
 }
 
 function BinaryCard({

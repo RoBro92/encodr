@@ -244,7 +244,10 @@ export function ConfigPage() {
             </div>
             <div className="info-strip" role="note">
               <strong>Current execution path</strong>
-              <span>Local execution remains CPU-backed. The backend preference below records operator intent and validates passthrough readiness.</span>
+              <span>
+                Encodr will try to use the preferred backend below when FFmpeg can really initialise it. If the
+                selected backend is unavailable, CPU fallback is used only when you allow it.
+              </span>
             </div>
             <div className="settings-rules-fields settings-rules-fields-compact">
               <label className="field">

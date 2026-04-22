@@ -323,7 +323,7 @@ def test_command_addhost_updates_env_and_recreates_stack(
     assert "Added encodr.stonewallmedia.co.uk to ENCODR_UI_ALLOWED_HOSTS." in output
     env_contents = (project_root / ".env").read_text(encoding="utf-8")
     assert "ENCODR_UI_ALLOWED_HOSTS=localhost,127.0.0.1,encodr.stonewallmedia.co.uk" in env_contents
-    assert recorded == [["docker", "compose", "up", "-d", "--force-recreate"]]
+    assert recorded == [["docker", "compose", "-f", "docker-compose.yml", "up", "-d", "--force-recreate"]]
 
 
 def test_command_addhost_rejects_invalid_host(
@@ -393,7 +393,7 @@ def test_command_update_prompts_for_restart_after_successful_apply(
 
     output = capsys.readouterr().out
     assert result == 0
-    assert commands == [["docker", "compose", "up", "-d", "--build"]]
+    assert commands == [["docker", "compose", "-f", "docker-compose.yml", "up", "-d", "--build"]]
     assert "A restart of this LXC container may still be needed" in output
     assert "Restart later if newly mounted storage or hardware devices are not visible yet." in output
 
@@ -424,7 +424,7 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "install_startup_service" in install_script
     assert "python3 -m venv" in install_script
     assert "\"psycopg[binary]>=3.1,<4.0\"" in install_script
-    assert 'run_with_progress "Launching Docker services" docker compose up -d --build' in install_script
+    assert 'run_with_progress "Launching Docker services" run_managed_compose_in_install_root up -d --build' in install_script
     assert "run_with_progress()" in install_script
     assert "./encodr doctor" in install_script
     assert "DEFAULT_RELEASE_CHANNEL=\"latest\"" in install_script
@@ -444,8 +444,8 @@ def test_install_script_includes_bootstrap_and_health_steps(repo_root: Path) -> 
     assert "Confirm your media library at %s and scratch storage at /temp." in install_script
     assert "encodr mount-setup --validate-only" in install_script
     assert "/etc/systemd/system/encodr.service" in install_script
-    assert "ExecStart=/usr/bin/docker compose up -d" in install_script
-    assert "ExecStop=/usr/bin/docker compose down" in install_script
+    assert "ExecStart=/usr/bin/docker compose ${compose_files} up -d" in install_script
+    assert "ExecStop=/usr/bin/docker compose ${compose_files} down" in install_script
     assert "systemctl enable encodr.service" in install_script
     assert "tmp_dir: unbound variable" not in install_script
     assert "trap 'rm -rf \"${tmp_dir}\"' RETURN" not in install_script
@@ -517,6 +517,32 @@ def test_local_checkout_uses_compose_override_for_dev_data_volumes(repo_root: Pa
         str(repo_root / "infra" / "compose" / "local.override.yml"),
     ]
     assert command[-1] == "ps"
+
+
+def test_compose_command_includes_runtime_override_when_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / ".runtime").mkdir(parents=True, exist_ok=True)
+    runtime_override = project_root / ".runtime" / "compose.runtime.yml"
+    runtime_override.write_text("services: {}\n", encoding="utf-8")
+    calls: list[Path] = []
+    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda root: calls.append(root))
+
+    command = encodr_cli.compose_command(project_root, "ps")
+
+    assert calls == [project_root]
+    assert command == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        str(runtime_override),
+        "ps",
+    ]
 
 
 def test_encodr_wrapper_prefers_managed_cli_venv(repo_root: Path) -> None:

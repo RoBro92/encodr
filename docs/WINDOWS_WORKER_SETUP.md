@@ -31,7 +31,9 @@ From an elevated PowerShell session in the extracted Encodr release directory:
   -RegistrationSecret "<worker-registration-secret>" `
   -Queue "remote-default" `
   -ScratchDir "D:\EncodrScratch" `
-  -MediaMounts "M:\Media"
+  -MediaMounts "M:\Media" `
+  -PreferredBackend "prefer_intel_igpu" `
+  -AllowCpuFallback $true
 ```
 
 The script will:
@@ -58,6 +60,16 @@ The worker token is issued by the Encodr server during registration.
 - If `ffmpeg` or `ffprobe` is not available, the worker will report itself as failed and will not claim jobs.
 - If the scratch path is not writable, the worker will report degraded/failed health and will not claim jobs safely.
 - Capability reporting is intentionally conservative. Encodr only advertises Intel QSV when the worker can really initialise it.
+- Use `-PreferredBackend` to express the worker's preferred execution backend. Supported values are:
+  - `cpu`
+  - `intel_igpu`
+  - `nvidia_gpu`
+  - `amd_gpu`
+  - `cpu_only`
+  - `prefer_intel_igpu`
+  - `prefer_nvidia_gpu`
+  - `prefer_amd_gpu`
+- Use `-AllowCpuFallback $false` if this worker must not fall back to CPU when the preferred hardware path is unavailable.
 
 ## Updating a worker
 
