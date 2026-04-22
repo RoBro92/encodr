@@ -21,6 +21,7 @@ import type {
   FileSelectionPayload,
   FolderBrowseResponse,
   FolderScanSummary,
+  ScanRecordListResponse,
   JobDetail,
   JobListResponse,
   LibraryRoots,
@@ -35,6 +36,8 @@ import type {
   DryRunBatchResponse,
   RecentAnalytics,
   RuntimeStatus,
+  RemoteWorkerOnboardingPayload,
+  RemoteWorkerOnboardingResponse,
   StorageStatus,
   UpdateStatus,
   ReviewDecisionPayload,
@@ -43,6 +46,10 @@ import type {
   ReviewListResponse,
   WorkerInventoryDetail,
   WorkerInventoryListResponse,
+  WorkerPreferencePayload,
+  WatchedJob,
+  WatchedJobListResponse,
+  WatchedJobPayload,
   WorkerRunOnceResponse,
   WorkerStateChangeResponse,
   WorkerSelfTestResponse,
@@ -131,6 +138,36 @@ export function scanFolder(client: ApiClient, payload: ProbeOrPlanPayload): Prom
   });
 }
 
+export function listScans(client: ApiClient): Promise<ScanRecordListResponse> {
+  return client.request<ScanRecordListResponse>("/files/scans");
+}
+
+export function getScan(client: ApiClient, scanId: string): Promise<FolderScanSummary> {
+  return client.request<FolderScanSummary>(`/files/scans/${scanId}`);
+}
+
+export function listWatchedJobs(client: ApiClient): Promise<WatchedJobListResponse> {
+  return client.request<WatchedJobListResponse>("/files/watchers");
+}
+
+export function createWatchedJob(client: ApiClient, payload: WatchedJobPayload): Promise<WatchedJob> {
+  return client.request<WatchedJob>("/files/watchers", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWatchedJob(
+  client: ApiClient,
+  watchedJobId: string,
+  payload: WatchedJobPayload,
+): Promise<WatchedJob> {
+  return client.request<WatchedJob>(`/files/watchers/${watchedJobId}`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function dryRunSelection(client: ApiClient, payload: FileSelectionPayload): Promise<DryRunBatchResponse> {
   return client.request<DryRunBatchResponse>("/files/dry-run", {
     method: "POST",
@@ -177,6 +214,34 @@ export function enableWorker(client: ApiClient, workerId: string): Promise<Worke
 
 export function disableWorker(client: ApiClient, workerId: string): Promise<WorkerStateChangeResponse> {
   return client.request<WorkerStateChangeResponse>(`/workers/${workerId}/disable`, { method: "POST" });
+}
+
+export function setupLocalWorker(client: ApiClient, payload: WorkerPreferencePayload): Promise<WorkerInventoryDetail> {
+  return client.request<WorkerInventoryDetail>("/workers/local/setup", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function updateWorkerPreferences(
+  client: ApiClient,
+  workerId: string,
+  payload: WorkerPreferencePayload,
+): Promise<WorkerInventoryDetail> {
+  return client.request<WorkerInventoryDetail>(`/workers/${workerId}/preferences`, {
+    method: "PUT",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createRemoteWorkerOnboarding(
+  client: ApiClient,
+  payload: RemoteWorkerOnboardingPayload,
+): Promise<RemoteWorkerOnboardingResponse> {
+  return client.request<RemoteWorkerOnboardingResponse>("/workers/remote/onboarding", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
 }
 
 export function listReviewItems(

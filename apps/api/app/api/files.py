@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_config_bundle, get_session, require_admin_user
+from app.core.dependencies import get_config_bundle, get_orchestration_service, get_session, require_admin_user
 from app.schemas.files import (
     BatchPlanItemResponse,
     BatchPlanResponse,
@@ -14,15 +14,20 @@ from app.schemas.files import (
     FolderScanSummaryResponse,
     PlanFileResponse,
     ProbeFileResponse,
+    ScanRecordListResponse,
     DryRunBatchResponse,
     DryRunItemResponse,
     TrackedFileDetailResponse,
     TrackedFileSummaryResponse,
+    WatchedJobListResponse,
+    WatchedJobRequest,
+    WatchedJobResponse,
 )
 from app.schemas.plans import PlanSnapshotDetailResponse, ProbeSnapshotDetailResponse
 from app.services.errors import ApiServiceError
 from app.services.files import FilesService
 from app.services.library import LibraryService
+from app.services.orchestration import OrchestrationService
 from app.services.plans import PlansService
 from app.services.review import ReviewService
 from encodr_core.config import ConfigBundle
@@ -119,13 +124,121 @@ def browse_folder(
 @router.post("/scan", response_model=FolderScanSummaryResponse)
 def scan_folder(
     payload: FilePathRequest,
-    library_service: LibraryService = Depends(get_library_service),
+    orchestration_service: OrchestrationService = Depends(get_orchestration_service),
+    session: Session = Depends(get_session),
     current_user: User = Depends(require_admin_user),
 ) -> FolderScanSummaryResponse:
     del current_user
     try:
-        return FolderScanSummaryResponse(**library_service.scan_directory(payload.source_path))
+        response = orchestration_service.persist_scan(session, source_path=payload.source_path)
+        session.commit()
+        return FolderScanSummaryResponse(**response)
     except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@router.get("/scans", response_model=ScanRecordListResponse)
+def list_scans(
+    session: Session = Depends(get_session),
+    orchestration_service: OrchestrationService = Depends(get_orchestration_service),
+    current_user: User = Depends(require_admin_user),
+) -> ScanRecordListResponse:
+    del current_user
+    return ScanRecordListResponse(
+        items=[
+            FolderScanSummaryResponse(**item)
+            for item in orchestration_service.list_recent_scans(session)
+        ]
+    )
+
+
+@router.get("/scans/{scan_id}", response_model=FolderScanSummaryResponse)
+def get_scan(
+    scan_id: str,
+    session: Session = Depends(get_session),
+    orchestration_service: OrchestrationService = Depends(get_orchestration_service),
+    current_user: User = Depends(require_admin_user),
+) -> FolderScanSummaryResponse:
+    del current_user
+    try:
+        return FolderScanSummaryResponse(**orchestration_service.get_scan(session, scan_id=scan_id))
+    except ApiServiceError as error:
+        _raise_service_error(error)
+
+
+@router.get("/watchers", response_model=WatchedJobListResponse)
+def list_watched_jobs(
+    session: Session = Depends(get_session),
+    orchestration_service: OrchestrationService = Depends(get_orchestration_service),
+    current_user: User = Depends(require_admin_user),
+) -> WatchedJobListResponse:
+    del current_user
+    return WatchedJobListResponse(
+        items=[WatchedJobResponse(**item) for item in orchestration_service.list_watched_jobs(session)]
+    )
+
+
+@router.post("/watchers", response_model=WatchedJobResponse, status_code=201)
+def create_watched_job(
+    payload: WatchedJobRequest,
+    session: Session = Depends(get_session),
+    orchestration_service: OrchestrationService = Depends(get_orchestration_service),
+    current_user: User = Depends(require_admin_user),
+) -> WatchedJobResponse:
+    del current_user
+    try:
+        result = orchestration_service.create_or_update_watched_job(
+            session,
+            watched_job_id=None,
+            display_name=payload.display_name,
+            source_path=payload.source_path,
+            media_class=payload.media_class,
+            ruleset_override=payload.ruleset_override,
+            preferred_worker_id=payload.preferred_worker_id,
+            pinned_worker_id=payload.pinned_worker_id,
+            preferred_backend=payload.preferred_backend,
+            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
+            auto_queue=payload.auto_queue,
+            stage_only=payload.stage_only,
+            enabled=payload.enabled,
+        )
+        session.commit()
+        return WatchedJobResponse(**result)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@router.put("/watchers/{watched_job_id}", response_model=WatchedJobResponse)
+def update_watched_job(
+    watched_job_id: str,
+    payload: WatchedJobRequest,
+    session: Session = Depends(get_session),
+    orchestration_service: OrchestrationService = Depends(get_orchestration_service),
+    current_user: User = Depends(require_admin_user),
+) -> WatchedJobResponse:
+    del current_user
+    try:
+        result = orchestration_service.create_or_update_watched_job(
+            session,
+            watched_job_id=watched_job_id,
+            display_name=payload.display_name,
+            source_path=payload.source_path,
+            media_class=payload.media_class,
+            ruleset_override=payload.ruleset_override,
+            preferred_worker_id=payload.preferred_worker_id,
+            pinned_worker_id=payload.pinned_worker_id,
+            preferred_backend=payload.preferred_backend,
+            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
+            auto_queue=payload.auto_queue,
+            stage_only=payload.stage_only,
+            enabled=payload.enabled,
+        )
+        session.commit()
+        return WatchedJobResponse(**result)
+    except ApiServiceError as error:
+        session.rollback()
         _raise_service_error(error)
 
 
@@ -317,4 +430,3 @@ def plan_file(
     except ApiServiceError as error:
         session.rollback()
         _raise_service_error(error)
-

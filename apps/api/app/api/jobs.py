@@ -116,6 +116,10 @@ def create_job(
             session,
             tracked_file_id=payload.tracked_file_id,
             plan_snapshot_id=payload.plan_snapshot_id,
+            preferred_worker_id=payload.preferred_worker_id,
+            pinned_worker_id=payload.pinned_worker_id,
+            preferred_backend_override=payload.preferred_backend_override,
+            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
         )
         session.commit()
         return JobDetailResponse.from_model(job)
@@ -162,7 +166,14 @@ def create_batch_jobs(
                 source_path=source_file.as_posix(),
             )
             planned_targets.append((source_file.as_posix(), tracked_file, plan_snapshot))
-        batch_results = JobsService().create_batch_jobs(session, planned_targets=planned_targets)
+        batch_results = JobsService().create_batch_jobs(
+            session,
+            planned_targets=planned_targets,
+            preferred_worker_id=payload.preferred_worker_id,
+            pinned_worker_id=payload.pinned_worker_id,
+            preferred_backend_override=payload.preferred_backend_override,
+            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
+        )
         session.commit()
         items = [
             BatchJobItemResponse(

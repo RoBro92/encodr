@@ -436,7 +436,8 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /execution backends/i })).toBeInTheDocument();
     expect(screen.getByText(/operator-managed passthrough/i)).toBeInTheDocument();
-    expect(screen.getByRole("combobox", { name: /preferred execution backend/i })).toBeInTheDocument();
+    expect(screen.getByText(/backend preference is now set per worker/i)).toBeInTheDocument();
+    expect(screen.getAllByRole("link", { name: /workers/i }).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/encodr update --apply/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
   });
@@ -444,6 +445,9 @@ describe("Encodr UI shell", () => {
   it("renders the redesigned library workspace and lets tabs switch cleanly", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
       {
         method: "POST",
         path: "/api/files/scan",
@@ -494,6 +498,9 @@ describe("Encodr UI shell", () => {
   it("shows a missing-roots prompt when library roots have not been set", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [] } },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",
@@ -514,6 +521,9 @@ describe("Encodr UI shell", () => {
   it("scans a folder and runs a dry run from the library action bar", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",
@@ -580,8 +590,8 @@ describe("Encodr UI shell", () => {
     if (selectedFolderCard) {
       expect((await within(selectedFolderCard).findAllByText("/media/Movies")).length).toBeGreaterThan(0);
     }
-    await userEvent.click(screen.getByRole("checkbox", { name: /film one/i }));
-    expect(screen.getByText(/1 file selected/i)).toBeInTheDocument();
+    await userEvent.click(await screen.findByRole("checkbox", { name: /film one/i }));
+    expect(screen.getAllByText(/1 file selected/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^dry run$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /batch plan/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create jobs/i })).toBeInTheDocument();
@@ -608,9 +618,92 @@ describe("Encodr UI shell", () => {
     expect(within(dryRunPanel).getByText(/film one \(2024\)\.mkv/i, { selector: "strong" })).toBeInTheDocument();
   });
 
+  it("shows saved scans and watched folders in the library workspace", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      {
+        method: "GET",
+        path: "/api/files/scans",
+        body: {
+          items: [
+            {
+              scan_id: "scan-1",
+              folder_path: "/ssd/downloads",
+              root_path: "/ssd",
+              source_kind: "watched",
+              watched_job_id: "watch-1",
+              scanned_at: "2026-04-22T11:30:00Z",
+              stale: true,
+              directory_count: 1,
+              direct_directory_count: 1,
+              video_file_count: 2,
+              likely_show_count: 0,
+              likely_season_count: 0,
+              likely_episode_count: 0,
+              likely_film_count: 2,
+              files: [],
+            },
+          ],
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/files/watchers",
+        body: {
+          items: [
+            {
+              id: "watch-1",
+              display_name: "SSD ingest",
+              source_path: "/ssd/downloads",
+              media_class: "movie",
+              ruleset_override: "movies",
+              preferred_worker_id: null,
+              pinned_worker_id: null,
+              preferred_backend: "cpu_only",
+              schedule_windows: [{ days: ["mon", "tue"], start_time: "23:00", end_time: "07:30" }],
+              schedule_summary: "mon,tue 23:00-07:30",
+              auto_queue: true,
+              stage_only: false,
+              enabled: true,
+              last_scan_record_id: "scan-1",
+              last_scan_at: "2026-04-22T11:30:00Z",
+              last_enqueue_at: "2026-04-22T11:31:00Z",
+              last_seen_count: 2,
+              created_at: "2026-04-22T11:00:00Z",
+              updated_at: "2026-04-22T11:31:00Z",
+            },
+          ],
+        },
+      },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: {
+          media_root: "/media",
+          movies_root: "/media/Movies",
+          tv_root: "/media/TV",
+        },
+      },
+    ]);
+
+    renderApp({ route: "/files", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
+    expect(screen.getAllByText("/ssd/downloads").length).toBeGreaterThan(0);
+    expect(screen.getByText(/saved result may be stale/i)).toBeInTheDocument();
+    expect(screen.getByText(/ssd ingest/i)).toBeInTheDocument();
+    expect(screen.getByText(/mon,tue 23:00-07:30/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /reopen/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /edit/i })).toBeInTheDocument();
+  });
+
   it("creates batch jobs from the selected folder without changing the job API", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",
@@ -1060,6 +1153,7 @@ describe("Encodr UI shell", () => {
 
   it("marks a remote worker without a heartbeat as not configured", async () => {
     mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus({ configuration_state: "local_not_configured" }) },
       {
         method: "GET",
         path: "/api/workers",
@@ -1071,6 +1165,7 @@ describe("Encodr UI shell", () => {
               worker_key: "remote-1",
               display_name: "Remote worker",
               worker_type: "remote",
+              worker_state: "remote_registered",
               health_status: "healthy",
               last_seen_at: null,
               last_heartbeat_at: null,
@@ -1084,11 +1179,12 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/workers", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
-    expect(screen.getByText(/not configured/i)).toBeInTheDocument();
+    expect(screen.getByText(/registered/i)).toBeInTheDocument();
   });
 
   it("shows worker current activity, telemetry, and recent jobs in worker detail", async () => {
     mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
       {
         method: "GET",
         path: "/api/workers/worker-local-1",
@@ -1222,11 +1318,14 @@ function analyticsDashboard() {
   };
 }
 
-function workerStatus() {
+function workerStatus(overrides: Record<string, unknown> = {}) {
   return {
+    worker_id: "worker-local-1",
     status: "healthy",
     summary: "The local worker is healthy and available.",
     worker_name: "worker-local",
+    configured: true,
+    configuration_state: "local_healthy",
     mode: "single-node-local",
     local_only: true,
     enabled: true,
@@ -1281,6 +1380,7 @@ function workerStatus() {
     ],
     queue_health: queueHealth(),
     self_test_available: true,
+    ...overrides,
   };
 }
 
@@ -1673,6 +1773,19 @@ function jobDetail() {
     video_space_saved_bytes: null,
     non_video_space_saved_bytes: null,
     compression_reduction_percent: null,
+    assigned_worker_id: null,
+    last_worker_id: null,
+    preferred_worker_id: null,
+    pinned_worker_id: null,
+    preferred_backend_override: null,
+    schedule_windows: [],
+    schedule_summary: null,
+    scheduled_for_at: null,
+    interrupted_at: null,
+    interruption_reason: null,
+    interruption_retryable: true,
+    watched_job_id: null,
+    requested_worker_type: null,
     created_at: "2026-04-20T10:02:30Z",
     updated_at: "2026-04-20T10:02:30Z",
     output_path: null,
@@ -1777,7 +1890,8 @@ function workerInventory() {
     worker_key: "local",
     display_name: "Local worker",
     worker_type: "local",
-    source: "local",
+    worker_state: "local_healthy",
+    source: "configured_local",
     enabled: true,
     registration_status: "registered",
     health_status: "healthy",
@@ -1785,6 +1899,14 @@ function workerInventory() {
     last_seen_at: "2026-04-20T10:05:00Z",
     last_heartbeat_at: "2026-04-20T10:05:00Z",
     last_registration_at: "2026-04-20T10:00:00Z",
+    preferred_backend: "cpu_only",
+    allow_cpu_fallback: true,
+    current_job_id: null,
+    current_backend: null,
+    current_stage: null,
+    current_progress_percent: null,
+    onboarding_platform: null,
+    pairing_expires_at: null,
     capability_summary: {
       execution_modes: ["local"],
       supported_video_codecs: ["hevc"],
@@ -1808,6 +1930,7 @@ function workerInventory() {
       media_mounts: ["/media"],
       preferred_backend: "cpu",
       allow_cpu_fallback: true,
+      schedule_windows: [],
       current_job_id: null,
       current_backend: null,
       current_stage: null,
@@ -1816,6 +1939,8 @@ function workerInventory() {
       telemetry: null,
       last_completed_job_id: null,
     },
+    schedule_windows: [],
+    schedule_summary: null,
     binary_summary: [],
     assigned_job_ids: [],
     last_processed_job_id: null,

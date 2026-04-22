@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from encodr_core.execution import normalise_backend_preference
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
+from encodr_shared.scheduling import next_schedule_opening, schedule_windows_allow_now, schedule_windows_summary
 from encodr_db.models import (
     FileLifecycleState,
     Job,
@@ -32,17 +33,33 @@ class JobRepository:
         *,
         worker_name: str | None = None,
         attempt_count: int = 1,
+        preferred_worker_id: str | None = None,
+        pinned_worker_id: str | None = None,
+        preferred_backend_override: str | None = None,
+        schedule_windows: list[dict] | None = None,
+        watched_job_id: str | None = None,
     ) -> Job:
         payload = plan_snapshot.payload
         replace_payload = payload["replace"]
+        scheduled_for_at = next_schedule_opening(schedule_windows)
+        starts_scheduled = bool(schedule_windows and not schedule_windows_allow_now(schedule_windows))
         job = Job(
             tracked_file_id=tracked_file.id,
             plan_snapshot_id=plan_snapshot.id,
+            preferred_worker_id=preferred_worker_id,
+            pinned_worker_id=pinned_worker_id,
+            watched_job_id=watched_job_id,
+            preferred_backend_override=normalise_backend_preference(preferred_backend_override)
+            if preferred_backend_override is not None
+            else None,
+            schedule_windows=schedule_windows,
+            schedule_summary=schedule_windows_summary(schedule_windows),
             worker_name=worker_name,
-            status=JobStatus.PENDING,
+            status=JobStatus.SCHEDULED if starts_scheduled else JobStatus.PENDING,
             attempt_count=attempt_count,
             requested_worker_type=None,
             input_size_bytes=tracked_file.last_observed_size,
+            scheduled_for_at=scheduled_for_at if starts_scheduled else None,
             verification_status=VerificationStatus.PENDING,
             replacement_status=ReplacementStatus.PENDING,
             replace_in_place=replace_payload["in_place"],
@@ -100,6 +117,29 @@ class JobRepository:
         items = self.fetch_next_pending_remote_jobs(worker, limit=1)
         return items[0] if items else None
 
+    def list_jobs_for_scheduling(self, *, limit: int = 200) -> list[Job]:
+        query = (
+            select(Job)
+            .where(Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED]))
+            .options(
+                joinedload(Job.tracked_file),
+                joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
+            )
+            .order_by(asc(Job.created_at))
+            .limit(limit)
+        )
+        return list(self.session.scalars(query))
+
+    def list_running_jobs(self, *, limit: int = 200) -> list[Job]:
+        query = (
+            select(Job)
+            .where(Job.status == JobStatus.RUNNING)
+            .options(joinedload(Job.assigned_worker), joinedload(Job.tracked_file))
+            .order_by(asc(Job.started_at))
+            .limit(limit)
+        )
+        return list(self.session.scalars(query))
+
     def get_by_id(self, job_id: str) -> Job | None:
         query = (
             select(Job)
@@ -128,6 +168,8 @@ class JobRepository:
         job.status = JobStatus.RUNNING
         job.worker_name = worker_name
         job.started_at = datetime.now(timezone.utc)
+        job.interrupted_at = None
+        job.interruption_reason = None
         job.progress_stage = "starting"
         job.progress_percent = 0
         job.progress_out_time_seconds = 0
@@ -138,6 +180,18 @@ class JobRepository:
             job.requested_execution_backend = normalise_backend_preference(requested_backend)
         if job.tracked_file is not None:
             job.tracked_file.lifecycle_state = job.tracked_file.lifecycle_state.PROCESSING
+        self.session.flush()
+        return job
+
+    def mark_scheduled(self, job: Job, *, scheduled_for_at: datetime | None) -> Job:
+        job.status = JobStatus.SCHEDULED
+        job.scheduled_for_at = scheduled_for_at
+        self.session.flush()
+        return job
+
+    def promote_scheduled(self, job: Job) -> Job:
+        job.status = JobStatus.PENDING
+        job.scheduled_for_at = None
         self.session.flush()
         return job
 
@@ -209,6 +263,26 @@ class JobRepository:
         self.session.flush()
         return job
 
+    def mark_interrupted(
+        self,
+        job: Job,
+        *,
+        interrupted_at: datetime,
+        reason: str,
+        retryable: bool = True,
+    ) -> Job:
+        job.status = JobStatus.INTERRUPTED
+        job.interrupted_at = interrupted_at
+        job.interruption_reason = reason
+        job.interruption_retryable = retryable
+        job.failure_message = reason
+        job.failure_category = "worker_interrupted"
+        job.progress_stage = "interrupted"
+        job.progress_updated_at = interrupted_at
+        job.assigned_worker_id = None
+        self.session.flush()
+        return job
+
     def record_progress(
         self,
         job: Job,
@@ -253,6 +327,13 @@ class JobRepository:
         if limit is not None:
             query = query.limit(limit)
         return list(self.session.scalars(query))
+
+    def has_active_job_for_tracked_file(self, tracked_file_id: str) -> bool:
+        query = select(Job.id).where(
+            Job.tracked_file_id == tracked_file_id,
+            Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.RUNNING]),
+        ).limit(1)
+        return self.session.scalar(query) is not None
 
     def count_by_status(self) -> dict[str, int]:
         rows = self.session.execute(

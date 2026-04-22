@@ -5,12 +5,17 @@ from typing import Any
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.schemas.schedules import ScheduleWindowRequest, ScheduleWindowResponse
 from encodr_db.models import Job
 
 
 class CreateJobRequest(BaseModel):
     tracked_file_id: str | None = None
     plan_snapshot_id: str | None = None
+    preferred_worker_id: str | None = None
+    pinned_worker_id: str | None = None
+    preferred_backend_override: str | None = None
+    schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_target(self) -> "CreateJobRequest":
@@ -24,6 +29,10 @@ class CreateBatchJobsRequest(BaseModel):
     source_path: str | None = None
     folder_path: str | None = None
     selected_paths: list[str] = Field(default_factory=list)
+    preferred_worker_id: str | None = None
+    pinned_worker_id: str | None = None
+    preferred_backend_override: str | None = None
+    schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
 
     @model_validator(mode="after")
     def validate_scope(self) -> "CreateBatchJobsRequest":
@@ -94,6 +103,16 @@ class JobSummaryResponse(BaseModel):
     review_status: str | None = None
     assigned_worker_id: str | None = None
     last_worker_id: str | None = None
+    preferred_worker_id: str | None = None
+    pinned_worker_id: str | None = None
+    preferred_backend_override: str | None = None
+    schedule_windows: list[ScheduleWindowResponse] = Field(default_factory=list)
+    schedule_summary: str | None = None
+    scheduled_for_at: datetime | None = None
+    interrupted_at: datetime | None = None
+    interruption_reason: str | None = None
+    interruption_retryable: bool = True
+    watched_job_id: str | None = None
     requested_worker_type: str | None = None
     created_at: datetime
     updated_at: datetime
@@ -139,6 +158,19 @@ class JobSummaryResponse(BaseModel):
             review_status="open" if job.status.value == "manual_review" else None,
             assigned_worker_id=job.assigned_worker_id,
             last_worker_id=job.last_worker_id,
+            preferred_worker_id=job.preferred_worker_id,
+            pinned_worker_id=job.pinned_worker_id,
+            preferred_backend_override=job.preferred_backend_override,
+            schedule_windows=[
+                ScheduleWindowResponse(**item)
+                for item in (job.schedule_windows or [])
+            ],
+            schedule_summary=job.schedule_summary,
+            scheduled_for_at=job.scheduled_for_at,
+            interrupted_at=job.interrupted_at,
+            interruption_reason=job.interruption_reason,
+            interruption_retryable=job.interruption_retryable,
+            watched_job_id=job.watched_job_id,
             requested_worker_type=job.requested_worker_type.value if job.requested_worker_type is not None else None,
             created_at=job.created_at,
             updated_at=job.updated_at,

@@ -41,6 +41,11 @@ class JobsService:
         tracked_file_id: str | None = None,
         plan_snapshot_id: str | None = None,
         allow_review_approved: bool = False,
+        preferred_worker_id: str | None = None,
+        pinned_worker_id: str | None = None,
+        preferred_backend_override: str | None = None,
+        schedule_windows: list[dict] | None = None,
+        watched_job_id: str | None = None,
     ) -> Job:
         tracked_file, plan_snapshot = self._resolve_target(
             session,
@@ -53,13 +58,21 @@ class JobsService:
             plan_snapshot=plan_snapshot,
             allow_review_approved=allow_review_approved,
         )
-        job = JobRepository(session).create_job_from_plan(tracked_file, plan_snapshot)
+        job = JobRepository(session).create_job_from_plan(
+            tracked_file,
+            plan_snapshot,
+            preferred_worker_id=preferred_worker_id,
+            pinned_worker_id=pinned_worker_id,
+            preferred_backend_override=preferred_backend_override,
+            schedule_windows=schedule_windows,
+            watched_job_id=watched_job_id,
+        )
         return job
 
     def retry_job(self, session: Session, *, job_id: str) -> Job:
         original_job = self.get_job(session, job_id=job_id)
-        if original_job.status not in {JobStatus.FAILED, JobStatus.MANUAL_REVIEW, JobStatus.SKIPPED}:
-            raise ApiConflictError("Only failed, manual-review, or skipped jobs can be retried.")
+        if original_job.status not in {JobStatus.FAILED, JobStatus.MANUAL_REVIEW, JobStatus.SKIPPED, JobStatus.INTERRUPTED}:
+            raise ApiConflictError("Only failed, interrupted, manual-review, or skipped jobs can be retried.")
         self._validate_review_gate(
             session,
             tracked_file=original_job.tracked_file,
@@ -70,6 +83,11 @@ class JobsService:
             original_job.tracked_file,
             original_job.plan_snapshot,
             attempt_count=original_job.attempt_count + 1,
+            preferred_worker_id=original_job.preferred_worker_id,
+            pinned_worker_id=original_job.pinned_worker_id,
+            preferred_backend_override=original_job.preferred_backend_override,
+            schedule_windows=original_job.schedule_windows,
+            watched_job_id=original_job.watched_job_id,
         )
 
     def create_batch_jobs(
@@ -77,6 +95,11 @@ class JobsService:
         session: Session,
         *,
         planned_targets: list[tuple[str, TrackedFile, PlanSnapshot]],
+        preferred_worker_id: str | None = None,
+        pinned_worker_id: str | None = None,
+        preferred_backend_override: str | None = None,
+        schedule_windows: list[dict] | None = None,
+        watched_job_id: str | None = None,
     ) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
         for source_path, tracked_file, plan_snapshot in planned_targets:
@@ -85,6 +108,11 @@ class JobsService:
                     session,
                     tracked_file_id=tracked_file.id,
                     plan_snapshot_id=plan_snapshot.id,
+                    preferred_worker_id=preferred_worker_id,
+                    pinned_worker_id=pinned_worker_id,
+                    preferred_backend_override=preferred_backend_override,
+                    schedule_windows=schedule_windows,
+                    watched_job_id=watched_job_id,
                 )
                 results.append({
                     "source_path": source_path,
@@ -100,6 +128,31 @@ class JobsService:
                     "job": None,
                 })
         return results
+
+    def create_watched_job_if_needed(
+        self,
+        session: Session,
+        *,
+        tracked_file: TrackedFile,
+        plan_snapshot: PlanSnapshot,
+        watched_job_id: str,
+        preferred_worker_id: str | None,
+        pinned_worker_id: str | None,
+        preferred_backend_override: str | None,
+        schedule_windows: list[dict] | None,
+    ) -> Job | None:
+        repository = JobRepository(session)
+        if repository.has_active_job_for_tracked_file(tracked_file.id):
+            return None
+        return repository.create_job_from_plan(
+            tracked_file,
+            plan_snapshot,
+            preferred_worker_id=preferred_worker_id,
+            pinned_worker_id=pinned_worker_id,
+            preferred_backend_override=preferred_backend_override,
+            schedule_windows=schedule_windows,
+            watched_job_id=watched_job_id,
+        )
 
     def _resolve_target(
         self,

@@ -7,6 +7,8 @@ import {
   bootstrapAdmin,
   checkUpdateStatus,
   clearReviewItemProtected,
+  createWatchedJob,
+  createRemoteWorkerOnboarding,
   createBatchJobs,
   createJobFromReviewItem,
   disableWorker,
@@ -22,6 +24,7 @@ import {
   getBootstrapStatus,
   getEffectiveConfig,
   getFile,
+  getScan,
   getLibraryRoots,
   getProcessingRules,
   getJob,
@@ -50,13 +53,29 @@ import {
   retryJob,
   runWorkerOnce,
   scanFolder,
+  setupLocalWorker,
   enableWorker,
+  listScans,
+  listWatchedJobs,
   updateLibraryRoots,
+  updateWatchedJob,
+  updateWorkerPreferences,
   updateExecutionPreferences,
   updateProcessingRules,
 } from "./endpoints";
 import { useSession } from "../../features/auth/AuthProvider";
-import type { CreateBatchJobsPayload, CreateJobPayload, FileSelectionPayload, LoginPayload, ProbeOrPlanPayload, ProcessingRuleValues, ReviewDecisionPayload } from "../types/api";
+import type {
+  CreateBatchJobsPayload,
+  CreateJobPayload,
+  FileSelectionPayload,
+  LoginPayload,
+  ProbeOrPlanPayload,
+  ProcessingRuleValues,
+  ReviewDecisionPayload,
+  RemoteWorkerOnboardingPayload,
+  WatchedJobPayload,
+  WorkerPreferencePayload,
+} from "../types/api";
 
 export function useBootstrapStatusQuery(enabled = true) {
   const { apiClient } = useSession();
@@ -109,6 +128,33 @@ export function useLibraryRootsQuery() {
   return useQuery({
     queryKey: ["config", "library-roots"],
     queryFn: () => getLibraryRoots(apiClient),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useScansQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["library", "scans"],
+    queryFn: () => listScans(apiClient),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useScanDetailQuery(scanId?: string) {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["library", "scan", scanId],
+    queryFn: () => getScan(apiClient, scanId as string),
+    enabled: isAuthenticated && Boolean(scanId),
+  });
+}
+
+export function useWatchedJobsQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["library", "watchers"],
+    queryFn: () => listWatchedJobs(apiClient),
     enabled: isAuthenticated,
   });
 }
@@ -243,6 +289,54 @@ export function useDisableWorkerMutation() {
         queryClient.invalidateQueries({ queryKey: ["workers"] }),
         queryClient.invalidateQueries({ queryKey: ["worker"] }),
         queryClient.invalidateQueries({ queryKey: ["system"] }),
+      ]);
+    },
+  });
+}
+
+export function useSetupLocalWorkerMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: WorkerPreferencePayload) => setupLocalWorker(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
+        queryClient.invalidateQueries({ queryKey: ["system"] }),
+        queryClient.invalidateQueries({ queryKey: ["config", "execution-preferences"] }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateWorkerPreferencesMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ workerId, payload }: { workerId: string; payload: WorkerPreferencePayload }) =>
+      updateWorkerPreferences(apiClient, workerId, payload),
+    onSuccess: async (_, variables) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
+        queryClient.invalidateQueries({ queryKey: ["workers", "detail", variables.workerId] }),
+        queryClient.invalidateQueries({ queryKey: ["system"] }),
+        queryClient.invalidateQueries({ queryKey: ["config", "execution-preferences"] }),
+      ]);
+    },
+  });
+}
+
+export function useCreateRemoteWorkerOnboardingMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: RemoteWorkerOnboardingPayload) => createRemoteWorkerOnboarding(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
       ]);
     },
   });
@@ -450,8 +544,46 @@ export function useCreateJobMutation() {
 
 export function useScanFolderMutation() {
   const { apiClient } = useSession();
+  const queryClient = useQueryClient();
   return useMutation({
     mutationFn: (payload: ProbeOrPlanPayload) => scanFolder(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["library", "scans"] }),
+        queryClient.invalidateQueries({ queryKey: ["library", "watchers"] }),
+      ]);
+    },
+  });
+}
+
+export function useCreateWatchedJobMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: WatchedJobPayload) => createWatchedJob(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["library", "watchers"] }),
+        queryClient.invalidateQueries({ queryKey: ["library", "scans"] }),
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+      ]);
+    },
+  });
+}
+
+export function useUpdateWatchedJobMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ watchedJobId, payload }: { watchedJobId: string; payload: WatchedJobPayload }) =>
+      updateWatchedJob(apiClient, watchedJobId, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["library", "watchers"] }),
+        queryClient.invalidateQueries({ queryKey: ["library", "scans"] }),
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+      ]);
+    },
   });
 }
 

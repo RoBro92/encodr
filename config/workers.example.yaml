@@ -15,17 +15,4 @@ workers:
       intel_qsv: true
       nvenc: false
       vaapi: true
-
-  remote:
-    - id: worker-amd-future
-      enabled: false
-      type: remote
-      queue: remote-amd
-      endpoint: https://worker-amd.internal.example
-      auth_mode: token
-      capabilities:
-        ffmpeg: true
-        ffprobe: true
-        intel_qsv: false
-        amd_amf: true
-      notes: Registration/heartbeat groundwork only. Remote job execution is not implemented yet.
+  remote: []

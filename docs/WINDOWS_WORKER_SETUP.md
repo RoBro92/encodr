@@ -13,11 +13,11 @@ The Windows worker has no local UI. It is installed as a background agent that:
 
 ## Requirements
 
-- Windows host with Python 3.12+
+- Windows host with Python 3.11+
 - `ffmpeg` and `ffprobe` available on `PATH`
 - access to the same media storage paths that the Encodr plan expects
 - a writable scratch path
-- the Encodr worker registration secret from the server
+- a pairing token generated from the Encodr Workers page
 
 ## Install from a checked-out Encodr release
 
@@ -28,7 +28,7 @@ From an elevated PowerShell session in the extracted Encodr release directory:
   -ServerUrl "https://encodr.example.com/api" `
   -WorkerKey "windows-qsv-01" `
   -DisplayName "Windows QSV Worker" `
-  -RegistrationSecret "<worker-registration-secret>" `
+  -PairingToken "<pairing-token>" `
   -Queue "remote-default" `
   -ScratchDir "D:\EncodrScratch" `
   -MediaMounts "M:\Media" `
@@ -55,11 +55,24 @@ Under `C:\ProgramData\EncodrWorker` by default:
 
 The worker token is issued by the Encodr server during registration.
 
+## Pairing flow
+
+The recommended path is:
+
+1. open the Encodr Workers page
+2. choose `Add remote worker`
+3. select `Windows`
+4. copy the generated bootstrap command or script arguments
+5. run the installer in an elevated PowerShell session on the target host
+
+The worker appears in Encodr once it pairs and sends its first heartbeat.
+
 ## Operational notes
 
 - If `ffmpeg` or `ffprobe` is not available, the worker will report itself as failed and will not claim jobs.
 - If the scratch path is not writable, the worker will report degraded/failed health and will not claim jobs safely.
 - Capability reporting is intentionally conservative. Encodr only advertises Intel QSV when the worker can really initialise it.
+- No desktop application is required. The worker runs as a Scheduled Task-backed background agent.
 - Use `-PreferredBackend` to express the worker's preferred execution backend. Supported values are:
   - `cpu`
   - `intel_igpu`

@@ -21,9 +21,11 @@ class ComplianceState(StrEnum):
 
 class JobStatus(StrEnum):
     PENDING = "pending"
+    SCHEDULED = "scheduled"
     RUNNING = "running"
     COMPLETED = "completed"
     FAILED = "failed"
+    INTERRUPTED = "interrupted"
     SKIPPED = "skipped"
     MANUAL_REVIEW = "manual_review"
 

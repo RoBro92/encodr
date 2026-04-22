@@ -5,6 +5,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
 
 from app.api.routes import router
+from app.services.orchestration import BackgroundOrchestrationLoop, OrchestrationService
 from app.core import PasswordHashService, TokenService, load_auth_runtime_settings
 from app.core.security import WorkerTokenService
 from app.core.worker_auth import load_worker_auth_runtime_settings
@@ -59,6 +60,18 @@ def create_app(
         execution_service=worker_execution_service,
         status_tracker=app.state.worker_status_tracker,
     )
+    app.state.orchestration_service = OrchestrationService(
+        config_bundle=bundle,
+        session_factory=session_factory,
+        probe_client_factory=app.state.probe_client_factory,
+    )
+    app.state.orchestration_loop = None
+    if config_bundle is None:
+        orchestration_loop = BackgroundOrchestrationLoop(
+            orchestration_service=app.state.orchestration_service,
+        )
+        orchestration_loop.start()
+        app.state.orchestration_loop = orchestration_loop
 
     app.include_router(router, prefix=bundle.app.api.base_path)
     return app

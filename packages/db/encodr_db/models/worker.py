@@ -35,7 +35,14 @@ class Worker(Base, IdMixin, TimestampMixin):
         nullable=False,
         default=WorkerRegistrationStatus.UNKNOWN,
     )
+    preferred_backend: Mapped[str] = mapped_column(String(64), nullable=False, default="cpu_only")
+    allow_cpu_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    schedule_windows: Mapped[list[dict] | None] = mapped_column(json_type())
     auth_token_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    pairing_token_hash: Mapped[str | None] = mapped_column(String(128), index=True)
+    pairing_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    pairing_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    onboarding_platform: Mapped[str | None] = mapped_column(String(32))
     host_metadata: Mapped[dict | None] = mapped_column(json_type())
     capability_payload: Mapped[dict | None] = mapped_column(json_type())
     runtime_payload: Mapped[dict | None] = mapped_column(json_type())

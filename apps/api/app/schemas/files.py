@@ -5,6 +5,7 @@ from datetime import datetime
 from pydantic import BaseModel, Field, field_validator, model_validator
 
 from app.schemas.plans import PlanSnapshotDetailResponse, ProbeSnapshotDetailResponse
+from app.schemas.schedules import ScheduleWindowRequest, ScheduleWindowResponse
 from encodr_db.models import TrackedFile
 
 
@@ -55,8 +56,13 @@ class FolderBrowseResponse(BaseModel):
 
 
 class FolderScanSummaryResponse(BaseModel):
+    scan_id: str | None = None
     folder_path: str
     root_path: str
+    source_kind: str = "manual"
+    watched_job_id: str | None = None
+    scanned_at: datetime | None = None
+    stale: bool = False
     directory_count: int
     direct_directory_count: int
     video_file_count: int
@@ -65,6 +71,66 @@ class FolderScanSummaryResponse(BaseModel):
     likely_episode_count: int
     likely_film_count: int
     files: list[FolderBrowseEntryResponse]
+
+
+class ScanRecordListResponse(BaseModel):
+    items: list[FolderScanSummaryResponse]
+
+
+class WatchedJobRequest(BaseModel):
+    display_name: str = Field(min_length=1, max_length=255)
+    source_path: str = Field(min_length=1, max_length=4096)
+    media_class: str = Field(default="movie", min_length=1, max_length=32)
+    ruleset_override: str | None = Field(default=None, max_length=32)
+    preferred_worker_id: str | None = Field(default=None, max_length=255)
+    pinned_worker_id: str | None = Field(default=None, max_length=255)
+    preferred_backend: str | None = Field(default=None, max_length=64)
+    schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
+    auto_queue: bool = True
+    stage_only: bool = False
+    enabled: bool = True
+
+    @field_validator("display_name", "source_path", mode="before")
+    @classmethod
+    def trim_required_fields(cls, value: str) -> str:
+        cleaned = value.strip()
+        if not cleaned:
+            raise ValueError("Field must not be empty.")
+        return cleaned
+
+    @field_validator("ruleset_override", "preferred_worker_id", "pinned_worker_id", "preferred_backend", mode="before")
+    @classmethod
+    def trim_optional_fields(cls, value: str | None) -> str | None:
+        if value is None:
+            return None
+        cleaned = value.strip()
+        return cleaned or None
+
+
+class WatchedJobResponse(BaseModel):
+    id: str
+    display_name: str
+    source_path: str
+    media_class: str
+    ruleset_override: str | None = None
+    preferred_worker_id: str | None = None
+    pinned_worker_id: str | None = None
+    preferred_backend: str | None = None
+    schedule_windows: list[ScheduleWindowResponse] = Field(default_factory=list)
+    schedule_summary: str | None = None
+    auto_queue: bool
+    stage_only: bool
+    enabled: bool
+    last_scan_record_id: str | None = None
+    last_scan_at: datetime | None = None
+    last_enqueue_at: datetime | None = None
+    last_seen_count: int = 0
+    created_at: datetime
+    updated_at: datetime
+
+
+class WatchedJobListResponse(BaseModel):
+    items: list[WatchedJobResponse]
 
 
 class DryRunItemResponse(BaseModel):

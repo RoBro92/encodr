@@ -24,6 +24,8 @@ class WorkerSession:
     worker_id: str
     worker_key: str
     worker_token: str
+    preferred_backend: str
+    allow_cpu_fallback: bool
 
 
 class WorkerAgentService:
@@ -56,6 +58,7 @@ class WorkerAgentService:
         health_status, health_summary = build_worker_health(self.settings)
         return {
             "registration_secret": self.settings.registration_secret,
+            "pairing_token": self.settings.pairing_token,
             "worker_key": self.settings.worker_key,
             "display_name": self.settings.display_name,
             "worker_type": "remote",
@@ -79,35 +82,69 @@ class WorkerAgentService:
         }
 
     def register(self) -> WorkerSession:
-        if not self.settings.registration_secret:
-            raise RuntimeError("A registration secret is required when no worker token is configured.")
+        if not self.settings.registration_secret and not self.settings.pairing_token:
+            raise RuntimeError("A pairing token or registration secret is required when no worker token is configured.")
         response = self.api_client.register(self.build_registration_payload())
         worker_token = str(response["worker_token"])
         self.store_worker_token(worker_token)
+        execution_preferences = self._resolve_execution_preferences(response)
         return WorkerSession(
             worker_id=str(response["worker_id"]),
             worker_key=str(response["worker_key"]),
             worker_token=worker_token,
+            preferred_backend=execution_preferences["preferred_backend"],
+            allow_cpu_fallback=execution_preferences["allow_cpu_fallback"],
         )
 
     def ensure_registered(self) -> WorkerSession:
         worker_token = self.load_worker_token()
         if worker_token:
-            return WorkerSession(worker_id="", worker_key=self.settings.worker_key, worker_token=worker_token)
+            return WorkerSession(
+                worker_id="",
+                worker_key=self.settings.worker_key,
+                worker_token=worker_token,
+                preferred_backend=self.settings.preferred_backend,
+                allow_cpu_fallback=self.settings.allow_cpu_fallback,
+            )
         return self.register()
 
     def heartbeat(self) -> dict:
         session = self.ensure_registered()
-        return self.api_client.heartbeat(
+        response = self.api_client.heartbeat(
             worker_token=session.worker_token,
             payload=self.build_heartbeat_payload(),
         )
+        execution_preferences = self._resolve_execution_preferences(
+            response,
+            preferred_backend=session.preferred_backend,
+            allow_cpu_fallback=session.allow_cpu_fallback,
+        )
+        session = WorkerSession(
+            worker_id=str(response["worker_id"]),
+            worker_key=str(response["worker_key"]),
+            worker_token=session.worker_token,
+            preferred_backend=execution_preferences["preferred_backend"],
+            allow_cpu_fallback=execution_preferences["allow_cpu_fallback"],
+        )
+        return response
 
     def process_once(self) -> dict | None:
         session = self.ensure_registered()
-        self.api_client.heartbeat(
+        heartbeat = self.api_client.heartbeat(
             worker_token=session.worker_token,
             payload=self.build_heartbeat_payload(),
+        )
+        execution_preferences = self._resolve_execution_preferences(
+            heartbeat,
+            preferred_backend=session.preferred_backend,
+            allow_cpu_fallback=session.allow_cpu_fallback,
+        )
+        session = WorkerSession(
+            worker_id=str(heartbeat["worker_id"]),
+            worker_key=str(heartbeat["worker_key"]),
+            worker_token=session.worker_token,
+            preferred_backend=execution_preferences["preferred_backend"],
+            allow_cpu_fallback=execution_preferences["allow_cpu_fallback"],
         )
         assignment = self.api_client.request_job(worker_token=session.worker_token)
         if assignment.get("status") != "assigned" or assignment.get("job") is None:
@@ -121,10 +158,12 @@ class WorkerAgentService:
                 job_id=job_id,
                 plan_payload=dict(job["plan_payload"]),
                 media_payload=dict(job["media_payload"]),
+                preferred_backend=session.preferred_backend,
+                allow_cpu_fallback=session.allow_cpu_fallback,
             )
         else:
             backend_preview = {
-                "requested_backend": self.settings.preferred_backend,
+                "requested_backend": session.preferred_backend,
                 "actual_backend": None,
                 "actual_accelerator": None,
                 "fallback_used": False,
@@ -135,6 +174,8 @@ class WorkerAgentService:
             worker_token=session.worker_token,
             job_id=job_id,
             current_backend=(backend_preview.get("actual_backend") or backend_preview.get("requested_backend")),
+            preferred_backend=session.preferred_backend,
+            allow_cpu_fallback=session.allow_cpu_fallback,
         )
         execute_kwargs = {
             "job_id": job_id,
@@ -143,6 +184,9 @@ class WorkerAgentService:
         }
         if "progress_callback" in inspect.signature(self.execution_service.execute).parameters:
             execute_kwargs["progress_callback"] = progress_reporter
+        if "preferred_backend" in inspect.signature(self.execution_service.execute).parameters:
+            execute_kwargs["preferred_backend"] = session.preferred_backend
+            execute_kwargs["allow_cpu_fallback"] = session.allow_cpu_fallback
         try:
             result = self.execution_service.execute(**execute_kwargs)
             response = self.api_client.submit_job_result(
@@ -156,6 +200,8 @@ class WorkerAgentService:
                         current_stage=result.status,
                         current_progress_percent=100 if result.status == "completed" else None,
                         last_completed_job_id=job_id if result.status == "completed" else None,
+                        preferred_backend=session.preferred_backend,
+                        allow_cpu_fallback=session.allow_cpu_fallback,
                     ),
                 },
             )
@@ -190,13 +236,51 @@ class WorkerAgentService:
                         job_id=job_id,
                         current_backend=current_backend,
                         current_stage="failed",
+                        preferred_backend=session.preferred_backend,
+                        allow_cpu_fallback=session.allow_cpu_fallback,
                     ),
                 },
             )
         except Exception:
             return
 
-    def _build_progress_reporter(self, *, worker_token: str, job_id: str, current_backend: str | None):
+    def _resolve_execution_preferences(
+        self,
+        payload: dict,
+        *,
+        preferred_backend: str | None = None,
+        allow_cpu_fallback: bool | None = None,
+    ) -> dict[str, object]:
+        response_preferences = payload.get("execution_preferences")
+        if isinstance(response_preferences, dict):
+            return {
+                "preferred_backend": str(
+                    response_preferences.get("preferred_backend")
+                    or preferred_backend
+                    or self.settings.preferred_backend
+                ),
+                "allow_cpu_fallback": bool(
+                    response_preferences.get("allow_cpu_fallback")
+                    if response_preferences.get("allow_cpu_fallback") is not None
+                    else allow_cpu_fallback
+                    if allow_cpu_fallback is not None
+                    else self.settings.allow_cpu_fallback
+                ),
+            }
+        return {
+            "preferred_backend": preferred_backend or self.settings.preferred_backend,
+            "allow_cpu_fallback": self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback,
+        }
+
+    def _build_progress_reporter(
+        self,
+        *,
+        worker_token: str,
+        job_id: str,
+        current_backend: str | None,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+    ):
         last_sent_at: datetime | None = None
         last_percent: int | None = None
 
@@ -228,6 +312,8 @@ class WorkerAgentService:
                         current_backend=current_backend,
                         current_stage=update.stage,
                         current_progress_percent=int(update.percent) if update.percent is not None else None,
+                        preferred_backend=preferred_backend,
+                        allow_cpu_fallback=allow_cpu_fallback,
                     ),
                 },
             )
@@ -244,9 +330,13 @@ class WorkerAgentService:
         current_stage: str | None = None,
         current_progress_percent: int | None = None,
         last_completed_job_id: str | None = None,
+        preferred_backend: str | None = None,
+        allow_cpu_fallback: bool | None = None,
     ) -> dict[str, object]:
         now = datetime.now(timezone.utc)
         return build_runtime_summary(self.settings) | {
+            "preferred_backend": preferred_backend or self.settings.preferred_backend,
+            "allow_cpu_fallback": self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback,
             "current_job_id": job_id,
             "current_backend": current_backend,
             "current_stage": current_stage,

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shlex
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -27,8 +28,9 @@ from encodr_db.models import (
     WorkerType,
 )
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
-from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary
-from encodr_shared import collect_runtime_telemetry
+from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary, job_allows_worker, resolve_local_worker_configuration, worker_is_dispatchable
+from encodr_shared import collect_runtime_telemetry, read_version
+from encodr_shared.scheduling import normalise_schedule_windows, schedule_windows_summary
 from encodr_shared.worker_runtime import (
     discover_runtime_devices,
     probe_binary,
@@ -70,7 +72,11 @@ class WorkerService:
             "message": probe.message,
         }
 
-    def _local_runtime_probes(self) -> dict[str, object]:
+    def _local_runtime_probes(
+        self,
+        *,
+        execution_preferences: dict[str, object] | None = None,
+    ) -> dict[str, object]:
         ffmpeg = self.binary_status(self.config_bundle.app.media.ffmpeg_path)
         ffprobe = self.binary_status(self.config_bundle.app.media.ffprobe_path)
         scratch_path = probe_directory(
@@ -99,7 +105,9 @@ class WorkerService:
         binaries_healthy = (
             ffmpeg["status"] == HealthStatus.HEALTHY and ffprobe["status"] == HealthStatus.HEALTHY
         )
-        execution_preferences = SetupStateService(config_bundle=self.config_bundle).get_execution_preferences()
+        execution_preferences = execution_preferences or SetupStateService(
+            config_bundle=self.config_bundle
+        ).get_execution_preferences()
         preferred_backend = str(execution_preferences["preferred_backend"])
         preferred_backend_probe = next(
             (item for item in execution_backend_probes if item["preference_key"] == preferred_backend),
@@ -217,36 +225,76 @@ class WorkerService:
             "recent_manual_review_count": recent_manual_review_count,
         }
 
-    def status_summary(self) -> dict[str, object]:
-        runtime_probes = self._local_runtime_probes()
+    def status_summary(self, *, local_worker_override: Worker | None = None) -> dict[str, object]:
+        local_worker = local_worker_override
+        if local_worker is not None:
+            execution_preferences = {
+                "preferred_backend": local_worker.preferred_backend,
+                "allow_cpu_fallback": local_worker.allow_cpu_fallback,
+            }
+        elif self.session_factory is not None:
+            with self.session_factory() as session:
+                local_worker_config = resolve_local_worker_configuration(
+                    session,
+                    config_bundle=self.config_bundle,
+                    worker_name=self.local_worker_loop.worker_name,
+                )
+                local_worker = local_worker_config.worker
+                execution_preferences = {
+                    "preferred_backend": local_worker_config.preferred_backend,
+                    "allow_cpu_fallback": local_worker_config.allow_cpu_fallback,
+                }
+        else:
+            execution_preferences = SetupStateService(config_bundle=self.config_bundle).get_execution_preferences()
+
+        runtime_probes = self._local_runtime_probes(execution_preferences=execution_preferences)
         ffmpeg = runtime_probes["ffmpeg"]
         ffprobe = runtime_probes["ffprobe"]
         queue_health = self.queue_health_summary()
         snapshot = self.local_worker_loop.status_tracker.snapshot()
-        enabled = self.config_bundle.workers.local.enabled
-        available = bool(runtime_probes["eligible"])
+        configured = local_worker is not None
+        enabled = bool(
+            local_worker is not None
+            and local_worker.enabled
+            and self.config_bundle.workers.local.enabled
+        )
+        available = bool(runtime_probes["eligible"] and enabled)
         telemetry = snapshot.telemetry or collect_runtime_telemetry(current_backend=snapshot.current_backend)
 
-        if not enabled:
+        if not configured:
+            status = HealthStatus.UNKNOWN
+            summary = "This host is not configured as a worker yet."
+            configuration_state = "local_not_configured"
+        elif not local_worker.enabled:
             status = HealthStatus.DEGRADED
-            summary = "The local worker is disabled in configuration."
+            summary = "Local worker is configured but disabled."
+            configuration_state = "local_configured_disabled"
+        elif not self.config_bundle.workers.local.enabled:
+            status = HealthStatus.DEGRADED
+            summary = "Local worker is configured but the local worker runtime is disabled."
+            configuration_state = "local_unavailable"
         elif (not runtime_probes["eligible"]) and (
             ffmpeg["status"] != HealthStatus.HEALTHY or ffprobe["status"] != HealthStatus.HEALTHY
         ):
             status = HealthStatus.FAILED
             summary = "One or more media binaries are unavailable."
+            configuration_state = "local_unavailable"
         elif not runtime_probes["eligible"]:
             status = HealthStatus.DEGRADED
             summary = str(runtime_probes["eligibility_summary"])
+            configuration_state = "local_degraded"
         elif not runtime_probes["transcode_backend_usable"]:
             status = HealthStatus.DEGRADED
             summary = str(runtime_probes["eligibility_summary"])
+            configuration_state = "local_degraded"
         elif queue_health["status"] == HealthStatus.DEGRADED:
             status = HealthStatus.DEGRADED
             summary = "The local worker is available but queue health needs attention."
+            configuration_state = "local_degraded"
         else:
             status = HealthStatus.HEALTHY
             summary = "The local worker is healthy and available."
+            configuration_state = "local_healthy"
 
         live_capabilities = {
             "ffmpeg": bool(ffmpeg["discoverable"]),
@@ -270,9 +318,12 @@ class WorkerService:
         }
 
         return {
+            "worker_id": local_worker.id if local_worker is not None else None,
             "status": status,
             "summary": summary,
-            "worker_name": self.local_worker_loop.worker_name,
+            "worker_name": local_worker.display_name if local_worker is not None else self.local_worker_loop.worker_name,
+            "configured": configured,
+            "configuration_state": configuration_state,
             "mode": "single-node-local",
             "local_only": True,
             "enabled": enabled,
@@ -406,7 +457,8 @@ class WorkerService:
         worker_key: str,
         display_name: str,
         worker_type: str,
-        registration_secret: str,
+        registration_secret: str | None,
+        pairing_token: str | None,
         capability_summary: dict | None,
         host_summary: dict | None,
         runtime_summary: dict | None,
@@ -417,7 +469,39 @@ class WorkerService:
     ) -> dict[str, object]:
         if worker_type != WorkerType.REMOTE.value:
             raise ApiConflictError("Only remote workers can use the registration endpoint.")
-        if registration_secret != self.worker_auth_runtime.registration_secret:
+        repository = WorkerRepository(session)
+        paired_worker: Worker | None = None
+        if pairing_token:
+            paired_worker = repository.get_by_pairing_token_hash(
+                self.worker_token_service.hash_worker_token(pairing_token)
+            )
+            if paired_worker is None or paired_worker.worker_type != WorkerType.REMOTE:
+                self.audit_service.record_event(
+                    session,
+                    event_type=AuditEventType.WORKER_REGISTRATION,
+                    outcome=AuditOutcome.FAILURE,
+                    request=request,
+                    username=worker_key,
+                    details={"worker_key": worker_key, "reason": "invalid_pairing_token"},
+                )
+                raise ApiAuthenticationError("The worker pairing token is invalid.")
+            if paired_worker.pairing_expires_at is not None:
+                pairing_expires_at = paired_worker.pairing_expires_at
+                if pairing_expires_at.tzinfo is None:
+                    pairing_expires_at = pairing_expires_at.replace(tzinfo=timezone.utc)
+                if pairing_expires_at < datetime.now(timezone.utc):
+                    self.audit_service.record_event(
+                        session,
+                        event_type=AuditEventType.WORKER_REGISTRATION,
+                        outcome=AuditOutcome.FAILURE,
+                        request=request,
+                        username=worker_key,
+                        details={"worker_key": worker_key, "reason": "expired_pairing_token"},
+                    )
+                    raise ApiAuthenticationError("The worker pairing token has expired.")
+            worker_key = paired_worker.worker_key
+            display_name = paired_worker.display_name
+        elif registration_secret != self.worker_auth_runtime.registration_secret:
             self.audit_service.record_event(
                 session,
                 event_type=AuditEventType.WORKER_REGISTRATION,
@@ -430,13 +514,30 @@ class WorkerService:
 
         issued_at = datetime.now(timezone.utc)
         worker_token = self.worker_token_service.generate_worker_token()
-        worker = WorkerRepository(session).register_remote_worker(
+        preferred_backend = (
+            paired_worker.preferred_backend
+            if paired_worker is not None and paired_worker.preferred_backend
+            else str((runtime_summary or {}).get("preferred_backend") or "cpu_only")
+        )
+        allow_cpu_fallback = (
+            paired_worker.allow_cpu_fallback
+            if paired_worker is not None
+            else bool((runtime_summary or {}).get("allow_cpu_fallback", True))
+        )
+        runtime_summary_payload = self._merge_runtime_summary_preferences(
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+            runtime_summary=runtime_summary,
+        )
+        worker = repository.register_remote_worker(
             worker_key=worker_key,
             display_name=display_name,
             auth_token_hash=self.worker_token_service.hash_worker_token(worker_token),
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
             host_metadata=host_summary,
             capability_payload=capability_summary,
-            runtime_payload=runtime_summary,
+            runtime_payload=runtime_summary_payload,
             binary_payload={"binaries": binary_summary or []},
             health_status=self._to_worker_health(health_status),
             health_summary=health_summary,
@@ -458,6 +559,10 @@ class WorkerService:
             "worker_token": worker_token,
             "registration_status": worker.registration_status.value,
             "enabled": worker.enabled,
+            "execution_preferences": {
+                "preferred_backend": worker.preferred_backend,
+                "allow_cpu_fallback": worker.allow_cpu_fallback,
+            },
             "health_status": health_status,
             "health_summary": worker.last_health_summary,
             "issued_at": issued_at,
@@ -482,7 +587,11 @@ class WorkerService:
             health_status=self._to_worker_health(health_status),
             health_summary=health_summary,
             capability_payload=capability_summary,
-            runtime_payload=runtime_summary,
+            runtime_payload=self._merge_runtime_summary_preferences(
+                preferred_backend=worker.preferred_backend,
+                allow_cpu_fallback=worker.allow_cpu_fallback,
+                runtime_summary=runtime_summary,
+            ),
             binary_payload={"binaries": binary_summary or []} if binary_summary is not None else None,
             host_metadata=host_summary,
         )
@@ -491,6 +600,10 @@ class WorkerService:
             "worker_key": updated.worker_key,
             "enabled": updated.enabled,
             "registration_status": updated.registration_status.value,
+            "execution_preferences": {
+                "preferred_backend": updated.preferred_backend,
+                "allow_cpu_fallback": updated.allow_cpu_fallback,
+            },
             "health_status": self._from_worker_health(updated.last_health_status),
             "health_summary": updated.last_health_summary,
             "heartbeat_at": heartbeat_at,
@@ -508,9 +621,19 @@ class WorkerService:
             (
                 candidate
                 for candidate in repository.fetch_next_pending_remote_jobs(worker)
+                if job_allows_worker(
+                    candidate,
+                    worker,
+                    preferred_worker=(
+                        WorkerRepository(session).get_by_id(candidate.preferred_worker_id)
+                        if candidate.preferred_worker_id
+                        else None
+                    ),
+                )
                 if self._remote_worker_can_run_job(
                     worker,
                     ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
+                    preferred_backend=candidate.preferred_backend_override,
                 )
             ),
             None,
@@ -545,9 +668,7 @@ class WorkerService:
 
         if job.assigned_worker_id is None:
             repository.assign_worker(job, worker=worker)
-        requested_backend = normalise_backend_preference(
-            str((worker.runtime_payload or {}).get("preferred_backend") or "cpu")
-        )
+        requested_backend = normalise_backend_preference(job.preferred_backend_override or worker.preferred_backend or "cpu_only")
         repository.mark_running_for_worker(job, worker=worker, requested_backend=requested_backend)
         claimed_at = job.started_at or datetime.now(timezone.utc)
         return {
@@ -586,7 +707,11 @@ class WorkerService:
         )
 
         if runtime_summary is not None:
-            worker.runtime_payload = runtime_summary
+            worker.runtime_payload = self._merge_runtime_summary_preferences(
+                preferred_backend=worker.preferred_backend,
+                allow_cpu_fallback=worker.allow_cpu_fallback,
+                runtime_summary=runtime_summary,
+            )
 
         return {
             "job_id": job.id,
@@ -643,7 +768,11 @@ class WorkerService:
         )
 
         if runtime_summary is not None:
-            worker.runtime_payload = runtime_summary
+            worker.runtime_payload = self._merge_runtime_summary_preferences(
+                preferred_backend=worker.preferred_backend,
+                allow_cpu_fallback=worker.allow_cpu_fallback,
+                runtime_summary=runtime_summary,
+            )
 
         return {
             "job_id": job.id,
@@ -684,10 +813,119 @@ class WorkerService:
             ),
         )
         if runtime_summary is not None:
-            worker.runtime_payload = runtime_summary
+            worker.runtime_payload = self._merge_runtime_summary_preferences(
+                preferred_backend=worker.preferred_backend,
+                allow_cpu_fallback=worker.allow_cpu_fallback,
+                runtime_summary=runtime_summary,
+            )
         return {
             "job_id": job.id,
             "updated_at": job.progress_updated_at or datetime.now(timezone.utc),
+        }
+
+    def setup_local_worker(
+        self,
+        session: Session,
+        *,
+        display_name: str | None,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None = None,
+    ) -> dict[str, object]:
+        self._validate_local_backend_preferences(
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+        )
+        try:
+            cleaned_schedule = normalise_schedule_windows(schedule_windows)
+        except ValueError as error:
+            raise ApiConflictError(str(error)) from error
+        repository = WorkerRepository(session)
+        worker = repository.upsert_local_worker(
+            worker_key=self.config_bundle.workers.local.id,
+            display_name=display_name or self.local_worker_loop.worker_name,
+            enabled=True,
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+            schedule_windows=cleaned_schedule,
+            host_metadata={"hostname": self.config_bundle.workers.local.host},
+        )
+        return self._local_worker_inventory(worker=worker, detail=True)
+
+    def update_worker_preferences(
+        self,
+        session: Session,
+        *,
+        worker_id: str,
+        display_name: str | None,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None = None,
+    ) -> dict[str, object]:
+        repository = WorkerRepository(session)
+        worker = repository.get_by_id(worker_id) or repository.get_by_key(worker_id)
+        if worker is None:
+            raise ApiNotFoundError("Worker could not be found.")
+        if worker.worker_type == WorkerType.LOCAL:
+            self._validate_local_backend_preferences(
+                preferred_backend=preferred_backend,
+                allow_cpu_fallback=allow_cpu_fallback,
+            )
+        try:
+            cleaned_schedule = normalise_schedule_windows(schedule_windows)
+        except ValueError as error:
+            raise ApiConflictError(str(error)) from error
+        repository.update_preferences(
+            worker,
+            display_name=display_name,
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+            schedule_windows=cleaned_schedule,
+        )
+        if worker.worker_type == WorkerType.LOCAL:
+            return self._local_worker_inventory(worker=worker, detail=True)
+        return self._remote_worker_summary(worker, detail=True)
+
+    def create_remote_onboarding(
+        self,
+        session: Session,
+        *,
+        platform: str,
+        display_name: str | None,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+        schedule_windows: list[dict] | None = None,
+    ) -> dict[str, object]:
+        repository = WorkerRepository(session)
+        issued_at = datetime.now(timezone.utc)
+        expires_at = issued_at + timedelta(hours=24)
+        pairing_token = self.worker_token_service.generate_worker_token()
+        worker_key = self._build_remote_worker_key(display_name)
+        try:
+            cleaned_schedule = normalise_schedule_windows(schedule_windows)
+        except ValueError as error:
+            raise ApiConflictError(str(error)) from error
+        worker = repository.create_pending_remote_worker(
+            worker_key=worker_key,
+            display_name=display_name or self._default_remote_display_name(platform),
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+            schedule_windows=cleaned_schedule,
+            pairing_token_hash=self.worker_token_service.hash_worker_token(pairing_token),
+            pairing_requested_at=issued_at,
+            pairing_expires_at=expires_at,
+            onboarding_platform=platform,
+        )
+        return {
+            "worker": self._remote_worker_summary(worker, detail=True),
+            "status": "pending_pairing",
+            "pairing_token_expires_at": expires_at,
+            "bootstrap_command": self._build_remote_bootstrap_command(
+                platform=platform,
+                worker=worker,
+                pairing_token=pairing_token,
+            ),
+            "notes": self._remote_bootstrap_notes(platform=platform),
         }
 
     def list_worker_inventory(
@@ -697,8 +935,18 @@ class WorkerService:
         include_disabled: bool = True,
     ) -> list[dict[str, object]]:
         repository = WorkerRepository(session)
-        remote_workers = repository.list_workers(enabled=None if include_disabled else True)
-        items = [self._local_worker_inventory()]
+        local_worker = resolve_local_worker_configuration(
+            session,
+            config_bundle=self.config_bundle,
+            worker_name=self.local_worker_loop.worker_name,
+        ).worker
+        items: list[dict[str, object]] = []
+        if local_worker is not None and (include_disabled or local_worker.enabled):
+            items.append(self._local_worker_inventory(worker=local_worker))
+        remote_workers = repository.list_workers(
+            worker_type=WorkerType.REMOTE,
+            enabled=None if include_disabled else True,
+        )
         items.extend(self._remote_worker_summary(worker) for worker in remote_workers)
         items.sort(
             key=lambda item: (
@@ -709,16 +957,20 @@ class WorkerService:
         return items
 
     def get_worker_inventory_item(self, session: Session, *, worker_id: str) -> dict[str, object]:
-        if worker_id == self.config_bundle.workers.local.id:
-            return self._local_worker_inventory(detail=True)
-
         repository = WorkerRepository(session)
+        local_worker = resolve_local_worker_configuration(
+            session,
+            config_bundle=self.config_bundle,
+            worker_name=self.local_worker_loop.worker_name,
+        ).worker
+        if local_worker is not None and worker_id in {local_worker.id, local_worker.worker_key}:
+            return self._local_worker_inventory(worker=local_worker, detail=True)
         worker = repository.get_by_id(worker_id) or repository.get_by_key(worker_id)
         if worker is None:
             raise ApiNotFoundError("Worker could not be found.")
         return self._remote_worker_summary(worker, detail=True)
 
-    def set_remote_worker_enabled(
+    def set_worker_enabled(
         self,
         session: Session,
         *,
@@ -727,16 +979,15 @@ class WorkerService:
         actor: User,
         request: Request,
     ) -> dict[str, object]:
-        if worker_id == self.config_bundle.workers.local.id:
-            raise ApiConflictError("The local worker is configuration-driven and cannot be toggled here.")
-
         repository = WorkerRepository(session)
         worker = repository.get_by_id(worker_id) or repository.get_by_key(worker_id)
         if worker is None:
             raise ApiNotFoundError("Worker could not be found.")
-        if worker.worker_type != WorkerType.REMOTE:
-            raise ApiConflictError("Only remote worker records can be enabled or disabled here.")
-
+        if worker.worker_type == WorkerType.LOCAL and enabled:
+            self._validate_local_backend_preferences(
+                preferred_backend=worker.preferred_backend,
+                allow_cpu_fallback=worker.allow_cpu_fallback,
+            )
         repository.set_enabled(worker, enabled=enabled)
         self.audit_service.record_event(
             session,
@@ -750,28 +1001,27 @@ class WorkerService:
                 "enabled": enabled,
             },
         )
+        if worker.worker_type == WorkerType.LOCAL:
+            return self._local_worker_inventory(worker=worker, detail=True)
         return self._remote_worker_summary(worker, detail=True)
 
-    def _local_worker_inventory(self, *, detail: bool = False) -> dict[str, object]:
-        status = self.status_summary()
+    def _local_worker_inventory(self, *, worker: Worker, detail: bool = False) -> dict[str, object]:
+        status = self.status_summary(local_worker_override=worker)
         local_config = self.config_bundle.workers.local
         item: dict[str, object] = {
-            "id": local_config.id,
-            "worker_key": local_config.id,
-            "display_name": self.local_worker_loop.worker_name,
+            "id": worker.id,
+            "worker_key": worker.worker_key,
+            "display_name": worker.display_name,
             "worker_type": WorkerType.LOCAL.value,
-            "source": "projected_local",
-            "enabled": status["enabled"],
-            "registration_status": (
-                WorkerRegistrationStatus.REGISTERED.value
-                if status["enabled"]
-                else WorkerRegistrationStatus.DISABLED.value
-            ),
+            "worker_state": status["configuration_state"],
+            "source": "configured_local",
+            "enabled": worker.enabled,
+            "registration_status": worker.registration_status.value,
             "health_status": status["status"],
             "health_summary": status["summary"],
             "last_seen_at": status["last_run_completed_at"],
             "last_heartbeat_at": status["last_run_completed_at"],
-            "last_registration_at": None,
+            "last_registration_at": worker.created_at,
             "capability_summary": self._local_capability_summary(),
             "host_summary": {
                 "hostname": local_config.host,
@@ -779,6 +1029,16 @@ class WorkerService:
                 "agent_version": None,
                 "python_version": None,
             },
+            "preferred_backend": worker.preferred_backend,
+            "allow_cpu_fallback": worker.allow_cpu_fallback,
+            "schedule_windows": worker.schedule_windows or [],
+            "schedule_summary": schedule_windows_summary(worker.schedule_windows),
+            "current_job_id": status["current_job_id"],
+            "current_backend": status["current_backend"],
+            "current_stage": status["current_stage"],
+            "current_progress_percent": status["current_progress_percent"],
+            "onboarding_platform": None,
+            "pairing_expires_at": None,
             "pending_assignment_count": status["queue_health"]["pending_count"],
             "last_completed_job_id": status["last_processed_job_id"],
         }
@@ -789,8 +1049,9 @@ class WorkerService:
                         "queue": local_config.queue,
                         "scratch_dir": str(local_config.scratch_dir),
                         "media_mounts": [str(path) for path in local_config.media_mounts],
-                        "preferred_backend": status["execution_preferences"]["preferred_backend"],
-                        "allow_cpu_fallback": status["execution_preferences"]["allow_cpu_fallback"],
+                        "preferred_backend": worker.preferred_backend,
+                        "allow_cpu_fallback": worker.allow_cpu_fallback,
+                        "schedule_windows": worker.schedule_windows or [],
                         "current_job_id": status["current_job_id"],
                         "current_backend": status["current_backend"],
                         "current_stage": status["current_stage"],
@@ -806,7 +1067,7 @@ class WorkerService:
                     "assigned_job_ids": [],
                     "last_processed_job_id": status["last_processed_job_id"],
                     "recent_failure_message": status["last_failure_message"],
-                    "recent_jobs": self._recent_job_history(local_worker_name=self.local_worker_loop.worker_name),
+                    "recent_jobs": self._recent_job_history(remote_worker_id=worker.id),
                 }
             )
         return item
@@ -814,11 +1075,13 @@ class WorkerService:
     def _remote_worker_summary(self, worker: Worker, *, detail: bool = False) -> dict[str, object]:
         runtime_payload = worker.runtime_payload or {}
         binary_payload = worker.binary_payload or {}
+        runtime_summary = self._clean_runtime_summary(runtime_payload)
         item: dict[str, object] = {
             "id": worker.id,
             "worker_key": worker.worker_key,
             "display_name": worker.display_name,
             "worker_type": worker.worker_type.value,
+            "worker_state": self._remote_worker_state(worker),
             "source": "persisted_remote",
             "enabled": worker.enabled,
             "registration_status": worker.registration_status.value,
@@ -829,16 +1092,26 @@ class WorkerService:
             "last_registration_at": worker.last_registration_at,
             "capability_summary": self._clean_capability_summary(worker.capability_payload),
             "host_summary": self._clean_host_summary(worker.host_metadata),
+            "preferred_backend": worker.preferred_backend,
+            "allow_cpu_fallback": worker.allow_cpu_fallback,
+            "schedule_windows": worker.schedule_windows or [],
+            "schedule_summary": schedule_windows_summary(worker.schedule_windows),
+            "current_job_id": runtime_summary.get("current_job_id"),
+            "current_backend": runtime_summary.get("current_backend"),
+            "current_stage": runtime_summary.get("current_stage"),
+            "current_progress_percent": runtime_summary.get("current_progress_percent"),
+            "onboarding_platform": worker.onboarding_platform,
+            "pairing_expires_at": worker.pairing_expires_at,
             "pending_assignment_count": len(worker.assigned_jobs),
-            "last_completed_job_id": runtime_payload.get("last_completed_job_id"),
+            "last_completed_job_id": runtime_summary.get("last_completed_job_id"),
         }
         if detail:
             item.update(
                 {
-                    "runtime_summary": self._clean_runtime_summary(runtime_payload),
+                    "runtime_summary": runtime_summary,
                     "binary_summary": binary_payload.get("binaries", []),
                     "assigned_job_ids": [job.id for job in worker.assigned_jobs],
-                    "last_processed_job_id": runtime_payload.get("last_completed_job_id"),
+                    "last_processed_job_id": runtime_summary.get("last_completed_job_id"),
                     "recent_failure_message": worker.last_health_summary if worker.last_health_status == WorkerHealthStatus.FAILED else None,
                     "recent_jobs": self._recent_job_history(remote_worker_id=worker.id),
                 }
@@ -848,8 +1121,10 @@ class WorkerService:
     def _ensure_remote_worker_can_execute(self, worker: Worker) -> None:
         if worker.worker_type != WorkerType.REMOTE:
             raise ApiConflictError("Only remote workers can poll for remote work.")
-        if not worker.enabled or worker.registration_status != WorkerRegistrationStatus.REGISTERED:
+        if not worker.enabled:
             raise ApiConflictError("The worker is not currently enabled for execution.")
+        if worker.registration_status != WorkerRegistrationStatus.REGISTERED:
+            raise ApiConflictError("The worker has not completed pairing yet.")
         if worker.last_health_status == WorkerHealthStatus.FAILED:
             raise ApiConflictError("The worker last reported a failed health state.")
 
@@ -860,20 +1135,27 @@ class WorkerService:
         if not capability_summary.get("execution_modes"):
             raise ApiConflictError("The worker has not reported any execution modes.")
 
-    def _remote_worker_can_run_job(self, worker: Worker, plan: ProcessingPlan) -> bool:
+    def _remote_worker_can_run_job(
+        self,
+        worker: Worker,
+        plan: ProcessingPlan,
+        *,
+        preferred_backend: str | None = None,
+    ) -> bool:
         capability_summary = self._clean_capability_summary(worker.capability_payload)
-        runtime_summary = self._clean_runtime_summary(worker.runtime_payload)
         binary_support = capability_summary.get("binary_support", {})
         execution_modes = capability_summary.get("execution_modes", [])
         if not binary_support.get("ffmpeg") or not binary_support.get("ffprobe"):
             return False
         if not execution_modes:
             return False
+        if not worker.enabled or worker.registration_status != WorkerRegistrationStatus.REGISTERED:
+            return False
         if not plan.video.transcode_required:
             return "remux" in execution_modes or "transcode" in execution_modes
 
-        preferred_backend = normalise_backend_preference(str(runtime_summary.get("preferred_backend") or "cpu"))
-        allow_cpu_fallback = bool(runtime_summary.get("allow_cpu_fallback", True))
+        preferred_backend = normalise_backend_preference(preferred_backend or worker.preferred_backend or "cpu_only")
+        allow_cpu_fallback = bool(worker.allow_cpu_fallback)
         codec = (plan.video.target_codec or "hevc").strip().lower()
         hardware_hints = {str(item) for item in capability_summary.get("hardware_hints", [])}
 
@@ -884,6 +1166,124 @@ class WorkerService:
             return True
 
         return allow_cpu_fallback and "transcode" in execution_modes
+
+    def _validate_local_backend_preferences(
+        self,
+        *,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+    ) -> None:
+        runtime_probes = self._local_runtime_probes(
+            execution_preferences={
+                "preferred_backend": preferred_backend,
+                "allow_cpu_fallback": allow_cpu_fallback,
+            }
+        )
+        if preferred_backend == "cpu_only":
+            return
+        preferred_probe = runtime_probes.get("preferred_backend_probe")
+        if preferred_probe is None:
+            raise ApiConflictError("The selected local backend is not recognised.")
+        if not preferred_probe["usable_by_ffmpeg"] and not allow_cpu_fallback:
+            raise ApiConflictError(
+                "The selected local backend is unavailable in this runtime and CPU fallback is disabled."
+            )
+
+    def _remote_worker_state(self, worker: Worker) -> str:
+        if not worker.enabled:
+            return "remote_disabled"
+        if worker.registration_status != WorkerRegistrationStatus.REGISTERED:
+            return "remote_pending_pairing"
+        if worker.last_heartbeat_at is None:
+            return "remote_registered"
+        last_heartbeat_at = worker.last_heartbeat_at
+        if last_heartbeat_at.tzinfo is None:
+            last_heartbeat_at = last_heartbeat_at.replace(tzinfo=timezone.utc)
+        if last_heartbeat_at < datetime.now(timezone.utc) - timedelta(minutes=5):
+            return "remote_offline"
+        if worker.last_health_status == WorkerHealthStatus.HEALTHY:
+            return "remote_healthy"
+        if worker.last_health_status == WorkerHealthStatus.FAILED:
+            return "remote_degraded"
+        if worker.last_health_status == WorkerHealthStatus.DEGRADED:
+            return "remote_degraded"
+        return "remote_registered"
+
+    def _build_remote_worker_key(self, display_name: str | None) -> str:
+        base = (display_name or "remote-worker").strip().lower()
+        slug = "".join(character if character.isalnum() else "-" for character in base)
+        slug = "-".join(part for part in slug.split("-") if part) or "remote-worker"
+        return f"worker-{slug}-{self.worker_token_service.generate_worker_token()[:8].lower()}"
+
+    @staticmethod
+    def _default_remote_display_name(platform: str) -> str:
+        return {
+            "windows": "Windows worker",
+            "linux": "Linux worker",
+            "macos": "macOS worker",
+        }.get(platform, "Remote worker")
+
+    def _build_remote_bootstrap_command(
+        self,
+        *,
+        platform: str,
+        worker: Worker,
+        pairing_token: str,
+    ) -> str:
+        version_ref = read_version()
+        if version_ref and not version_ref.startswith("v"):
+            version_ref = f"v{version_ref}"
+        api_base_url = f"{str(self.config_bundle.app.ui.public_url).rstrip('/')}{self.config_bundle.app.api.base_path}"
+        worker_key = worker.worker_key
+        display_name = worker.display_name
+        preferred_backend = worker.preferred_backend
+        allow_cpu_fallback = "$true" if worker.allow_cpu_fallback else "$false"
+        if platform == "windows":
+            script_url = (
+                f"https://raw.githubusercontent.com/RoBro92/encodr/{version_ref}/"
+                "infra/scripts/install-worker-agent-windows.ps1"
+            )
+            return (
+                "powershell -NoProfile -ExecutionPolicy Bypass -Command "
+                f"\"& {{ $script = Join-Path $env:TEMP 'encodr-worker.ps1'; "
+                f"Invoke-WebRequest -UseBasicParsing '{script_url}' -OutFile $script; "
+                f"& $script -ServerUrl '{api_base_url}' "
+                f"-WorkerKey '{worker_key}' -PairingToken '{pairing_token}' "
+                f"-ReleaseRef '{version_ref}' "
+                f"-DisplayName '{display_name}' -PreferredBackend '{preferred_backend}' "
+                f"-AllowCpuFallback {allow_cpu_fallback} }}\""
+            )
+
+        script_url = (
+            f"https://raw.githubusercontent.com/RoBro92/encodr/{version_ref}/"
+            "infra/scripts/install-worker-agent-unix.sh"
+        )
+        platform_flag = "macos" if platform == "macos" else "linux"
+        return (
+            f"curl -fsSL {shlex.quote(script_url)} | sudo bash -s -- "
+            f"--server-url {shlex.quote(api_base_url)} "
+            f"--worker-key {shlex.quote(worker_key)} "
+            f"--pairing-token {shlex.quote(pairing_token)} "
+            f"--release-ref {shlex.quote(version_ref)} "
+            f"--display-name {shlex.quote(display_name)} "
+            f"--platform {shlex.quote(platform_flag)} "
+            f"--preferred-backend {shlex.quote(preferred_backend)} "
+            f"--allow-cpu-fallback {'true' if worker.allow_cpu_fallback else 'false'}"
+        )
+
+    @staticmethod
+    def _remote_bootstrap_notes(*, platform: str) -> list[str]:
+        notes = [
+            "Run the command on the target worker host with administrator or root privileges.",
+            "The worker pairs back to Encodr as a background service; no desktop app is required.",
+        ]
+        if platform == "windows":
+            notes.append("The Windows installer creates a scheduled task that keeps the worker running in the background.")
+        elif platform == "linux":
+            notes.append("The Linux installer creates a systemd service named encodr-worker.")
+        elif platform == "macos":
+            notes.append("The macOS installer creates a launchd daemon for the worker agent.")
+        return notes
 
     def _build_remote_job_payload(self, job: Any) -> dict[str, object]:
         media_payload = job.plan_snapshot.probe_snapshot.payload if job.plan_snapshot and job.plan_snapshot.probe_snapshot else {}
@@ -991,6 +1391,20 @@ class WorkerService:
             "current_progress_updated_at": payload.get("current_progress_updated_at"),
             "telemetry": payload.get("telemetry"),
             "last_completed_job_id": payload.get("last_completed_job_id"),
+        }
+
+    @staticmethod
+    def _merge_runtime_summary_preferences(
+        *,
+        preferred_backend: str,
+        allow_cpu_fallback: bool,
+        runtime_summary: dict | None,
+    ) -> dict | None:
+        if runtime_summary is None:
+            return None
+        return dict(runtime_summary) | {
+            "preferred_backend": preferred_backend,
+            "allow_cpu_fallback": allow_cpu_fallback,
         }
 
     def _recent_job_history(

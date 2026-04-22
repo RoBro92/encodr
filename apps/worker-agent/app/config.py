@@ -11,6 +11,7 @@ class WorkerAgentSettings:
     worker_key: str
     display_name: str
     registration_secret: str | None
+    pairing_token: str | None
     worker_token: str | None
     worker_token_file: Path | None
     heartbeat_interval_seconds: int
@@ -45,6 +46,7 @@ def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
         worker_key=worker_key,
         display_name=display_name,
         registration_secret=env.get("ENCODR_WORKER_AGENT_REGISTRATION_SECRET") or env.get("ENCODR_WORKER_REGISTRATION_SECRET"),
+        pairing_token=env.get("ENCODR_WORKER_AGENT_PAIRING_TOKEN"),
         worker_token=env.get("ENCODR_WORKER_AGENT_TOKEN"),
         worker_token_file=Path(token_file) if token_file else None,
         heartbeat_interval_seconds=heartbeat_interval,

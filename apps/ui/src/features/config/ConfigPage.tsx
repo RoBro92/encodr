@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { Link } from "react-router-dom";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { FolderPickerModal } from "../../components/FolderPickerModal";
@@ -9,22 +10,20 @@ import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
-  useExecutionPreferencesQuery,
   useLibraryRootsQuery,
   useProcessingRulesQuery,
   useRuntimeStatusQuery,
   useStorageStatusQuery,
   useUpdateStatusQuery,
-  useUpdateExecutionPreferencesMutation,
   useUpdateLibraryRootsMutation,
   useUpdateProcessingRulesMutation,
 } from "../../lib/api/hooks";
 import type {
-  ExecutionPreferences,
   ProcessingRules,
   ProcessingRuleset,
   ProcessingRuleValues,
 } from "../../lib/types/api";
+import { APP_ROUTES } from "../../lib/utils/routes";
 
 type PickerTarget = "movies" | "tv" | null;
 type RulesetKey = "movies" | "movies_4k" | "tv" | "tv_4k";
@@ -81,15 +80,12 @@ export function ConfigPage() {
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null);
   const [rulesDraft, setRulesDraft] = useState<ProcessingRules | null>(null);
   const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
-  const [executionPrefsDraft, setExecutionPrefsDraft] = useState<ExecutionPreferences | null>(null);
   const rootsQuery = useLibraryRootsQuery();
-  const executionPreferencesQuery = useExecutionPreferencesQuery();
   const rulesQuery = useProcessingRulesQuery();
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
   const updateStatusQuery = useUpdateStatusQuery();
   const updateRootsMutation = useUpdateLibraryRootsMutation();
-  const updateExecutionPreferencesMutation = useUpdateExecutionPreferencesMutation();
   const updateRulesMutation = useUpdateProcessingRulesMutation();
 
   useEffect(() => {
@@ -99,22 +95,14 @@ export function ConfigPage() {
     }
   }, [rulesQuery.data]);
 
-  useEffect(() => {
-    if (executionPreferencesQuery.data) {
-      setExecutionPrefsDraft(executionPreferencesQuery.data);
-    }
-  }, [executionPreferencesQuery.data]);
-
   const error =
     rootsQuery.error ??
-    executionPreferencesQuery.error ??
     rulesQuery.error ??
     runtimeQuery.error ??
     storageQuery.error ??
     updateStatusQuery.error;
   const loading =
     rootsQuery.isLoading ||
-    executionPreferencesQuery.isLoading ||
     rulesQuery.isLoading ||
     runtimeQuery.isLoading ||
     storageQuery.isLoading ||
@@ -133,7 +121,7 @@ export function ConfigPage() {
   const runtime = runtimeQuery.data;
   const storage = storageQuery.data;
   const updateStatus = updateStatusQuery.data;
-  if (!roots || !runtime || !storage || !rules || !executionPrefsDraft || !updateStatus) {
+  if (!roots || !runtime || !storage || !rules || !updateStatus) {
     return <ErrorPanel title="Settings are unavailable" message="The API did not return settings information." />;
   }
 
@@ -163,13 +151,6 @@ export function ConfigPage() {
       {updateRulesMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to save processing rules" message={updateRulesMutation.error.message} />
       ) : null}
-      {updateExecutionPreferencesMutation.error instanceof Error ? (
-        <ErrorPanel
-          title="Unable to save execution preference"
-          message={updateExecutionPreferencesMutation.error.message}
-        />
-      ) : null}
-
       <section className="dashboard-grid">
         <SectionCard title="Library folders" subtitle="Choose the main folders you want Encodr to use.">
           <div className="list-stack">
@@ -243,55 +224,11 @@ export function ConfigPage() {
               </span>
             </div>
             <div className="info-strip" role="note">
-              <strong>Current execution path</strong>
+              <strong>Worker-level backends</strong>
               <span>
-                Encodr will try to use the preferred backend below when FFmpeg can really initialise it. If the
-                selected backend is unavailable, CPU fallback is used only when you allow it.
+                Backend preference is now set per worker. Configure the local worker and any paired remote workers
+                from the <Link to={APP_ROUTES.workers}>Workers</Link> page.
               </span>
-            </div>
-            <div className="settings-rules-fields settings-rules-fields-compact">
-              <label className="field">
-                <span>Preferred backend</span>
-                <select
-                  aria-label="Preferred execution backend"
-                  value={executionPrefsDraft.preferred_backend}
-                  onChange={(event) =>
-                    setExecutionPrefsDraft({
-                      ...executionPrefsDraft,
-                      preferred_backend: event.target.value,
-                    })
-                  }
-                >
-                  <option value="cpu_only">CPU only</option>
-                  <option value="prefer_intel_igpu">Prefer Intel iGPU</option>
-                  <option value="prefer_nvidia_gpu">Prefer NVIDIA</option>
-                  <option value="prefer_amd_gpu">Prefer AMD</option>
-                </select>
-              </label>
-              <label className="field field-checkbox">
-                <span>Allow CPU fallback</span>
-                <input
-                  aria-label="Allow CPU fallback"
-                  type="checkbox"
-                  checked={executionPrefsDraft.allow_cpu_fallback}
-                  onChange={(event) =>
-                    setExecutionPrefsDraft({
-                      ...executionPrefsDraft,
-                      allow_cpu_fallback: event.target.checked,
-                    })
-                  }
-                />
-              </label>
-            </div>
-            <div className="section-card-actions">
-              <button
-                className="button button-primary button-small"
-                type="button"
-                onClick={() => updateExecutionPreferencesMutation.mutate(executionPrefsDraft)}
-                disabled={updateExecutionPreferencesMutation.isPending}
-              >
-                {updateExecutionPreferencesMutation.isPending ? "Saving…" : "Save backend preference"}
-              </button>
             </div>
             <div className="status-grid">
               {runtime.execution_backends.map((backend) => (

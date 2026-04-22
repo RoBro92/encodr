@@ -33,12 +33,17 @@ class PlansService:
         session: Session,
         *,
         source_path: str,
+        ruleset_override: str | None = None,
     ) -> tuple[TrackedFile, ProbeSnapshot, PlanSnapshot]:
         tracked_file, probe_snapshot = self.files_service.probe_file(session, source_path=source_path)
         media_file = MediaFile.model_validate(probe_snapshot.payload)
         plan = build_processing_plan(
             media_file,
-            self._config_bundle_for_source(source_path=tracked_file.source_path, media_file=media_file),
+            self._config_bundle_for_source(
+                source_path=tracked_file.source_path,
+                media_file=media_file,
+                ruleset_override=ruleset_override,
+            ),
             source_path=tracked_file.source_path,
         )
         plan_snapshot = PlanSnapshotRepository(session).add_plan_snapshot(
@@ -49,19 +54,31 @@ class PlansService:
         TrackedFileRepository(session).update_file_state_from_plan_result(tracked_file, plan)
         return tracked_file, probe_snapshot, plan_snapshot
 
-    def dry_run_file(self, *, source_path: str):
+    def dry_run_file(self, *, source_path: str, ruleset_override: str | None = None):
         media_file = self.files_service.probe_source_file(source_path)
         plan = build_processing_plan(
             media_file,
-            self._config_bundle_for_source(source_path=source_path, media_file=media_file),
+            self._config_bundle_for_source(
+                source_path=source_path,
+                media_file=media_file,
+                ruleset_override=ruleset_override,
+            ),
             source_path=Path(source_path).resolve().as_posix(),
         )
         return media_file, plan
 
-    def _config_bundle_for_source(self, *, source_path: str, media_file: MediaFile) -> ConfigBundle:
+    def _config_bundle_for_source(
+        self,
+        *,
+        source_path: str,
+        media_file: MediaFile,
+        ruleset_override: str | None = None,
+    ) -> ConfigBundle:
         setup_service = SetupStateService(config_bundle=self.config_bundle)
-        ruleset = setup_service.ruleset_for_source(source_path, is_4k=media_file.is_4k)
-        rules = setup_service.rules_for_source(source_path, is_4k=media_file.is_4k)
+        ruleset = ruleset_override or setup_service.ruleset_for_source(source_path, is_4k=media_file.is_4k)
+        rules = (
+            setup_service.rules_for_ruleset(ruleset) if ruleset is not None else None
+        ) if ruleset_override else setup_service.rules_for_source(source_path, is_4k=media_file.is_4k)
         if ruleset is None or rules is None:
             return self.config_bundle
 
