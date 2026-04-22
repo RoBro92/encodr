@@ -836,6 +836,35 @@ def test_fresh_install_reset_removes_existing_runtime_state(
     assert not install_root.exists()
 
 
+def test_local_checkout_install_syncs_tracked_files_into_external_install_root(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    install_root = tmp_path / "encodr"
+    (install_root / "packages" / "core").mkdir(parents=True, exist_ok=True)
+    (install_root / "packages" / "core" / "pyproject.toml").write_text(
+        '[project]\nrequires-python = ">=3.12"\n',
+        encoding="utf-8",
+    )
+    (install_root / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
+
+    result = run_install_shell(
+        repo_root,
+        (
+            f"INSTALL_ROOT='{install_root}' "
+            f"SCRIPT_ROOT='{repo_root}' "
+            "REMOTE_BOOTSTRAP=0 "
+            "ensure_release_tree; "
+            f"printf '%s\\n' \"$(cat '{install_root / 'packages/core/pyproject.toml'}')\"; "
+            f"printf '%s\\n' \"$(cat '{install_root / '.env'}')\""
+        ),
+    )
+
+    assert result.returncode == 0
+    assert 'requires-python = ">=3.11"' in result.stdout
+    assert "PROJECT_NAME=encodr" in result.stdout
+
+
 def test_gitignore_excludes_local_ui_workspace(repo_root: Path) -> None:
     gitignore = (repo_root / ".gitignore").read_text(encoding="utf-8")
 

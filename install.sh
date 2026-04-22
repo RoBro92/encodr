@@ -548,6 +548,53 @@ download_release_tree() {
   success "Release files are in place"
 }
 
+prepare_install_root_for_sync() {
+  section "Preparing install directory"
+  mkdir -p "${INSTALL_ROOT}"
+  find "${INSTALL_ROOT}" -mindepth 1 -maxdepth 1 \
+    ! -name '.env' \
+    ! -name '.runtime' \
+    ! -name 'config' \
+    ! -name 'temp' \
+    ! -name 'postgres-data' \
+    ! -name 'redis-data' \
+    -exec rm -rf {} +
+}
+
+sync_local_checkout_tree() {
+  prepare_install_root_for_sync
+
+  local source_root
+  local target_root
+  source_root="$(cd "${SCRIPT_ROOT}" && pwd -P)"
+  target_root="$(cd "${INSTALL_ROOT}" && pwd -P)"
+
+  if [[ "${source_root}" == "${target_root}" ]]; then
+    success "Installer will use the local repository files"
+    return 0
+  fi
+
+  if [[ -d "${SCRIPT_ROOT}/.git" ]] && command -v git >/dev/null 2>&1; then
+    (
+      cd "${SCRIPT_ROOT}" &&
+      git ls-files -z | tar --null -T - -C "${SCRIPT_ROOT}" -cf -
+    ) | tar -C "${INSTALL_ROOT}" -xf - || fail "Unable to copy the local checkout into ${INSTALL_ROOT}."
+  else
+    tar \
+      --exclude-vcs \
+      --exclude='.env' \
+      --exclude='.runtime' \
+      --exclude='config/app.yaml' \
+      --exclude='config/policy.yaml' \
+      --exclude='config/workers.yaml' \
+      --exclude='dev-local' \
+      -C "${SCRIPT_ROOT}" -cf - . | tar -C "${INSTALL_ROOT}" -xf - || \
+      fail "Unable to copy the local checkout into ${INSTALL_ROOT}."
+  fi
+
+  success "Local checkout files are in place"
+}
+
 resolve_latest_release_tag() {
   local release_metadata_url="https://api.github.com/repos/${REPO_OWNER}/${REPO_NAME}/releases/latest"
   local latest_tag=""
@@ -577,8 +624,8 @@ ensure_release_tree() {
     download_release_tree
   else
     section "Using local checkout"
-    info "Installing from ${INSTALL_ROOT}"
-    success "Installer will use the local repository files"
+    info "Installing from ${SCRIPT_ROOT} into ${INSTALL_ROOT}"
+    sync_local_checkout_tree
   fi
 }
 
