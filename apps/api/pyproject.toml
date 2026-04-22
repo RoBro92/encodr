@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "encodr-api"
 dynamic = ["version"]
 description = "FastAPI application for encodr"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = [
   "fastapi>=0.115,<1.0",
   "PyJWT>=2.8,<3.0",

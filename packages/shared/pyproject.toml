@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "encodr-shared"
 dynamic = ["version"]
 description = "Shared types for encodr"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 dependencies = []
 
 [tool.hatch.build.targets.wheel]
