@@ -294,6 +294,40 @@ def test_command_health_checks_local_ui_service_not_public_url(
     assert "Public UI URL: http://localhost:5173" in output
 
 
+def test_command_compose_config_uses_managed_compose_files(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+    (project_root / ".runtime").mkdir(parents=True, exist_ok=True)
+    runtime_override = project_root / ".runtime" / "compose.runtime.yml"
+    runtime_override.write_text("services: {}\n", encoding="utf-8")
+
+    recorded: list[list[str]] = []
+
+    def fake_run(command: list[str], **_kwargs):
+        recorded.append(command)
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = encodr_cli.command_compose_config(
+        argparse.Namespace(project_root=str(project_root)),
+    )
+
+    assert result == 0
+    assert recorded == [[
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        str(runtime_override),
+        "config",
+    ]]
+
+
 def test_command_addhost_updates_env_and_recreates_stack(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -543,6 +577,45 @@ def test_compose_command_includes_runtime_override_when_present(
         str(runtime_override),
         "ps",
     ]
+
+
+def test_local_checkout_uses_both_dev_and_runtime_compose_overrides(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "encodr"
+    (project_root / ".git").mkdir(parents=True, exist_ok=True)
+    (project_root / "infra" / "compose").mkdir(parents=True, exist_ok=True)
+    (project_root / ".runtime").mkdir(parents=True, exist_ok=True)
+    local_override = project_root / "infra" / "compose" / "local.override.yml"
+    local_override.write_text("services: {}\n", encoding="utf-8")
+    runtime_override = project_root / ".runtime" / "compose.runtime.yml"
+    runtime_override.write_text("services: {}\n", encoding="utf-8")
+    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda _root: None)
+
+    command = encodr_cli.compose_command(project_root, "config")
+
+    assert command == [
+        "docker",
+        "compose",
+        "-f",
+        "docker-compose.yml",
+        "-f",
+        str(local_override),
+        "-f",
+        str(runtime_override),
+        "config",
+    ]
+
+
+def test_dev_up_script_uses_runtime_aware_compose_files(repo_root: Path) -> None:
+    dev_up_script = (repo_root / "infra" / "scripts" / "dev-up.sh").read_text(encoding="utf-8")
+
+    assert "generate_runtime_compose.py --project-root ." in dev_up_script
+    assert 'compose_args=(-f docker-compose.yml)' in dev_up_script
+    assert 'compose_args+=(-f ./infra/compose/local.override.yml)' in dev_up_script
+    assert 'compose_args+=(-f ./.runtime/compose.runtime.yml)' in dev_up_script
+    assert 'docker compose "${compose_args[@]}" up --build' in dev_up_script
 
 
 def test_encodr_wrapper_prefers_managed_cli_venv(repo_root: Path) -> None:

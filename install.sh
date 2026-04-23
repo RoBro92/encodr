@@ -125,19 +125,16 @@ run_with_progress() {
 run_compose_in_install_root() {
   (
     cd "${INSTALL_ROOT}" || exit 1
-    docker compose "$@"
-  )
-}
-
-run_managed_compose_in_install_root() {
-  (
-    cd "${INSTALL_ROOT}" || exit 1
     local args=(-f docker-compose.yml)
     if [[ -f "${INSTALL_ROOT}/.runtime/compose.runtime.yml" ]]; then
       args+=(-f "${INSTALL_ROOT}/.runtime/compose.runtime.yml")
     fi
     docker compose "${args[@]}" "$@"
   )
+}
+
+run_managed_compose_in_install_root() {
+  run_compose_in_install_root "$@"
 }
 
 generate_runtime_compose_override() {

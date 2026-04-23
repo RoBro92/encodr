@@ -55,6 +55,7 @@ If you are enabling Intel iGPU acceleration for the local worker:
 - the LXC or VM must expose `/dev/dri`
 - the worker container must also see `/dev/dri`
 - Encodr will validate Intel VAAPI inside the worker runtime with `vainfo` and an FFmpeg VAAPI smoke test before treating the Intel path as usable
+- Encodr-managed compose commands include `.runtime/compose.runtime.yml` automatically when it exists
 
 Encodr expects:
 
@@ -62,6 +63,18 @@ Encodr expects:
 - `/temp` as the transcode scratch workspace inside the containers
 
 If `/media` or `/temp` exist but do not look like the mounts you expected, the System page and `encodr doctor` will warn clearly.
+
+To verify what Compose sees after runtime hardware detection:
+
+```bash
+encodr compose-config | grep /dev/dri
+```
+
+If you are debugging by hand instead of using the Encodr CLI, include the runtime override explicitly:
+
+```bash
+docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml config | grep /dev/dri
+```
 
 ## Re-running the installer
 
