@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import inspect
 import stat
 from dataclasses import dataclass
@@ -26,6 +27,7 @@ class WorkerSession:
     worker_token: str
     preferred_backend: str
     allow_cpu_fallback: bool
+    runtime_configuration: dict[str, object]
 
 
 class WorkerAgentService:
@@ -54,28 +56,66 @@ class WorkerAgentService:
         self.settings.worker_token_file.write_text(token, encoding="utf-8")
         self.settings.worker_token_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
+    def load_runtime_configuration(self) -> dict[str, object]:
+        if self.settings.runtime_config_file is None or not self.settings.runtime_config_file.exists():
+            return {}
+        try:
+            return json.loads(self.settings.runtime_config_file.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            return {}
+
+    def store_runtime_configuration(self, payload: dict | None) -> None:
+        if self.settings.runtime_config_file is None or payload is None:
+            return
+        self.settings.runtime_config_file.parent.mkdir(parents=True, exist_ok=True)
+        self.settings.runtime_config_file.write_text(
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+            encoding="utf-8",
+        )
+        self.settings.runtime_config_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
     def build_registration_payload(self) -> dict:
-        health_status, health_summary = build_worker_health(self.settings)
+        runtime_configuration = self.load_runtime_configuration()
+        health_status, health_summary = build_worker_health(
+            self.settings,
+            runtime_configuration=runtime_configuration,
+        )
         return {
             "registration_secret": self.settings.registration_secret,
             "pairing_token": self.settings.pairing_token,
             "worker_key": self.settings.worker_key,
             "display_name": self.settings.display_name,
             "worker_type": "remote",
-            "capability_summary": build_capability_summary(self.settings),
+            "capability_summary": build_capability_summary(
+                self.settings,
+                runtime_configuration=runtime_configuration,
+            ),
             "host_summary": build_host_summary(),
-            "runtime_summary": build_runtime_summary(self.settings),
+            "runtime_summary": build_runtime_summary(
+                self.settings,
+                runtime_configuration=runtime_configuration,
+            ),
             "binary_summary": build_binary_summary(self.settings),
             "health_status": health_status,
             "health_summary": health_summary,
         }
 
     def build_heartbeat_payload(self) -> dict:
-        health_status, health_summary = build_worker_health(self.settings)
+        runtime_configuration = self.load_runtime_configuration()
+        health_status, health_summary = build_worker_health(
+            self.settings,
+            runtime_configuration=runtime_configuration,
+        )
         return {
-            "capability_summary": build_capability_summary(self.settings),
+            "capability_summary": build_capability_summary(
+                self.settings,
+                runtime_configuration=runtime_configuration,
+            ),
             "host_summary": build_host_summary(),
-            "runtime_summary": build_runtime_summary(self.settings),
+            "runtime_summary": build_runtime_summary(
+                self.settings,
+                runtime_configuration=runtime_configuration,
+            ),
             "binary_summary": build_binary_summary(self.settings),
             "health_status": health_status,
             "health_summary": health_summary,
@@ -87,6 +127,8 @@ class WorkerAgentService:
         response = self.api_client.register(self.build_registration_payload())
         worker_token = str(response["worker_token"])
         self.store_worker_token(worker_token)
+        runtime_configuration = self._resolve_runtime_configuration(response)
+        self.store_runtime_configuration(runtime_configuration)
         execution_preferences = self._resolve_execution_preferences(response)
         return WorkerSession(
             worker_id=str(response["worker_id"]),
@@ -94,6 +136,7 @@ class WorkerAgentService:
             worker_token=worker_token,
             preferred_backend=execution_preferences["preferred_backend"],
             allow_cpu_fallback=execution_preferences["allow_cpu_fallback"],
+            runtime_configuration=runtime_configuration,
         )
 
     def ensure_registered(self) -> WorkerSession:
@@ -105,6 +148,7 @@ class WorkerAgentService:
                 worker_token=worker_token,
                 preferred_backend=self.settings.preferred_backend,
                 allow_cpu_fallback=self.settings.allow_cpu_fallback,
+                runtime_configuration=self.load_runtime_configuration(),
             )
         return self.register()
 
@@ -114,6 +158,11 @@ class WorkerAgentService:
             worker_token=session.worker_token,
             payload=self.build_heartbeat_payload(),
         )
+        runtime_configuration = self._resolve_runtime_configuration(
+            response,
+            fallback=session.runtime_configuration,
+        )
+        self.store_runtime_configuration(runtime_configuration)
         execution_preferences = self._resolve_execution_preferences(
             response,
             preferred_backend=session.preferred_backend,
@@ -125,6 +174,7 @@ class WorkerAgentService:
             worker_token=session.worker_token,
             preferred_backend=execution_preferences["preferred_backend"],
             allow_cpu_fallback=execution_preferences["allow_cpu_fallback"],
+            runtime_configuration=runtime_configuration,
         )
         return response
 
@@ -134,6 +184,11 @@ class WorkerAgentService:
             worker_token=session.worker_token,
             payload=self.build_heartbeat_payload(),
         )
+        runtime_configuration = self._resolve_runtime_configuration(
+            heartbeat,
+            fallback=session.runtime_configuration,
+        )
+        self.store_runtime_configuration(runtime_configuration)
         execution_preferences = self._resolve_execution_preferences(
             heartbeat,
             preferred_backend=session.preferred_backend,
@@ -145,6 +200,7 @@ class WorkerAgentService:
             worker_token=session.worker_token,
             preferred_backend=execution_preferences["preferred_backend"],
             allow_cpu_fallback=execution_preferences["allow_cpu_fallback"],
+            runtime_configuration=runtime_configuration,
         )
         assignment = self.api_client.request_job(worker_token=session.worker_token)
         if assignment.get("status") != "assigned" or assignment.get("job") is None:
@@ -158,6 +214,7 @@ class WorkerAgentService:
                 job_id=job_id,
                 plan_payload=dict(job["plan_payload"]),
                 media_payload=dict(job["media_payload"]),
+                scratch_dir_override=self._scratch_dir_for_runtime(session.runtime_configuration),
                 preferred_backend=session.preferred_backend,
                 allow_cpu_fallback=session.allow_cpu_fallback,
             )
@@ -176,6 +233,7 @@ class WorkerAgentService:
             current_backend=(backend_preview.get("actual_backend") or backend_preview.get("requested_backend")),
             preferred_backend=session.preferred_backend,
             allow_cpu_fallback=session.allow_cpu_fallback,
+            runtime_configuration=session.runtime_configuration,
         )
         execute_kwargs = {
             "job_id": job_id,
@@ -184,6 +242,8 @@ class WorkerAgentService:
         }
         if "progress_callback" in inspect.signature(self.execution_service.execute).parameters:
             execute_kwargs["progress_callback"] = progress_reporter
+        if "scratch_dir_override" in inspect.signature(self.execution_service.execute).parameters:
+            execute_kwargs["scratch_dir_override"] = self._scratch_dir_for_runtime(session.runtime_configuration)
         if "preferred_backend" in inspect.signature(self.execution_service.execute).parameters:
             execute_kwargs["preferred_backend"] = session.preferred_backend
             execute_kwargs["allow_cpu_fallback"] = session.allow_cpu_fallback
@@ -202,6 +262,7 @@ class WorkerAgentService:
                         last_completed_job_id=job_id if result.status == "completed" else None,
                         preferred_backend=session.preferred_backend,
                         allow_cpu_fallback=session.allow_cpu_fallback,
+                        runtime_configuration=session.runtime_configuration,
                     ),
                 },
             )
@@ -238,6 +299,7 @@ class WorkerAgentService:
                         current_stage="failed",
                         preferred_backend=session.preferred_backend,
                         allow_cpu_fallback=session.allow_cpu_fallback,
+                        runtime_configuration=session.runtime_configuration,
                     ),
                 },
             )
@@ -280,6 +342,7 @@ class WorkerAgentService:
         current_backend: str | None,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        runtime_configuration: dict[str, object],
     ):
         last_sent_at: datetime | None = None
         last_percent: int | None = None
@@ -314,6 +377,7 @@ class WorkerAgentService:
                         current_progress_percent=int(update.percent) if update.percent is not None else None,
                         preferred_backend=preferred_backend,
                         allow_cpu_fallback=allow_cpu_fallback,
+                        runtime_configuration=runtime_configuration,
                     ),
                 },
             )
@@ -332,10 +396,15 @@ class WorkerAgentService:
         last_completed_job_id: str | None = None,
         preferred_backend: str | None = None,
         allow_cpu_fallback: bool | None = None,
+        runtime_configuration: dict[str, object] | None = None,
     ) -> dict[str, object]:
         now = datetime.now(timezone.utc)
-        return build_runtime_summary(self.settings) | {
-            "preferred_backend": preferred_backend or self.settings.preferred_backend,
+        base_runtime = build_runtime_summary(
+            self.settings,
+            runtime_configuration=runtime_configuration or self.load_runtime_configuration(),
+        )
+        return base_runtime | {
+            "preferred_backend": preferred_backend or str(base_runtime.get("preferred_backend") or self.settings.preferred_backend),
             "allow_cpu_fallback": self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback,
             "current_job_id": job_id,
             "current_backend": current_backend,
@@ -345,3 +414,19 @@ class WorkerAgentService:
             "last_completed_job_id": last_completed_job_id,
             "telemetry": collect_runtime_telemetry(current_backend=current_backend),
         }
+
+    @staticmethod
+    def _scratch_dir_for_runtime(runtime_configuration: dict[str, object]) -> str | None:
+        value = runtime_configuration.get("scratch_dir")
+        return None if value is None else str(value)
+
+    @staticmethod
+    def _resolve_runtime_configuration(
+        payload: dict,
+        *,
+        fallback: dict[str, object] | None = None,
+    ) -> dict[str, object]:
+        runtime_configuration = payload.get("runtime_configuration")
+        if isinstance(runtime_configuration, dict):
+            return runtime_configuration
+        return dict(fallback or {})

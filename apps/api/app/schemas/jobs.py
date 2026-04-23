@@ -68,11 +68,13 @@ class JobSummaryResponse(BaseModel):
     id: str
     tracked_file_id: str
     plan_snapshot_id: str
+    job_kind: str
     source_path: str | None = None
     source_filename: str | None = None
     worker_name: str | None = None
     status: str
     attempt_count: int
+    duration_seconds: int | None = None
     started_at: datetime | None = None
     completed_at: datetime | None = None
     progress_stage: str | None = None
@@ -96,6 +98,8 @@ class JobSummaryResponse(BaseModel):
     video_space_saved_bytes: int | None = None
     non_video_space_saved_bytes: int | None = None
     compression_reduction_percent: int | None = None
+    audio_tracks_removed_count: int = 0
+    subtitle_tracks_removed_count: int = 0
     verification_status: str
     replacement_status: str
     tracked_file_is_protected: bool | None = None
@@ -123,11 +127,13 @@ class JobSummaryResponse(BaseModel):
             id=job.id,
             tracked_file_id=job.tracked_file_id,
             plan_snapshot_id=job.plan_snapshot_id,
+            job_kind=job.job_kind.value,
             source_path=job.tracked_file.source_path if job.tracked_file is not None else None,
             source_filename=job.tracked_file.source_filename if job.tracked_file is not None else None,
             worker_name=job.worker_name,
             status=job.status.value,
             attempt_count=job.attempt_count,
+            duration_seconds=job_duration_seconds(job),
             started_at=job.started_at,
             completed_at=job.completed_at,
             progress_stage=job.progress_stage,
@@ -151,6 +157,8 @@ class JobSummaryResponse(BaseModel):
             video_space_saved_bytes=job.video_space_saved_bytes,
             non_video_space_saved_bytes=job.non_video_space_saved_bytes,
             compression_reduction_percent=job.compression_reduction_percent,
+            audio_tracks_removed_count=job_removed_audio_tracks(job),
+            subtitle_tracks_removed_count=job_removed_subtitle_tracks(job),
             verification_status=job.verification_status.value,
             replacement_status=job.replacement_status.value,
             tracked_file_is_protected=job.tracked_file.is_protected if job.tracked_file is not None else None,
@@ -220,3 +228,38 @@ class JobListResponse(BaseModel):
 
 
 BatchJobItemResponse.model_rebuild()
+
+
+def job_duration_seconds(job: Job) -> int | None:
+    if job.started_at is None or job.completed_at is None:
+        return None
+    duration = (job.completed_at - job.started_at).total_seconds()
+    if duration < 0:
+        return None
+    return int(round(duration))
+
+
+def job_removed_audio_tracks(job: Job) -> int:
+    payload = getattr(job.plan_snapshot, "payload", None)
+    if not isinstance(payload, dict):
+        return 0
+    audio = payload.get("audio")
+    if not isinstance(audio, dict):
+        return 0
+    dropped = audio.get("dropped_stream_indices")
+    if not isinstance(dropped, list):
+        return 0
+    return len(dropped)
+
+
+def job_removed_subtitle_tracks(job: Job) -> int:
+    payload = getattr(job.plan_snapshot, "payload", None)
+    if not isinstance(payload, dict):
+        return 0
+    subtitles = payload.get("subtitles")
+    if not isinstance(subtitles, dict):
+        return 0
+    dropped = subtitles.get("dropped_stream_indices")
+    if not isinstance(dropped, list):
+        return 0
+    return len(dropped)

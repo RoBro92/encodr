@@ -33,6 +33,20 @@ const JOB_STATUS_OPTIONS = [
   { label: "Skipped", value: "skipped" },
 ];
 
+type JobWorkerGroup = {
+  key: string;
+  label: string;
+  kindSummary: string;
+  jobs: JobSummary[];
+  initiallyOpen: boolean;
+  totalDurationSeconds: number | null;
+  totalInputSizeBytes: number | null;
+  totalOutputSizeBytes: number | null;
+  totalSavedBytes: number | null;
+  totalAudioTracksRemoved: number;
+  totalSubtitleTracksRemoved: number;
+};
+
 export function JobsPage() {
   const { jobId } = useParams();
   const [status, setStatus] = useState("");
@@ -78,6 +92,7 @@ export function JobsPage() {
   const files = deduplicateTrackedFiles([...filterFiles, ...createFiles]);
   const jobs = jobsQuery.data?.items ?? [];
   const orderedJobs = sortJobsForDisplay(jobs);
+  const groupedJobs = groupJobsByWorker(orderedJobs);
   const detail = detailQuery.data;
   const metrics = summariseJobs(jobs);
   const canRetry = detail ? ["failed", "interrupted", "manual_review", "skipped"].includes(detail.status) : false;
@@ -89,7 +104,7 @@ export function JobsPage() {
         eyebrow="Jobs"
         title="Jobs"
         description="Monitor running work, inspect outcomes, and retry jobs that need another pass."
-        actions={
+        actions={(
           <div className="action-group">
             <button
               className="button button-primary"
@@ -101,7 +116,7 @@ export function JobsPage() {
             </button>
             <span className="action-helper">Process the next queued job.</span>
           </div>
-        }
+        )}
       />
 
       {retryMutation.error instanceof Error ? (
@@ -211,47 +226,70 @@ export function JobsPage() {
           {orderedJobs.length === 0 ? (
             <EmptyState title="No jobs yet" message="Create a plan in Library, then create a job to populate the queue." />
           ) : (
-            <div className="record-list" role="list" aria-label="Jobs list">
-              {orderedJobs.map((item) => {
-                const isActive = item.id === jobId;
-                return (
-                  <Link
-                    key={item.id}
-                    className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
-                    to={APP_ROUTES.jobDetail(item.id)}
-                  >
-                    <div className="record-list-main">
-                      <div className="record-list-heading">
-                        <strong>{jobPrimaryLabel(item, files)}</strong>
-                        <span>{jobSecondaryLabel(item)}</span>
-                      </div>
-                      <div className="badge-row">
-                        <StatusBadge value={item.status} />
-                        {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
-                        {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
-                        {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                          <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
-                        ) : null}
-                        {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
-                      </div>
-                      {item.status === "running" || item.status === "pending" ? <JobProgressBar job={item} compact /> : null}
+            <div className="job-worker-groups" role="list" aria-label="Jobs list">
+              {groupedJobs.map((group) => (
+                <details key={group.key} className="job-worker-group" open={group.initiallyOpen}>
+                  <summary className="job-worker-group-summary">
+                    <div className="job-worker-group-heading">
+                      <strong>{group.label}</strong>
+                      <span>{group.kindSummary}</span>
                     </div>
-                    <div className="record-list-meta">
-                      <span className="record-list-kicker">{jobOutcomeLabel(item)}</span>
-                      <span>{item.worker_name ?? "No worker yet"}</span>
-                      {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                        <span>{formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)}</span>
-                      ) : null}
-                      <span>{formatDateTime(item.updated_at)}</span>
-                      {item.failure_message ? (
-                        <span className="record-list-emphasis">{truncate(item.failure_message, 84)}</span>
-                      ) : item.status === "completed" ? (
-                        <span className="record-list-emphasis">{replacementSummary(item)}</span>
-                      ) : null}
+                    <div className="job-worker-group-metrics">
+                      <span>{group.jobs.length} file{group.jobs.length === 1 ? "" : "s"}</span>
+                      <span>{formatDurationTotal(group.totalDurationSeconds)}</span>
+                      <span>Start {formatBytes(group.totalInputSizeBytes)}</span>
+                      <span>Output {formatBytes(group.totalOutputSizeBytes)}</span>
+                      <span>Saved {formatBytes(group.totalSavedBytes)}</span>
+                      <span>{group.totalAudioTracksRemoved} audio removed</span>
+                      <span>{group.totalSubtitleTracksRemoved} subtitles removed</span>
                     </div>
-                  </Link>
-                );
-              })}
+                  </summary>
+                  <div className="record-list">
+                    {group.jobs.map((item) => {
+                      const isActive = item.id === jobId;
+                      return (
+                        <Link
+                          key={item.id}
+                          className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
+                          to={APP_ROUTES.jobDetail(item.id)}
+                        >
+                          <div className="record-list-main">
+                            <div className="record-list-heading">
+                              <strong>{jobPrimaryLabel(item, files)}</strong>
+                              <span>{jobSecondaryLabel(item)}</span>
+                            </div>
+                            <div className="badge-row">
+                              <StatusBadge value={item.status} />
+                              {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
+                              {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
+                              {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
+                              {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                                <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
+                              ) : null}
+                              {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
+                            </div>
+                            {item.status === "running" || item.status === "pending" ? <JobProgressBar job={item} compact /> : null}
+                          </div>
+                          <div className="record-list-meta">
+                            <span className="record-list-kicker">{jobOutcomeLabel(item)}</span>
+                            <span>{item.worker_name ?? group.label}</span>
+                            <span>{jobMediaInfoLabel(item)}</span>
+                            {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                              <span>{formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)}</span>
+                            ) : null}
+                            <span>{formatDateTime(item.updated_at)}</span>
+                            {item.failure_message ? (
+                              <span className="record-list-emphasis">{truncate(item.failure_message, 84)}</span>
+                            ) : item.status === "completed" ? (
+                              <span className="record-list-emphasis">{replacementSummary(item)}</span>
+                            ) : null}
+                          </div>
+                        </Link>
+                      );
+                    })}
+                  </div>
+                </details>
+              ))}
             </div>
           )}
         </SectionCard>
@@ -288,6 +326,7 @@ export function JobsPage() {
                 <StatusBadge value={detail.replacement_status} />
                 {detail.requires_review ? <StatusBadge value={detail.review_status ?? "open"} /> : null}
                 {detail.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
+                {detail.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
               </div>
 
               {detail.status === "scheduled" && detail.schedule_summary ? (
@@ -480,8 +519,8 @@ function TrackedFilePicker({
     }
     return items
       .filter((item) => {
-        const label = formatTrackedFileOption(item).toLowerCase();
-        return label.includes(search) || item.id.toLowerCase().includes(search) || item.source_path.toLowerCase().includes(search);
+        const labelText = formatTrackedFileOption(item).toLowerCase();
+        return labelText.includes(search) || item.id.toLowerCase().includes(search) || item.source_path.toLowerCase().includes(search);
       })
       .slice(0, 8);
   }, [items, query]);
@@ -690,6 +729,92 @@ function sortJobsForDisplay(jobs: JobSummary[]) {
     }
     return right.updated_at.localeCompare(left.updated_at);
   });
+}
+
+function groupJobsByWorker(jobs: JobSummary[]): JobWorkerGroup[] {
+  const grouped = new Map<string, JobSummary[]>();
+  for (const job of jobs) {
+    const key = job.assigned_worker_id ?? job.worker_name ?? "automatic";
+    const existing = grouped.get(key);
+    if (existing) {
+      existing.push(job);
+    } else {
+      grouped.set(key, [job]);
+    }
+  }
+
+  return [...grouped.entries()].map(([key, items]) => {
+    const kinds = new Set(items.map((item) => item.job_kind));
+    return {
+      key,
+      label: workerGroupLabel(items[0]),
+      kindSummary:
+        kinds.size === 1 && kinds.has("dry_run")
+          ? "Dry run queue"
+          : kinds.has("dry_run")
+            ? "Execution and dry-run jobs"
+            : "Execution queue",
+      jobs: items,
+      initiallyOpen: items.some((item) => item.status === "running" || item.status === "pending"),
+      totalDurationSeconds: sumNullable(items.map((item) => item.duration_seconds)),
+      totalInputSizeBytes: sumNullable(items.map((item) => item.input_size_bytes)),
+      totalOutputSizeBytes: sumNullable(items.map((item) => item.output_size_bytes)),
+      totalSavedBytes: sumNullable(items.map((item) => item.space_saved_bytes)),
+      totalAudioTracksRemoved: items.reduce((sum, item) => sum + (item.audio_tracks_removed_count ?? 0), 0),
+      totalSubtitleTracksRemoved: items.reduce((sum, item) => sum + (item.subtitle_tracks_removed_count ?? 0), 0),
+    };
+  });
+}
+
+function sumNullable(values: Array<number | null>) {
+  const present = values.filter((value): value is number => typeof value === "number");
+  if (present.length === 0) {
+    return null;
+  }
+  return present.reduce((sum, value) => sum + value, 0);
+}
+
+function formatDurationTotal(value: number | null) {
+  if (value == null) {
+    return "No recorded duration";
+  }
+  return formatDurationSeconds(value);
+}
+
+function workerGroupLabel(job: JobSummary) {
+  if (job.worker_name) {
+    return job.worker_name;
+  }
+  if (job.assigned_worker_id) {
+    return `Worker ${shortId(job.assigned_worker_id)}`;
+  }
+  if (job.preferred_worker_id) {
+    return `Preferred worker ${shortId(job.preferred_worker_id)}`;
+  }
+  return "Automatic assignment";
+}
+
+function jobMediaInfoLabel(job: JobSummary) {
+  const parts = [];
+  if (job.input_size_bytes != null) {
+    parts.push(`Start ${formatBytes(job.input_size_bytes)}`);
+  }
+  if (job.output_size_bytes != null) {
+    parts.push(`Output ${formatBytes(job.output_size_bytes)}`);
+  }
+  if (job.space_saved_bytes != null) {
+    parts.push(`Saved ${formatBytes(job.space_saved_bytes)}`);
+  }
+  if (job.audio_tracks_removed_count > 0) {
+    parts.push(`${job.audio_tracks_removed_count} audio removed`);
+  }
+  if (job.subtitle_tracks_removed_count > 0) {
+    parts.push(`${job.subtitle_tracks_removed_count} subtitles removed`);
+  }
+  if (job.duration_seconds != null) {
+    parts.push(formatDurationSeconds(job.duration_seconds));
+  }
+  return parts.join(" • ") || "Media summary pending";
 }
 
 function clampProgress(value: number | null) {

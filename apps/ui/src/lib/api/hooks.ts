@@ -12,6 +12,7 @@ import {
   createBatchJobs,
   createJobFromReviewItem,
   disableWorker,
+  deleteWorker,
   getAnalyticsDashboard,
   getAnalyticsMedia,
   getAnalyticsOutcomes,
@@ -304,7 +305,6 @@ export function useSetupLocalWorkerMutation() {
         queryClient.invalidateQueries({ queryKey: ["workers"] }),
         queryClient.invalidateQueries({ queryKey: ["worker"] }),
         queryClient.invalidateQueries({ queryKey: ["system"] }),
-        queryClient.invalidateQueries({ queryKey: ["config", "execution-preferences"] }),
       ]);
     },
   });
@@ -322,7 +322,6 @@ export function useUpdateWorkerPreferencesMutation() {
         queryClient.invalidateQueries({ queryKey: ["worker"] }),
         queryClient.invalidateQueries({ queryKey: ["workers", "detail", variables.workerId] }),
         queryClient.invalidateQueries({ queryKey: ["system"] }),
-        queryClient.invalidateQueries({ queryKey: ["config", "execution-preferences"] }),
       ]);
     },
   });
@@ -337,6 +336,21 @@ export function useCreateRemoteWorkerOnboardingMutation() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["workers"] }),
         queryClient.invalidateQueries({ queryKey: ["worker"] }),
+      ]);
+    },
+  });
+}
+
+export function useDeleteWorkerMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (workerId: string) => deleteWorker(apiClient, workerId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
+        queryClient.invalidateQueries({ queryKey: ["system"] }),
       ]);
     },
   });

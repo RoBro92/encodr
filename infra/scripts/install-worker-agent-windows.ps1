@@ -6,7 +6,7 @@ param(
     [string]$DisplayName = "",
     [string]$InstallDir = "C:\ProgramData\EncodrWorker",
     [string]$Queue = "remote-default",
-    [string]$ScratchDir = "C:\EncodrScratch",
+    [string]$ScratchDir = "C:\ProgramData\EncodrWorker\scratch",
     [string]$MediaMounts = "",
     [string]$PythonCommand = "py",
     [string]$ReleaseRef = "main",
@@ -37,8 +37,10 @@ $SourceZip = Join-Path $InstallDir "encodr-worker-source.zip"
 $SourceRoot = Join-Path $InstallDir "source"
 $VenvDir = Join-Path $InstallDir "venv"
 $TokenFile = Join-Path $InstallDir "worker.token"
+$RuntimeConfigFile = Join-Path $InstallDir "runtime-config.json"
 $EnvFile = Join-Path $InstallDir "worker-agent.env.ps1"
 $RunScript = Join-Path $InstallDir "run-worker-agent.ps1"
+$UninstallScript = Join-Path $InstallDir "uninstall-worker-agent.ps1"
 $LogDir = Join-Path $InstallDir "logs"
 
 New-Item -ItemType Directory -Force -Path $InstallDir | Out-Null
@@ -68,6 +70,8 @@ $PipExe = Join-Path $VenvDir "Scripts\pip.exe"
     -e (Join-Path $ExtractedRoot.FullName "packages\core") `
     -e (Join-Path $ExtractedRoot.FullName "apps\worker-agent")
 
+Copy-Item -Path (Join-Path $ExtractedRoot.FullName "infra\scripts\uninstall-worker-agent-windows.ps1") -Destination $UninstallScript -Force
+
 $EnvContents = @"
 `$env:ENCODR_WORKER_AGENT_API_BASE_URL = "$ServerUrl"
 `$env:ENCODR_WORKER_AGENT_KEY = "$WorkerKey"
@@ -76,6 +80,7 @@ $EnvContents = @"
 `$env:ENCODR_WORKER_AGENT_SCRATCH_DIR = "$ScratchDir"
 `$env:ENCODR_WORKER_AGENT_MEDIA_MOUNTS = "$MediaMounts"
 `$env:ENCODR_WORKER_AGENT_TOKEN_FILE = "$TokenFile"
+`$env:ENCODR_WORKER_AGENT_RUNTIME_CONFIG_FILE = "$RuntimeConfigFile"
 `$env:ENCODR_WORKER_AGENT_FFMPEG_PATH = "ffmpeg"
 `$env:ENCODR_WORKER_AGENT_FFPROBE_PATH = "ffprobe"
 `$env:ENCODR_WORKER_AGENT_PREFERRED_BACKEND = "$PreferredBackend"
@@ -90,6 +95,19 @@ $RunContents = @"
 & "$PythonExe" -m app.main loop 999999
 "@
 $RunContents | Set-Content -Path $RunScript -Encoding UTF8
+
+Write-Host "Registering worker with Encodr..."
+. $EnvFile
+& $PythonExe -m app.main register
+if ($LASTEXITCODE -ne 0) {
+    throw "Worker registration failed with exit code $LASTEXITCODE."
+}
+
+Write-Host "Waiting for pairing confirmation..."
+& $PythonExe -m app.main heartbeat
+if ($LASTEXITCODE -ne 0) {
+    throw "Worker pairing validation failed with exit code $LASTEXITCODE."
+}
 
 $TaskName = "Encodr Worker Agent"
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$RunScript`""
@@ -110,7 +128,9 @@ Register-ScheduledTask `
 
 Start-ScheduledTask -TaskName $TaskName
 
+Write-Host "Encodr worker paired successfully."
 Write-Host "Encodr Windows worker installed."
 Write-Host "Task name: $TaskName"
 Write-Host "Worker key: $WorkerKey"
 Write-Host "Server URL: $ServerUrl"
+Write-Host "Uninstall command: powershell -NoProfile -ExecutionPolicy Bypass -File `"$UninstallScript`""

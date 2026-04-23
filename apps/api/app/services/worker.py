@@ -1,10 +1,14 @@
 from __future__ import annotations
 
+import copy
+import ipaddress
 import os
 import shlex
+import socket
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
+from urllib.parse import urlparse
 
 from fastapi import Request
 from sqlalchemy import text
@@ -20,6 +24,7 @@ from encodr_core.planning import ProcessingPlan
 from encodr_db.models import (
     AuditEventType,
     AuditOutcome,
+    JobKind,
     JobStatus,
     User,
     Worker,
@@ -29,7 +34,16 @@ from encodr_db.models import (
 )
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary, job_allows_worker, resolve_local_worker_configuration, worker_is_dispatchable
-from encodr_shared import collect_runtime_telemetry, read_version
+from encodr_shared import (
+    collect_runtime_telemetry,
+    ensure_mapping_marker,
+    mapping_for_server_path,
+    normalise_path_mappings,
+    read_version,
+    recommend_worker_concurrency,
+    remap_server_path,
+    validate_worker_path_mapping,
+)
 from encodr_shared.scheduling import normalise_schedule_windows, schedule_windows_summary
 from encodr_shared.worker_runtime import (
     discover_runtime_devices,
@@ -524,9 +538,28 @@ class WorkerService:
             if paired_worker is not None
             else bool((runtime_summary or {}).get("allow_cpu_fallback", True))
         )
+        max_concurrent_jobs = (
+            paired_worker.max_concurrent_jobs
+            if paired_worker is not None and paired_worker.max_concurrent_jobs
+            else int((capability_summary or {}).get("max_concurrent_jobs") or 1)
+        )
+        path_mappings = (
+            copy.deepcopy(paired_worker.path_mappings)
+            if paired_worker is not None
+            else self._prepare_worker_path_mappings((runtime_summary or {}).get("path_mappings"))
+        )
+        scratch_path = (
+            paired_worker.scratch_path
+            if paired_worker is not None and paired_worker.scratch_path
+            else str((runtime_summary or {}).get("scratch_dir") or "").strip() or None
+        )
         runtime_summary_payload = self._merge_runtime_summary_preferences(
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            max_concurrent_jobs=max_concurrent_jobs,
+            schedule_windows=paired_worker.schedule_windows if paired_worker is not None else None,
+            scratch_path=scratch_path,
+            path_mappings=path_mappings,
             runtime_summary=runtime_summary,
         )
         worker = repository.register_remote_worker(
@@ -535,6 +568,9 @@ class WorkerService:
             auth_token_hash=self.worker_token_service.hash_worker_token(worker_token),
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            max_concurrent_jobs=max_concurrent_jobs,
+            path_mappings=path_mappings,
+            scratch_path=scratch_path,
             host_metadata=host_summary,
             capability_payload=capability_summary,
             runtime_payload=runtime_summary_payload,
@@ -563,6 +599,7 @@ class WorkerService:
                 "preferred_backend": worker.preferred_backend,
                 "allow_cpu_fallback": worker.allow_cpu_fallback,
             },
+            "runtime_configuration": self._runtime_configuration_for_worker(worker),
             "health_status": health_status,
             "health_summary": worker.last_health_summary,
             "issued_at": issued_at,
@@ -590,6 +627,10 @@ class WorkerService:
             runtime_payload=self._merge_runtime_summary_preferences(
                 preferred_backend=worker.preferred_backend,
                 allow_cpu_fallback=worker.allow_cpu_fallback,
+                max_concurrent_jobs=worker.max_concurrent_jobs,
+                schedule_windows=worker.schedule_windows,
+                scratch_path=worker.scratch_path,
+                path_mappings=worker.path_mappings,
                 runtime_summary=runtime_summary,
             ),
             binary_payload={"binaries": binary_summary or []} if binary_summary is not None else None,
@@ -604,6 +645,7 @@ class WorkerService:
                 "preferred_backend": updated.preferred_backend,
                 "allow_cpu_fallback": updated.allow_cpu_fallback,
             },
+            "runtime_configuration": self._runtime_configuration_for_worker(updated),
             "health_status": self._from_worker_health(updated.last_health_status),
             "health_summary": updated.last_health_summary,
             "heartbeat_at": heartbeat_at,
@@ -617,6 +659,8 @@ class WorkerService:
     ) -> dict[str, object]:
         self._ensure_remote_worker_can_execute(worker)
         repository = JobRepository(session)
+        if repository.count_active_assignments_for_worker(worker.id) >= max(1, int(worker.max_concurrent_jobs or 1)):
+            return {"status": "no_job", "job": None}
         job = next(
             (
                 candidate
@@ -633,6 +677,11 @@ class WorkerService:
                 if self._remote_worker_can_run_job(
                     worker,
                     ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
+                    source_path=(
+                        candidate.tracked_file.source_path
+                        if candidate.tracked_file is not None
+                        else candidate.plan_snapshot.probe_snapshot.payload.get("file_path", "")
+                    ),
                     preferred_backend=candidate.preferred_backend_override,
                 )
             ),
@@ -641,12 +690,16 @@ class WorkerService:
         if job is None:
             return {"status": "no_job", "job": None}
 
+        payload = self._build_remote_job_payload(job, worker=worker)
+        if payload is None:
+            return {"status": "no_job", "job": None}
+
         if job.assigned_worker_id is None:
             repository.assign_worker(job, worker=worker)
 
         return {
             "status": "assigned",
-            "job": self._build_remote_job_payload(job),
+            "job": payload,
         }
 
     def claim_job(
@@ -710,6 +763,10 @@ class WorkerService:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
                 preferred_backend=worker.preferred_backend,
                 allow_cpu_fallback=worker.allow_cpu_fallback,
+                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
+                schedule_windows=worker.schedule_windows,
+                scratch_path=worker.scratch_path,
+                path_mappings=worker.path_mappings,
                 runtime_summary=runtime_summary,
             )
 
@@ -771,6 +828,10 @@ class WorkerService:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
                 preferred_backend=worker.preferred_backend,
                 allow_cpu_fallback=worker.allow_cpu_fallback,
+                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
+                schedule_windows=worker.schedule_windows,
+                scratch_path=worker.scratch_path,
+                path_mappings=worker.path_mappings,
                 runtime_summary=runtime_summary,
             )
 
@@ -816,6 +877,10 @@ class WorkerService:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
                 preferred_backend=worker.preferred_backend,
                 allow_cpu_fallback=worker.allow_cpu_fallback,
+                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
+                schedule_windows=worker.schedule_windows,
+                scratch_path=worker.scratch_path,
+                path_mappings=worker.path_mappings,
                 runtime_summary=runtime_summary,
             )
         return {
@@ -830,7 +895,10 @@ class WorkerService:
         display_name: str | None,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        max_concurrent_jobs: int,
         schedule_windows: list[dict] | None = None,
+        scratch_path: str | None = None,
+        path_mappings: list[dict] | None = None,
     ) -> dict[str, object]:
         self._validate_local_backend_preferences(
             preferred_backend=preferred_backend,
@@ -847,7 +915,10 @@ class WorkerService:
             enabled=True,
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            max_concurrent_jobs=max_concurrent_jobs,
             schedule_windows=cleaned_schedule,
+            path_mappings=normalise_path_mappings(path_mappings),
+            scratch_path=scratch_path or str(self.config_bundle.workers.local.scratch_dir),
             host_metadata={"hostname": self.config_bundle.workers.local.host},
         )
         return self._local_worker_inventory(worker=worker, detail=True)
@@ -860,7 +931,10 @@ class WorkerService:
         display_name: str | None,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        max_concurrent_jobs: int,
         schedule_windows: list[dict] | None = None,
+        scratch_path: str | None = None,
+        path_mappings: list[dict] | None = None,
     ) -> dict[str, object]:
         repository = WorkerRepository(session)
         worker = repository.get_by_id(worker_id) or repository.get_by_key(worker_id)
@@ -880,7 +954,10 @@ class WorkerService:
             display_name=display_name,
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            max_concurrent_jobs=max_concurrent_jobs,
             schedule_windows=cleaned_schedule,
+            path_mappings=normalise_path_mappings(path_mappings),
+            scratch_path=scratch_path,
         )
         if worker.worker_type == WorkerType.LOCAL:
             return self._local_worker_inventory(worker=worker, detail=True)
@@ -890,11 +967,15 @@ class WorkerService:
         self,
         session: Session,
         *,
+        request: Request,
         platform: str,
         display_name: str | None,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        max_concurrent_jobs: int,
         schedule_windows: list[dict] | None = None,
+        scratch_path: str | None = None,
+        path_mappings: list[dict] | None = None,
     ) -> dict[str, object]:
         repository = WorkerRepository(session)
         issued_at = datetime.now(timezone.utc)
@@ -910,21 +991,27 @@ class WorkerService:
             display_name=display_name or self._default_remote_display_name(platform),
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            max_concurrent_jobs=max_concurrent_jobs,
             schedule_windows=cleaned_schedule,
+            path_mappings=normalise_path_mappings(path_mappings),
+            scratch_path=scratch_path or self._default_remote_scratch_path(platform),
             pairing_token_hash=self.worker_token_service.hash_worker_token(pairing_token),
             pairing_requested_at=issued_at,
             pairing_expires_at=expires_at,
             onboarding_platform=platform,
+            install_dir=self._default_remote_install_dir(platform),
         )
         return {
             "worker": self._remote_worker_summary(worker, detail=True),
             "status": "pending_pairing",
             "pairing_token_expires_at": expires_at,
             "bootstrap_command": self._build_remote_bootstrap_command(
+                request=request,
                 platform=platform,
                 worker=worker,
                 pairing_token=pairing_token,
             ),
+            "uninstall_command": self._build_remote_uninstall_command(platform=platform, worker=worker),
             "notes": self._remote_bootstrap_notes(platform=platform),
         }
 
@@ -1005,6 +1092,48 @@ class WorkerService:
             return self._local_worker_inventory(worker=worker, detail=True)
         return self._remote_worker_summary(worker, detail=True)
 
+    def delete_worker(
+        self,
+        session: Session,
+        *,
+        worker_id: str,
+        actor: User,
+        request: Request,
+    ) -> dict[str, object]:
+        repository = WorkerRepository(session)
+        worker = repository.get_by_id(worker_id) or repository.get_by_key(worker_id)
+        if worker is None:
+            raise ApiNotFoundError("Worker could not be found.")
+        if worker.worker_type == WorkerType.LOCAL:
+            raise ApiConflictError("Local worker records cannot be deleted. Disable the local worker instead.")
+        uninstall_command = self._build_remote_uninstall_command(
+            platform=worker.onboarding_platform or "linux",
+            worker=worker,
+        )
+        notes = self._remote_uninstall_notes(platform=worker.onboarding_platform or "linux")
+        self.audit_service.record_event(
+            session,
+            event_type=AuditEventType.WORKER_STATE_CHANGE,
+            outcome=AuditOutcome.SUCCESS,
+            request=request,
+            user=actor,
+            details={
+                "worker_id": worker.id,
+                "worker_key": worker.worker_key,
+                "action": "deleted",
+            },
+        )
+        worker_id_value = worker.id
+        worker_key_value = worker.worker_key
+        repository.delete_worker(worker)
+        return {
+            "worker_id": worker_id_value,
+            "worker_key": worker_key_value,
+            "status": "removed",
+            "uninstall_command": uninstall_command,
+            "notes": notes,
+        }
+
     def _local_worker_inventory(self, *, worker: Worker, detail: bool = False) -> dict[str, object]:
         status = self.status_summary(local_worker_override=worker)
         local_config = self.config_bundle.workers.local
@@ -1031,6 +1160,13 @@ class WorkerService:
             },
             "preferred_backend": worker.preferred_backend,
             "allow_cpu_fallback": worker.allow_cpu_fallback,
+            "max_concurrent_jobs": worker.max_concurrent_jobs,
+            "scratch_path": worker.scratch_path or str(local_config.scratch_dir),
+            "path_mappings": self._validated_path_mappings(
+                worker.path_mappings,
+                remote_runtime_payload=None,
+                validate_locally=True,
+            ),
             "schedule_windows": worker.schedule_windows or [],
             "schedule_summary": schedule_windows_summary(worker.schedule_windows),
             "current_job_id": status["current_job_id"],
@@ -1047,10 +1183,20 @@ class WorkerService:
                 {
                     "runtime_summary": {
                         "queue": local_config.queue,
-                        "scratch_dir": str(local_config.scratch_dir),
+                        "scratch_dir": worker.scratch_path or str(local_config.scratch_dir),
+                        "scratch_status": probe_directory(
+                            worker.scratch_path or str(local_config.scratch_dir),
+                            writable_required=True,
+                        ),
                         "media_mounts": [str(path) for path in local_config.media_mounts],
+                        "path_mappings": self._validated_path_mappings(
+                            worker.path_mappings,
+                            remote_runtime_payload=None,
+                            validate_locally=True,
+                        ),
                         "preferred_backend": worker.preferred_backend,
                         "allow_cpu_fallback": worker.allow_cpu_fallback,
+                        "max_concurrent_jobs": worker.max_concurrent_jobs,
                         "schedule_windows": worker.schedule_windows or [],
                         "current_job_id": status["current_job_id"],
                         "current_backend": status["current_backend"],
@@ -1094,6 +1240,9 @@ class WorkerService:
             "host_summary": self._clean_host_summary(worker.host_metadata),
             "preferred_backend": worker.preferred_backend,
             "allow_cpu_fallback": worker.allow_cpu_fallback,
+            "max_concurrent_jobs": worker.max_concurrent_jobs,
+            "scratch_path": worker.scratch_path,
+            "path_mappings": runtime_summary.get("path_mappings", []),
             "schedule_windows": worker.schedule_windows or [],
             "schedule_summary": schedule_windows_summary(worker.schedule_windows),
             "current_job_id": runtime_summary.get("current_job_id"),
@@ -1134,12 +1283,17 @@ class WorkerService:
             raise ApiConflictError("The worker has not reported usable FFmpeg and FFprobe support.")
         if not capability_summary.get("execution_modes"):
             raise ApiConflictError("The worker has not reported any execution modes.")
+        runtime_summary = self._clean_runtime_summary(worker.runtime_payload)
+        scratch_status = runtime_summary.get("scratch_status")
+        if isinstance(scratch_status, dict) and scratch_status.get("status") not in {None, "healthy", "unknown"}:
+            raise ApiConflictError("The worker scratch path is not ready for execution.")
 
     def _remote_worker_can_run_job(
         self,
         worker: Worker,
         plan: ProcessingPlan,
         *,
+        source_path: str,
         preferred_backend: str | None = None,
     ) -> bool:
         capability_summary = self._clean_capability_summary(worker.capability_payload)
@@ -1151,6 +1305,15 @@ class WorkerService:
             return False
         if not worker.enabled or worker.registration_status != WorkerRegistrationStatus.REGISTERED:
             return False
+        if self._resolve_remote_source_path(worker, source_path) is None:
+            return False
+        runtime_summary = self._clean_runtime_summary(worker.runtime_payload)
+        scratch_status = runtime_summary.get("scratch_status")
+        if isinstance(scratch_status, dict) and scratch_status.get("status") not in {None, "healthy", "unknown"}:
+            return False
+        for mapping in runtime_summary.get("path_mappings", []):
+            if mapping.get("validation_status") not in {None, "usable"}:
+                return False
         if not plan.video.transcode_required:
             return "remux" in execution_modes or "transcode" in execution_modes
 
@@ -1226,6 +1389,7 @@ class WorkerService:
     def _build_remote_bootstrap_command(
         self,
         *,
+        request: Request,
         platform: str,
         worker: Worker,
         pairing_token: str,
@@ -1233,11 +1397,13 @@ class WorkerService:
         version_ref = read_version()
         if version_ref and not version_ref.startswith("v"):
             version_ref = f"v{version_ref}"
-        api_base_url = f"{str(self.config_bundle.app.ui.public_url).rstrip('/')}{self.config_bundle.app.api.base_path}"
+        api_base_url = self._remote_api_base_url(request)
         worker_key = worker.worker_key
         display_name = worker.display_name
         preferred_backend = worker.preferred_backend
         allow_cpu_fallback = "$true" if worker.allow_cpu_fallback else "$false"
+        install_dir = worker.install_dir or self._default_remote_install_dir(platform)
+        scratch_dir = worker.scratch_path or self._default_remote_scratch_path(platform)
         if platform == "windows":
             script_url = (
                 f"https://raw.githubusercontent.com/RoBro92/encodr/{version_ref}/"
@@ -1251,7 +1417,8 @@ class WorkerService:
                 f"-WorkerKey '{worker_key}' -PairingToken '{pairing_token}' "
                 f"-ReleaseRef '{version_ref}' "
                 f"-DisplayName '{display_name}' -PreferredBackend '{preferred_backend}' "
-                f"-AllowCpuFallback {allow_cpu_fallback} }}\""
+                f"-AllowCpuFallback {allow_cpu_fallback} -InstallDir '{install_dir}' "
+                f"-ScratchDir '{scratch_dir}' }}\""
             )
 
         script_url = (
@@ -1267,6 +1434,8 @@ class WorkerService:
             f"--release-ref {shlex.quote(version_ref)} "
             f"--display-name {shlex.quote(display_name)} "
             f"--platform {shlex.quote(platform_flag)} "
+            f"--install-dir {shlex.quote(install_dir)} "
+            f"--scratch-dir {shlex.quote(scratch_dir)} "
             f"--preferred-backend {shlex.quote(preferred_backend)} "
             f"--allow-cpu-fallback {'true' if worker.allow_cpu_fallback else 'false'}"
         )
@@ -1285,13 +1454,25 @@ class WorkerService:
             notes.append("The macOS installer creates a launchd daemon for the worker agent.")
         return notes
 
-    def _build_remote_job_payload(self, job: Any) -> dict[str, object]:
-        media_payload = job.plan_snapshot.probe_snapshot.payload if job.plan_snapshot and job.plan_snapshot.probe_snapshot else {}
+    def _build_remote_job_payload(self, job: Any, *, worker: Worker) -> dict[str, object] | None:
+        media_payload = copy.deepcopy(
+            job.plan_snapshot.probe_snapshot.payload
+            if job.plan_snapshot and job.plan_snapshot.probe_snapshot
+            else {}
+        )
+        source_path = (
+            job.tracked_file.source_path if job.tracked_file is not None else media_payload.get("file_path", "")
+        )
+        remapped_source = self._resolve_remote_source_path(worker, source_path)
+        if remapped_source is None:
+            return None
+        if isinstance(media_payload, dict):
+            media_payload["file_path"] = remapped_source
         return {
             "job_id": job.id,
             "tracked_file_id": job.tracked_file_id,
             "plan_snapshot_id": job.plan_snapshot_id,
-            "source_path": job.tracked_file.source_path if job.tracked_file is not None else media_payload.get("file_path", ""),
+            "source_path": remapped_source,
             "plan_payload": job.plan_snapshot.payload,
             "media_payload": media_payload,
             "requested_worker_type": job.requested_worker_type.value if job.requested_worker_type is not None else None,
@@ -1308,6 +1489,10 @@ class WorkerService:
         ]
         if not hardware_hints:
             hardware_hints.append("cpu_only")
+        recommended_concurrency, recommendation_reason = recommend_worker_concurrency(
+            cpu_count=os.cpu_count(),
+            hardware_hints=hardware_hints,
+        )
         return {
             "execution_modes": runtime_probes["execution_backends"],
             "supported_video_codecs": ["h264", "hevc", "av1"] if runtime_probes["ffmpeg"]["discoverable"] else [],
@@ -1318,6 +1503,8 @@ class WorkerService:
                 "ffprobe": runtime_probes["ffprobe"]["discoverable"],
             },
             "max_concurrent_jobs": self.config_bundle.workers.local.max_concurrent_jobs,
+            "recommended_concurrency": recommended_concurrency,
+            "recommended_concurrency_reason": recommendation_reason,
             "tags": ["local"],
         }
 
@@ -1362,6 +1549,8 @@ class WorkerService:
             "hardware_hints": payload.get("hardware_hints", []),
             "binary_support": payload.get("binary_support", {}),
             "max_concurrent_jobs": payload.get("max_concurrent_jobs"),
+            "recommended_concurrency": payload.get("recommended_concurrency"),
+            "recommended_concurrency_reason": payload.get("recommended_concurrency_reason"),
             "tags": payload.get("tags", []),
         }
 
@@ -1381,9 +1570,12 @@ class WorkerService:
         return {
             "queue": payload.get("queue"),
             "scratch_dir": payload.get("scratch_dir"),
+            "scratch_status": payload.get("scratch_status"),
             "media_mounts": payload.get("media_mounts", []),
+            "path_mappings": payload.get("path_mappings", []),
             "preferred_backend": payload.get("preferred_backend"),
             "allow_cpu_fallback": payload.get("allow_cpu_fallback"),
+            "max_concurrent_jobs": payload.get("max_concurrent_jobs"),
             "current_job_id": payload.get("current_job_id"),
             "current_backend": payload.get("current_backend"),
             "current_stage": payload.get("current_stage"),
@@ -1391,21 +1583,183 @@ class WorkerService:
             "current_progress_updated_at": payload.get("current_progress_updated_at"),
             "telemetry": payload.get("telemetry"),
             "last_completed_job_id": payload.get("last_completed_job_id"),
+            "schedule_windows": payload.get("schedule_windows", []),
         }
 
-    @staticmethod
     def _merge_runtime_summary_preferences(
+        self,
         *,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        max_concurrent_jobs: int,
+        schedule_windows: list[dict] | None,
+        scratch_path: str | None,
+        path_mappings: list[dict] | None,
         runtime_summary: dict | None,
     ) -> dict | None:
-        if runtime_summary is None:
-            return None
-        return dict(runtime_summary) | {
+        merged = copy.deepcopy(runtime_summary or {})
+        if scratch_path:
+            merged["scratch_dir"] = scratch_path
+            if merged.get("scratch_status") is None:
+                merged["scratch_status"] = {
+                    "path": scratch_path,
+                    "status": "unknown",
+                    "message": "Scratch validation has not been reported by the worker yet.",
+                }
+        merged["path_mappings"] = self._validated_path_mappings(
+            path_mappings,
+            remote_runtime_payload=merged.get("path_mappings"),
+            validate_locally=False,
+        )
+        return merged | {
             "preferred_backend": preferred_backend,
             "allow_cpu_fallback": allow_cpu_fallback,
+            "max_concurrent_jobs": max_concurrent_jobs,
+            "schedule_windows": schedule_windows or [],
         }
+
+    def _resolve_remote_source_path(self, worker: Worker, source_path: str) -> str | None:
+        if worker.path_mappings:
+            return remap_server_path(source_path, worker.path_mappings)
+        runtime_summary = self._clean_runtime_summary(worker.runtime_payload)
+        media_mounts = [str(item) for item in runtime_summary.get("media_mounts", []) if item]
+        if not media_mounts:
+            return source_path
+        resolved_source = Path(source_path).expanduser().resolve().as_posix()
+        for mount in media_mounts:
+            try:
+                resolved_mount = Path(str(mount)).expanduser().resolve().as_posix()
+            except FileNotFoundError:
+                resolved_mount = str(Path(str(mount)).expanduser())
+            if resolved_source == resolved_mount or resolved_source.startswith(f"{resolved_mount}/"):
+                return resolved_source
+        # Preserve the existing shared-path remote worker model for workers that
+        # have not been configured with explicit mappings yet. Once mappings are
+        # configured we require them to validate cleanly, but older workers must
+        # remain able to accept jobs that rely on the same visible source path.
+        return source_path
+
+    def _runtime_configuration_for_worker(self, worker: Worker) -> dict[str, object]:
+        return self._clean_runtime_summary(
+            self._merge_runtime_summary_preferences(
+                preferred_backend=worker.preferred_backend,
+                allow_cpu_fallback=worker.allow_cpu_fallback,
+                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
+                schedule_windows=worker.schedule_windows,
+                scratch_path=worker.scratch_path,
+                path_mappings=worker.path_mappings,
+                runtime_summary=worker.runtime_payload,
+            )
+        )
+
+    def _validated_path_mappings(
+        self,
+        path_mappings: list[dict] | None,
+        *,
+        remote_runtime_payload: list[dict] | None,
+        validate_locally: bool,
+    ) -> list[dict[str, object]]:
+        configured = self._prepare_worker_path_mappings(path_mappings)
+        runtime_by_worker_path = {
+            str(item.get("worker_path")): item
+            for item in (remote_runtime_payload or [])
+            if item.get("worker_path")
+        }
+        items: list[dict[str, object]] = []
+        for mapping in configured:
+            server_marker = ensure_mapping_marker(mapping["server_path"])
+            runtime_validation = runtime_by_worker_path.get(mapping["worker_path"], {})
+            if validate_locally:
+                runtime_validation = validate_worker_path_mapping(mapping["worker_path"])
+            items.append(
+                {
+                    "label": mapping.get("label"),
+                    "server_path": mapping["server_path"],
+                    "worker_path": mapping["worker_path"],
+                    "marker_relative_path": mapping.get("marker_relative_path"),
+                    "validation_status": runtime_validation.get("status", server_marker["status"]),
+                    "validation_message": runtime_validation.get("message", server_marker["message"]),
+                    "validated_at": datetime.now(timezone.utc),
+                    "marker_server_path": server_marker.get("marker_server_path"),
+                    "marker_worker_path": runtime_validation.get("marker_worker_path"),
+                }
+            )
+        return items
+
+    @staticmethod
+    def _prepare_worker_path_mappings(path_mappings: list[dict] | None) -> list[dict]:
+        return normalise_path_mappings(path_mappings)
+
+    @staticmethod
+    def _default_remote_install_dir(platform: str) -> str:
+        if platform == "windows":
+            return r"C:\ProgramData\EncodrWorker"
+        if platform == "macos":
+            return "/opt/encodr-worker"
+        return "/opt/encodr-worker"
+
+    def _default_remote_scratch_path(self, platform: str) -> str:
+        install_dir = self._default_remote_install_dir(platform)
+        if platform == "windows":
+            return rf"{install_dir}\scratch"
+        return f"{install_dir}/scratch"
+
+    def _build_remote_uninstall_command(self, *, platform: str, worker: Worker) -> str:
+        install_dir = worker.install_dir or self._default_remote_install_dir(platform)
+        if platform == "windows":
+            return (
+                "powershell -NoProfile -ExecutionPolicy Bypass -File "
+                f"\"{install_dir}\\uninstall-worker-agent.ps1\""
+            )
+        return f"sudo {shlex.quote(str(Path(install_dir) / 'uninstall-worker-agent.sh'))}"
+
+    @staticmethod
+    def _remote_uninstall_notes(*, platform: str) -> list[str]:
+        notes = [
+            "Deleting the worker in Encodr revokes its server-side token immediately.",
+            "Run the uninstall command on the worker host to remove the local service and files.",
+        ]
+        if platform == "windows":
+            notes.append("The Windows uninstall removes the scheduled task and ProgramData worker directory.")
+        elif platform == "macos":
+            notes.append("The macOS uninstall removes the launchd daemon and worker install directory.")
+        else:
+            notes.append("The Linux uninstall removes the systemd service and worker install directory.")
+        return notes
+
+    def _remote_api_base_url(self, request: Request) -> str:
+        public_url = str(self.config_bundle.app.ui.public_url).rstrip("/")
+        parsed = urlparse(public_url)
+        scheme = parsed.scheme or request.url.scheme
+        port = parsed.port
+        host = parsed.hostname or request.url.hostname or "127.0.0.1"
+        resolved_host = self._resolve_host_ip(host)
+        authority = resolved_host
+        if port is not None:
+            authority = f"{authority}:{port}"
+        return f"{scheme}://{authority}{self.config_bundle.app.api.base_path}"
+
+    def _resolve_host_ip(self, host: str) -> str:
+        try:
+            ipaddress.ip_address(host)
+            return host
+        except ValueError:
+            pass
+        if host in {"localhost", "127.0.0.1", "::1"}:
+            return self._detect_local_ip()
+        try:
+            return socket.gethostbyname(host)
+        except OSError:
+            return self._detect_local_ip()
+
+    @staticmethod
+    def _detect_local_ip() -> str:
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.connect(("8.8.8.8", 80))
+                return str(sock.getsockname()[0])
+        except OSError:
+            return "127.0.0.1"
 
     def _recent_job_history(
         self,

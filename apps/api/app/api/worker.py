@@ -35,6 +35,7 @@ from app.schemas.worker import (
     WorkerPreferenceRequest,
     WorkerRegistrationRequest,
     WorkerRegistrationResponse,
+    WorkerRemovalResponse,
     WorkerRunOnceResponse,
     WorkerSelfTestCheckResponse,
     WorkerSelfTestResponse,
@@ -375,7 +376,10 @@ def setup_local_worker(
             display_name=payload.display_name,
             preferred_backend=payload.preferred_backend,
             allow_cpu_fallback=payload.allow_cpu_fallback,
+            max_concurrent_jobs=payload.max_concurrent_jobs,
             schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
+            scratch_path=payload.scratch_path,
+            path_mappings=[item.model_dump(mode="json") for item in payload.path_mappings],
         )
         session.commit()
         return WorkerInventoryDetailResponse(**worker)
@@ -400,7 +404,10 @@ def update_worker_preferences(
             display_name=payload.display_name,
             preferred_backend=payload.preferred_backend,
             allow_cpu_fallback=payload.allow_cpu_fallback,
+            max_concurrent_jobs=payload.max_concurrent_jobs,
             schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
+            scratch_path=payload.scratch_path,
+            path_mappings=[item.model_dump(mode="json") for item in payload.path_mappings],
         )
         session.commit()
         return WorkerInventoryDetailResponse(**worker)
@@ -412,6 +419,7 @@ def update_worker_preferences(
 @workers_router.post("/remote/onboarding", response_model=RemoteWorkerOnboardingResponse, dependencies=[Depends(require_admin_user)])
 def create_remote_worker_onboarding(
     payload: RemoteWorkerOnboardingRequest,
+    request: Request,
     session: Session = Depends(get_session),
     service: WorkerService = Depends(get_worker_service),
     current_user: User = Depends(require_admin_user),
@@ -420,11 +428,15 @@ def create_remote_worker_onboarding(
     try:
         result = service.create_remote_onboarding(
             session,
+            request=request,
             platform=payload.platform,
             display_name=payload.display_name,
             preferred_backend=payload.preferred_backend,
             allow_cpu_fallback=payload.allow_cpu_fallback,
+            max_concurrent_jobs=payload.max_concurrent_jobs,
             schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
+            scratch_path=payload.scratch_path,
+            path_mappings=[item.model_dump(mode="json") for item in payload.path_mappings],
         )
         session.commit()
         return RemoteWorkerOnboardingResponse(
@@ -432,8 +444,31 @@ def create_remote_worker_onboarding(
             status=result["status"],
             pairing_token_expires_at=result["pairing_token_expires_at"],
             bootstrap_command=result["bootstrap_command"],
+            uninstall_command=result["uninstall_command"],
             notes=result["notes"],
         )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@workers_router.delete("/{worker_id}", response_model=WorkerRemovalResponse, dependencies=[Depends(require_admin_user)])
+def delete_worker(
+    worker_id: str,
+    request: Request,
+    session: Session = Depends(get_session),
+    service: WorkerService = Depends(get_worker_service),
+    current_user: User = Depends(require_admin_user),
+) -> WorkerRemovalResponse:
+    try:
+        result = service.delete_worker(
+            session,
+            worker_id=worker_id,
+            actor=current_user,
+            request=request,
+        )
+        session.commit()
+        return WorkerRemovalResponse(**result)
     except ApiServiceError as error:
         session.rollback()
         _raise_service_error(error)

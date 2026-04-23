@@ -12,6 +12,7 @@ from encodr_shared.scheduling import next_schedule_opening, schedule_windows_all
 from encodr_db.models import (
     FileLifecycleState,
     Job,
+    JobKind,
     JobStatus,
     PlanSnapshot,
     ReplacementStatus,
@@ -38,6 +39,8 @@ class JobRepository:
         preferred_backend_override: str | None = None,
         schedule_windows: list[dict] | None = None,
         watched_job_id: str | None = None,
+        job_kind: JobKind = JobKind.EXECUTION,
+        analysis_payload: dict | None = None,
     ) -> Job:
         payload = plan_snapshot.payload
         replace_payload = payload["replace"]
@@ -49,6 +52,7 @@ class JobRepository:
             preferred_worker_id=preferred_worker_id,
             pinned_worker_id=pinned_worker_id,
             watched_job_id=watched_job_id,
+            job_kind=job_kind,
             preferred_backend_override=normalise_backend_preference(preferred_backend_override)
             if preferred_backend_override is not None
             else None,
@@ -59,6 +63,7 @@ class JobRepository:
             attempt_count=attempt_count,
             requested_worker_type=None,
             input_size_bytes=tracked_file.last_observed_size,
+            analysis_payload=analysis_payload,
             scheduled_for_at=scheduled_for_at if starts_scheduled else None,
             verification_status=VerificationStatus.PENDING,
             replacement_status=ReplacementStatus.PENDING,
@@ -116,6 +121,17 @@ class JobRepository:
     def fetch_next_pending_remote_job(self, worker: Worker) -> Job | None:
         items = self.fetch_next_pending_remote_jobs(worker, limit=1)
         return items[0] if items else None
+
+    def count_active_assignments_for_worker(self, worker_id: str) -> int:
+        return int(
+            self.session.scalar(
+                select(func.count(Job.id)).where(
+                    Job.assigned_worker_id == worker_id,
+                    Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
+                )
+            )
+            or 0
+        )
 
     def list_jobs_for_scheduling(self, *, limit: int = 200) -> list[Job]:
         query = (
@@ -306,6 +322,7 @@ class JobRepository:
         self,
         *,
         status: JobStatus | None = None,
+        job_kind: JobKind | None = None,
         tracked_file_id: str | None = None,
         worker_name: str | None = None,
         limit: int | None = None,
@@ -313,11 +330,13 @@ class JobRepository:
     ) -> list[Job]:
         query: Select[tuple[Job]] = (
             select(Job)
-            .options(joinedload(Job.tracked_file))
+            .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
             .order_by(desc(Job.created_at))
         )
         if status is not None:
             query = query.where(Job.status == status)
+        if job_kind is not None:
+            query = query.where(Job.job_kind == job_kind)
         if tracked_file_id is not None:
             query = query.where(Job.tracked_file_id == tracked_file_id)
         if worker_name is not None:

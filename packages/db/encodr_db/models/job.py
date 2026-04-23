@@ -7,7 +7,7 @@ from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, 
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin, json_type
-from encodr_db.models.enums import JobStatus, ReplacementStatus, VerificationStatus, WorkerType
+from encodr_db.models.enums import JobKind, JobStatus, ReplacementStatus, VerificationStatus, WorkerType
 from encodr_db.models.types import enum_type
 
 if TYPE_CHECKING:
@@ -60,6 +60,12 @@ class Job(Base, IdMixin, TimestampMixin):
         enum_type(WorkerType, "worker_type"),
         index=True,
     )
+    job_kind: Mapped[JobKind] = mapped_column(
+        enum_type(JobKind, "job_kind"),
+        nullable=False,
+        default=JobKind.EXECUTION,
+        index=True,
+    )
     preferred_backend_override: Mapped[str | None] = mapped_column(String(64), index=True)
     schedule_windows: Mapped[list[dict] | None] = mapped_column(json_type())
     schedule_summary: Mapped[str | None] = mapped_column(String(255))
@@ -98,6 +104,7 @@ class Job(Base, IdMixin, TimestampMixin):
     video_space_saved_bytes: Mapped[int | None] = mapped_column(BigInteger)
     non_video_space_saved_bytes: Mapped[int | None] = mapped_column(BigInteger)
     compression_reduction_percent: Mapped[int | None] = mapped_column(Integer)
+    analysis_payload: Mapped[dict | None] = mapped_column(json_type())
     output_path: Mapped[str | None] = mapped_column(Text)
     execution_command: Mapped[list[str] | None] = mapped_column(json_type())
     execution_stdout: Mapped[str | None] = mapped_column(Text)

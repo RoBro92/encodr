@@ -166,7 +166,10 @@ def resolve_local_worker_configuration(
             enabled=True,
             preferred_backend=str(execution_preferences["preferred_backend"]),
             allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+            max_concurrent_jobs=int(config_bundle.workers.local.max_concurrent_jobs),
             schedule_windows=None,
+            path_mappings=None,
+            scratch_path=str(config_bundle.workers.local.scratch_dir),
             host_metadata={"hostname": config_bundle.workers.local.host},
         )
     if worker is None:

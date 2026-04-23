@@ -8,7 +8,7 @@ REGISTRATION_SECRET=""
 DISPLAY_NAME=""
 INSTALL_DIR="/opt/encodr-worker"
 QUEUE="remote-default"
-SCRATCH_DIR="/var/lib/encodr-worker/scratch"
+SCRATCH_DIR="/opt/encodr-worker/scratch"
 MEDIA_MOUNTS=""
 PYTHON_COMMAND="python3"
 RELEASE_REF="main"
@@ -62,8 +62,10 @@ fi
 SRC_DIR="$INSTALL_DIR/source"
 VENV_DIR="$INSTALL_DIR/venv"
 TOKEN_FILE="$INSTALL_DIR/worker.token"
+RUNTIME_CONFIG_FILE="$INSTALL_DIR/runtime-config.json"
 ENV_FILE="$INSTALL_DIR/worker-agent.env"
 RUN_SCRIPT="$INSTALL_DIR/run-worker-agent.sh"
+UNINSTALL_SCRIPT="$INSTALL_DIR/uninstall-worker-agent.sh"
 
 mkdir -p "$INSTALL_DIR" "$SCRATCH_DIR"
 rm -rf "$SRC_DIR"
@@ -78,6 +80,8 @@ curl -fsSL "$ARCHIVE_URL" | tar -xz -C "$SRC_DIR" --strip-components=1
   -e "$SRC_DIR/packages/core" \
   -e "$SRC_DIR/apps/worker-agent"
 
+install -m 755 "$SRC_DIR/infra/scripts/uninstall-worker-agent-unix.sh" "$UNINSTALL_SCRIPT"
+
 cat >"$ENV_FILE" <<EOF
 export ENCODR_WORKER_AGENT_API_BASE_URL="$SERVER_URL"
 export ENCODR_WORKER_AGENT_KEY="$WORKER_KEY"
@@ -86,6 +90,7 @@ export ENCODR_WORKER_AGENT_QUEUE="$QUEUE"
 export ENCODR_WORKER_AGENT_SCRATCH_DIR="$SCRATCH_DIR"
 export ENCODR_WORKER_AGENT_MEDIA_MOUNTS="$MEDIA_MOUNTS"
 export ENCODR_WORKER_AGENT_TOKEN_FILE="$TOKEN_FILE"
+export ENCODR_WORKER_AGENT_RUNTIME_CONFIG_FILE="$RUNTIME_CONFIG_FILE"
 export ENCODR_WORKER_AGENT_FFMPEG_PATH="ffmpeg"
 export ENCODR_WORKER_AGENT_FFPROBE_PATH="ffprobe"
 export ENCODR_WORKER_AGENT_PREFERRED_BACKEND="$PREFERRED_BACKEND"
@@ -101,6 +106,27 @@ source "$(dirname "$0")/worker-agent.env"
 exec "$(dirname "$0")/venv/bin/python" -m app.main loop 999999
 EOF
 chmod +x "$RUN_SCRIPT"
+
+echo "Registering worker with Encodr..."
+set +e
+source "$ENV_FILE"
+"$VENV_DIR/bin/python" -m app.main register
+REGISTER_STATUS=$?
+set -e
+if [[ $REGISTER_STATUS -ne 0 ]]; then
+  echo "Worker registration failed with exit code $REGISTER_STATUS." >&2
+  exit 10
+fi
+
+echo "Waiting for pairing confirmation..."
+set +e
+"$VENV_DIR/bin/python" -m app.main heartbeat
+HEARTBEAT_STATUS=$?
+set -e
+if [[ $HEARTBEAT_STATUS -ne 0 ]]; then
+  echo "Worker pairing validation failed with exit code $HEARTBEAT_STATUS." >&2
+  exit 11
+fi
 
 if [[ "$PLATFORM" == "macos" ]]; then
   PLIST_PATH="/Library/LaunchDaemons/com.encodr.worker.plist"
@@ -145,6 +171,8 @@ EOF
   systemctl enable --now encodr-worker.service
 fi
 
+echo "Encodr worker paired successfully."
 echo "Encodr worker installed."
 echo "Worker key: $WORKER_KEY"
 echo "Server URL: $SERVER_URL"
+echo "Uninstall command: sudo $UNINSTALL_SCRIPT --install-dir $INSTALL_DIR --platform $PLATFORM"

@@ -411,7 +411,7 @@ describe("Encodr UI shell", () => {
     });
   });
 
-  it("shows execution backend detection and update status in settings", async () => {
+  it("shows the simplified settings structure and update status", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
@@ -434,10 +434,11 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/config", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /execution backends/i })).toBeInTheDocument();
-    expect(screen.getByText(/operator-managed passthrough/i)).toBeInTheDocument();
-    expect(screen.getByText(/backend preference is now set per worker/i)).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: /workers/i }).length).toBeGreaterThan(0);
+    expect(screen.getByRole("heading", { name: /library folders/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^storage$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^updates$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /processing rules/i })).toBeInTheDocument();
+    expect(screen.getByText(/worker backends are configured per worker on the workers page/i)).toBeInTheDocument();
     expect(screen.getAllByText(/encodr update --apply/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
   });
@@ -1245,7 +1246,8 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /current activity/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /worker detail/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /current telemetry/i })).toBeInTheDocument();
     expect(screen.getByText(/job-running/i)).toBeInTheDocument();
     expect(screen.getByText(/44%/i)).toBeInTheDocument();
     expect(screen.getAllByText(/nvidia/i).length).toBeGreaterThan(0);

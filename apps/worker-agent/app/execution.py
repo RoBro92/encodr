@@ -40,6 +40,7 @@ class RemoteExecutionService:
         job_id: str,
         plan_payload: dict,
         media_payload: dict,
+        scratch_dir_override: str | None = None,
         preferred_backend: str | None = None,
         allow_cpu_fallback: bool | None = None,
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
@@ -50,11 +51,12 @@ class RemoteExecutionService:
 
         requested_backend = preferred_backend or self.settings.preferred_backend
         allow_fallback = self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback
+        scratch_dir = scratch_dir_override or self.settings.scratch_dir or "."
         try:
             result = self.runner.execute_plan(
                 plan,
                 input_path=media_file.file_path,
-                scratch_dir=self.settings.scratch_dir or ".",
+                scratch_dir=scratch_dir,
                 ffmpeg_path=self.settings.ffmpeg_path,
                 job_id=job_id,
                 total_duration_seconds=media_file.container.duration_seconds,
@@ -122,6 +124,7 @@ class RemoteExecutionService:
         job_id: str,
         plan_payload: dict,
         media_payload: dict,
+        scratch_dir_override: str | None = None,
         preferred_backend: str | None = None,
         allow_cpu_fallback: bool | None = None,
     ) -> dict[str, object]:
@@ -133,7 +136,7 @@ class RemoteExecutionService:
             command_plan = build_execution_command_plan(
                 plan,
                 input_path=media_file.file_path,
-                scratch_dir=self.settings.scratch_dir or ".",
+                scratch_dir=scratch_dir_override or self.settings.scratch_dir or ".",
                 ffmpeg_path=self.settings.ffmpeg_path,
                 job_id=job_id,
                 preferred_backend=requested_backend,

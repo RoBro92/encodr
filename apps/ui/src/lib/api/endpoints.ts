@@ -47,6 +47,7 @@ import type {
   WorkerInventoryDetail,
   WorkerInventoryListResponse,
   WorkerPreferencePayload,
+  WorkerRemovalResponse,
   WatchedJob,
   WatchedJobListResponse,
   WatchedJobPayload,
@@ -242,6 +243,10 @@ export function createRemoteWorkerOnboarding(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function deleteWorker(client: ApiClient, workerId: string): Promise<WorkerRemovalResponse> {
+  return client.request<WorkerRemovalResponse>(`/workers/${workerId}`, { method: "DELETE" });
 }
 
 export function listReviewItems(
