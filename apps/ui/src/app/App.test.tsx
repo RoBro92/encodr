@@ -449,6 +449,7 @@ describe("Encodr UI shell", () => {
       { method: "GET", path: "/api/files/scans", body: { items: [] } },
       { method: "GET", path: "/api/files/watchers", body: { items: [] } },
       { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      { method: "GET", path: "/api/jobs", body: { items: [], limit: 100, offset: 0 } },
       {
         method: "POST",
         path: "/api/files/scan",
@@ -502,6 +503,7 @@ describe("Encodr UI shell", () => {
       { method: "GET", path: "/api/files/scans", body: { items: [] } },
       { method: "GET", path: "/api/files/watchers", body: { items: [] } },
       { method: "GET", path: "/api/workers", body: { items: [] } },
+      { method: "GET", path: "/api/jobs", body: { items: [], limit: 100, offset: 0 } },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",
@@ -525,6 +527,40 @@ describe("Encodr UI shell", () => {
       { method: "GET", path: "/api/files/scans", body: { items: [] } },
       { method: "GET", path: "/api/files/watchers", body: { items: [] } },
       { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "dry-run-job-1",
+              job_kind: "dry_run",
+              source_filename: "Film One (2024).mkv",
+              source_path: "/media/Movies/Film One (2024).mkv",
+              worker_name: "worker-local",
+              status: "completed",
+              analysis_payload: {
+                file_name: "Film One (2024).mkv",
+                source_path: "/media/Movies/Film One (2024).mkv",
+                planned_action: "transcode",
+                video_handling: "transcode",
+                output_filename: "Film One (2024).mkv",
+                current_size_bytes: 2147483648,
+                estimated_output_size_bytes: 1610612736,
+                estimated_space_saved_bytes: 536870912,
+                audio_tracks_removed_count: 1,
+                subtitle_tracks_removed_count: 0,
+                summary: "Would transcode video and remove one audio track.",
+                requires_review: false,
+                manual_review_reasons: [],
+              },
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",
@@ -555,26 +591,23 @@ describe("Encodr UI shell", () => {
       },
       {
         method: "POST",
-        path: "/api/files/dry-run",
+        path: "/api/jobs/dry-run",
         body: {
-          mode: "dry_run",
-          scope: "selection",
-          total_files: 1,
-          protected_count: 0,
-          review_count: 0,
-          actions: [{ value: "transcode", count: 1 }],
+          created_count: 1,
+          blocked_count: 0,
           items: [
             {
               source_path: "/media/Movies/Film One (2024).mkv",
-              file_name: "Film One (2024).mkv",
-              action: "transcode",
-              confidence: "high",
-              requires_review: false,
-              is_protected: false,
-              reason_codes: ["video_transcode_required_for_policy_codec"],
-              warning_codes: [],
-              selected_audio_stream_indices: [1],
-              selected_subtitle_stream_indices: [],
+              status: "created",
+              message: null,
+              job: {
+                ...jobDetail(),
+                id: "dry-run-job-1",
+                job_kind: "dry_run",
+                source_filename: "Film One (2024).mkv",
+                source_path: "/media/Movies/Film One (2024).mkv",
+                status: "pending",
+              },
             },
           ],
         },
@@ -598,15 +631,20 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("button", { name: /create jobs/i })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /^dry run$/i }));
+    expect(await screen.findByRole("dialog", { name: /start dry run/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /start dry run/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/api/files/dry-run"),
+        expect.stringContaining("/api/jobs/dry-run"),
         expect.objectContaining({
           method: "POST",
           headers: expect.any(Headers),
           body: JSON.stringify({
             selected_paths: ["/media/Movies/Film One (2024).mkv"],
+            pinned_worker_id: undefined,
+            schedule_windows: [],
+            ignore_worker_schedule: false,
           }),
         }),
       );
@@ -614,8 +652,8 @@ describe("Encodr UI shell", () => {
 
     expect(screen.getByRole("tab", { name: /^dry run$/i })).toHaveAttribute("aria-selected", "true");
     const dryRunPanel = screen.getByRole("tabpanel", { name: /^dry run$/i });
-    expect(within(dryRunPanel).getByText(/safe preview/i)).toBeInTheDocument();
-    expect(within(dryRunPanel).getByText(/replacing media/i)).toBeInTheDocument();
+    expect(within(dryRunPanel).getByText(/worker-backed analysis/i)).toBeInTheDocument();
+    expect(within(dryRunPanel).getByText(/would transcode video and remove one audio track/i)).toBeInTheDocument();
     expect(within(dryRunPanel).getByText(/film one \(2024\)\.mkv/i, { selector: "strong" })).toBeInTheDocument();
   });
 
@@ -677,6 +715,7 @@ describe("Encodr UI shell", () => {
         },
       },
       { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      { method: "GET", path: "/api/jobs", body: { items: [], limit: 100, offset: 0 } },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",
@@ -705,6 +744,7 @@ describe("Encodr UI shell", () => {
       { method: "GET", path: "/api/files/scans", body: { items: [] } },
       { method: "GET", path: "/api/files/watchers", body: { items: [] } },
       { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      { method: "GET", path: "/api/jobs", body: { items: [], limit: 100, offset: 0 } },
       {
         method: "GET",
         path: "/api/config/setup/library-roots",

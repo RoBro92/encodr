@@ -216,6 +216,30 @@ export type DryRunBatchResponse = {
   items: DryRunItem[];
 };
 
+export type DryRunAnalysis = {
+  mode: string;
+  source_path: string;
+  file_name: string;
+  planned_action: string;
+  confidence: string;
+  requires_review: boolean;
+  is_protected: boolean;
+  reason_codes: string[];
+  warning_codes: string[];
+  selected_audio_stream_indices: number[];
+  selected_subtitle_stream_indices: number[];
+  output_filename: string;
+  current_size_bytes: number | null;
+  estimated_output_size_bytes: number | null;
+  estimated_space_saved_bytes: number | null;
+  audio_tracks_removed_count: number;
+  subtitle_tracks_removed_count: number;
+  summary: string;
+  video_handling: string;
+  manual_review_triggered: boolean;
+  manual_review_reasons: string[];
+};
+
 export type BatchPlanItem = {
   tracked_file: FileSummary;
   latest_probe_snapshot: ProbeSnapshotDetail;
@@ -270,6 +294,7 @@ export type JobSummary = {
   compression_reduction_percent: number | null;
   audio_tracks_removed_count: number;
   subtitle_tracks_removed_count: number;
+  analysis_payload: DryRunAnalysis | null;
   assigned_worker_id: string | null;
   last_worker_id: string | null;
   preferred_worker_id: string | null;
@@ -321,6 +346,24 @@ export type BatchJobCreateResponse = {
   total_files: number;
   created_count: number;
   blocked_count: number;
+  items: BatchJobItem[];
+};
+
+export type CreateDryRunJobsPayload = FileSelectionPayload & {
+  preferred_worker_id?: string;
+  pinned_worker_id?: string;
+  preferred_backend_override?: string;
+  schedule_windows?: ScheduleWindow[];
+  ignore_worker_schedule?: boolean;
+};
+
+export type DryRunJobCreateResponse = {
+  mode: string;
+  scope: string;
+  total_files: number;
+  created_count: number;
+  blocked_count: number;
+  warning_threshold: number;
   items: BatchJobItem[];
 };
 

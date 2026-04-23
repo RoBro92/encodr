@@ -18,6 +18,7 @@ from encodr_core.config.loader import (
     load_workers_config,
     load_yaml_mapping,
 )
+from encodr_core.config.serialisation import deserialise_config_bundle, serialise_config_bundle
 from encodr_core.config.policy import PolicyConfig
 from encodr_core.config.profiles import (
     LoadedProfiles,
@@ -44,6 +45,7 @@ __all__ = [
     "ResolvedConfigPaths",
     "WorkersConfig",
     "WorkersConfigDocument",
+    "deserialise_config_bundle",
     "load_app_config",
     "load_config_bundle",
     "load_model",
@@ -52,5 +54,6 @@ __all__ = [
     "load_workers_config",
     "load_yaml_mapping",
     "resolve_config_file",
+    "serialise_config_bundle",
     "validate_policy_profile_references",
 ]

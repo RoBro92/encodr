@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.services.files import FilesService
 from app.services.setup import SetupStateService
-from encodr_core.config import ConfigBundle
+from encodr_core.config import ConfigBundle, serialise_config_bundle
 from encodr_core.config.base import (
     FourKMode,
     OutputContainer,
@@ -66,6 +66,21 @@ class PlansService:
             source_path=Path(source_path).resolve().as_posix(),
         )
         return media_file, plan
+
+    def serialise_effective_config_bundle(
+        self,
+        *,
+        source_path: str,
+        media_file: MediaFile,
+        ruleset_override: str | None = None,
+    ) -> dict[str, object]:
+        return serialise_config_bundle(
+            self._config_bundle_for_source(
+                source_path=source_path,
+                media_file=media_file,
+                ruleset_override=ruleset_override,
+            )
+        )
 
     def _config_bundle_for_source(
         self,

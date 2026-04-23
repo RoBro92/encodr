@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link, useParams } from "react-router-dom";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
@@ -9,6 +9,7 @@ import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
+import { useSession } from "../auth/AuthProvider";
 import {
   useCreateJobMutation,
   useFilesQuery,
@@ -253,22 +254,28 @@ export function JobsPage() {
                           className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
                           to={APP_ROUTES.jobDetail(item.id)}
                         >
-                          <div className="record-list-main">
-                            <div className="record-list-heading">
-                              <strong>{jobPrimaryLabel(item, files)}</strong>
-                              <span>{jobSecondaryLabel(item)}</span>
-                            </div>
-                            <div className="badge-row">
-                              <StatusBadge value={item.status} />
-                              {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
-                              {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
-                              {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
-                              {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                                <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
+                          <div className="record-list-item-body">
+                            <JobArtwork jobId={item.id} title={jobPrimaryLabel(item, files)} />
+                            <div className="record-list-main">
+                              <div className="record-list-heading">
+                                <strong>{jobPrimaryLabel(item, files)}</strong>
+                                <span>{jobSecondaryLabel(item)}</span>
+                              </div>
+                              <div className="badge-row">
+                                <StatusBadge value={item.status} />
+                                {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
+                                {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
+                                {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
+                                {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                                  <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
+                                ) : null}
+                                {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
+                              </div>
+                              {item.status === "running" || item.status === "pending" ? <JobProgressBar job={item} compact /> : null}
+                              {item.job_kind === "dry_run" && item.analysis_payload?.summary ? (
+                                <p className="muted-copy">{item.analysis_payload.summary}</p>
                               ) : null}
-                              {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
                             </div>
-                            {item.status === "running" || item.status === "pending" ? <JobProgressBar job={item} compact /> : null}
                           </div>
                           <div className="record-list-meta">
                             <span className="record-list-kicker">{jobOutcomeLabel(item)}</span>
@@ -353,6 +360,13 @@ export function JobsPage() {
                 </div>
               ) : null}
 
+              {detail.job_kind === "dry_run" ? (
+                <div className="info-strip">
+                  <strong>Dry run analysis</strong>
+                  <span>This job inspected the file on a worker and stored a safe plan without transcoding or replacing media.</span>
+                </div>
+              ) : null}
+
               {(detail.status === "running" || detail.status === "pending") ? <JobProgressBar job={detail} /> : null}
 
               <section className="metric-grid metric-grid-compact">
@@ -426,6 +440,34 @@ export function JobsPage() {
                 ]}
               />
 
+              {detail.job_kind === "dry_run" && detail.analysis_payload ? (
+                <CollapsibleSection
+                  title="Dry run output"
+                  subtitle="Planned action, estimated size, and what would change."
+                >
+                  <KeyValueList
+                    items={[
+                      { label: "Planned action", value: titleCase(detail.analysis_payload.planned_action) },
+                      { label: "Output filename", value: detail.analysis_payload.output_filename },
+                      { label: "Current size", value: formatBytes(detail.analysis_payload.current_size_bytes) },
+                      { label: "Estimated output size", value: formatBytes(detail.analysis_payload.estimated_output_size_bytes) },
+                      { label: "Estimated saved", value: formatBytes(detail.analysis_payload.estimated_space_saved_bytes) },
+                      { label: "Video handling", value: titleCase(detail.analysis_payload.video_handling) },
+                      { label: "Audio tracks removed", value: detail.analysis_payload.audio_tracks_removed_count },
+                      { label: "Subtitle tracks removed", value: detail.analysis_payload.subtitle_tracks_removed_count },
+                      { label: "Would trigger manual review", value: detail.analysis_payload.requires_review ? "Yes" : "No" },
+                      {
+                        label: "Manual review reasons",
+                        value: detail.analysis_payload.manual_review_reasons.length > 0
+                          ? detail.analysis_payload.manual_review_reasons.join(" • ")
+                          : "None",
+                      },
+                      { label: "Summary", value: detail.analysis_payload.summary },
+                    ]}
+                  />
+                </CollapsibleSection>
+              ) : null}
+
               {(detail.input_size_bytes != null || detail.video_space_saved_bytes != null) ? (
                 <CollapsibleSection
                   title="Storage and compression"
@@ -490,6 +532,48 @@ export function JobsPage() {
       </section>
     </div>
   );
+}
+
+function JobArtwork({ jobId, title }: { jobId: string; title: string }) {
+  const { tokens } = useSession();
+  const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
+
+  useEffect(() => {
+    if (!tokens?.access_token) {
+      setArtworkUrl(null);
+      return;
+    }
+    const controller = new AbortController();
+    let objectUrl: string | null = null;
+    fetch(`/api/jobs/${jobId}/artwork`, {
+      headers: { Authorization: `Bearer ${tokens.access_token}` },
+      signal: controller.signal,
+    })
+      .then(async (response) => {
+        if (!response.ok) {
+          return null;
+        }
+        const blob = await response.blob();
+        objectUrl = URL.createObjectURL(blob);
+        setArtworkUrl(objectUrl);
+        return null;
+      })
+      .catch(() => {
+        setArtworkUrl(null);
+      });
+    return () => {
+      controller.abort();
+      if (objectUrl) {
+        URL.revokeObjectURL(objectUrl);
+      }
+    };
+  }, [jobId, tokens?.access_token]);
+
+  if (!artworkUrl) {
+    return null;
+  }
+
+  return <img className="job-artwork" src={artworkUrl} alt={`${title} artwork`} />;
 }
 
 function TrackedFilePicker({
@@ -686,9 +770,13 @@ function jobOutcomeLabel(job: {
   failure_message: string | null;
   requires_review: boolean;
   tracked_file_is_protected: boolean | null;
+  job_kind?: string;
 }) {
   if (job.failure_message) {
     return "Failed";
+  }
+  if (job.job_kind === "dry_run" && job.status === "completed") {
+    return "Analysis complete";
   }
   if (job.tracked_file_is_protected) {
     return "Protected file";
@@ -796,14 +884,17 @@ function workerGroupLabel(job: JobSummary) {
 
 function jobMediaInfoLabel(job: JobSummary) {
   const parts = [];
+  if (job.job_kind === "dry_run" && job.analysis_payload?.output_filename) {
+    parts.push(`Output ${job.analysis_payload.output_filename}`);
+  }
   if (job.input_size_bytes != null) {
     parts.push(`Start ${formatBytes(job.input_size_bytes)}`);
   }
   if (job.output_size_bytes != null) {
-    parts.push(`Output ${formatBytes(job.output_size_bytes)}`);
+    parts.push(`${job.job_kind === "dry_run" ? "Estimated" : "Output"} ${formatBytes(job.output_size_bytes)}`);
   }
   if (job.space_saved_bytes != null) {
-    parts.push(`Saved ${formatBytes(job.space_saved_bytes)}`);
+    parts.push(`${job.job_kind === "dry_run" ? "Estimated saved" : "Saved"} ${formatBytes(job.space_saved_bytes)}`);
   }
   if (job.audio_tracks_removed_count > 0) {
     parts.push(`${job.audio_tracks_removed_count} audio removed`);

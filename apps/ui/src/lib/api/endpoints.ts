@@ -12,6 +12,7 @@ import type {
   BatchPlanResponse,
   BatchJobCreateResponse,
   CreateJobPayload,
+  CreateDryRunJobsPayload,
   CreateBatchJobsPayload,
   CurrentUser,
   EffectiveConfig,
@@ -34,6 +35,7 @@ import type {
   ProbeOrPlanPayload,
   ProbeSnapshotDetail,
   DryRunBatchResponse,
+  DryRunJobCreateResponse,
   RecentAnalytics,
   RuntimeStatus,
   RemoteWorkerOnboardingPayload,
@@ -171,6 +173,16 @@ export function updateWatchedJob(
 
 export function dryRunSelection(client: ApiClient, payload: FileSelectionPayload): Promise<DryRunBatchResponse> {
   return client.request<DryRunBatchResponse>("/files/dry-run", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function createDryRunJobs(
+  client: ApiClient,
+  payload: CreateDryRunJobsPayload,
+): Promise<DryRunJobCreateResponse> {
+  return client.request<DryRunJobCreateResponse>("/jobs/dry-run", {
     method: "POST",
     body: JSON.stringify(payload),
   });

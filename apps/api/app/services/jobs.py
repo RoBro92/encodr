@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+from typing import Callable
 
 from sqlalchemy.orm import Session
 
 from app.services.errors import ApiConflictError, ApiNotFoundError
-from encodr_db.models import Job, JobStatus, ManualReviewDecisionType, PlanSnapshot, TrackedFile
+from encodr_db.models import Job, JobKind, JobStatus, ManualReviewDecisionType, PlanSnapshot, TrackedFile
 from encodr_db.repositories import JobRepository, ManualReviewDecisionRepository, TrackedFileRepository
 
 
@@ -15,6 +16,7 @@ class JobsService:
         session: Session,
         *,
         status: JobStatus | None = None,
+        job_kind: JobKind | None = None,
         tracked_file_id: str | None = None,
         worker_name: str | None = None,
         limit: int | None = None,
@@ -22,6 +24,7 @@ class JobsService:
     ) -> list[Job]:
         return JobRepository(session).list_jobs(
             status=status,
+            job_kind=job_kind,
             tracked_file_id=tracked_file_id,
             worker_name=worker_name,
             limit=limit,
@@ -46,6 +49,9 @@ class JobsService:
         preferred_backend_override: str | None = None,
         schedule_windows: list[dict] | None = None,
         watched_job_id: str | None = None,
+        job_kind: JobKind = JobKind.EXECUTION,
+        analysis_payload: dict | None = None,
+        ignore_worker_schedule: bool = False,
     ) -> Job:
         tracked_file, plan_snapshot = self._resolve_target(
             session,
@@ -66,6 +72,9 @@ class JobsService:
             preferred_backend_override=preferred_backend_override,
             schedule_windows=schedule_windows,
             watched_job_id=watched_job_id,
+            job_kind=job_kind,
+            analysis_payload=analysis_payload,
+            ignore_worker_schedule=ignore_worker_schedule,
         )
         return job
 
@@ -88,6 +97,9 @@ class JobsService:
             preferred_backend_override=original_job.preferred_backend_override,
             schedule_windows=original_job.schedule_windows,
             watched_job_id=original_job.watched_job_id,
+            job_kind=original_job.job_kind,
+            analysis_payload=original_job.analysis_payload,
+            ignore_worker_schedule=original_job.ignore_worker_schedule,
         )
 
     def create_batch_jobs(
@@ -100,6 +112,9 @@ class JobsService:
         preferred_backend_override: str | None = None,
         schedule_windows: list[dict] | None = None,
         watched_job_id: str | None = None,
+        job_kind: JobKind = JobKind.EXECUTION,
+        analysis_payload_factory: Callable[[str, TrackedFile, PlanSnapshot], dict | None] | None = None,
+        ignore_worker_schedule: bool = False,
     ) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
         for source_path, tracked_file, plan_snapshot in planned_targets:
@@ -113,6 +128,13 @@ class JobsService:
                     preferred_backend_override=preferred_backend_override,
                     schedule_windows=schedule_windows,
                     watched_job_id=watched_job_id,
+                    job_kind=job_kind,
+                    analysis_payload=(
+                        analysis_payload_factory(source_path, tracked_file, plan_snapshot)
+                        if analysis_payload_factory is not None
+                        else None
+                    ),
+                    ignore_worker_schedule=ignore_worker_schedule,
                 )
                 results.append({
                     "source_path": source_path,

@@ -69,6 +69,7 @@ class Job(Base, IdMixin, TimestampMixin):
     preferred_backend_override: Mapped[str | None] = mapped_column(String(64), index=True)
     schedule_windows: Mapped[list[dict] | None] = mapped_column(json_type())
     schedule_summary: Mapped[str | None] = mapped_column(String(255))
+    ignore_worker_schedule: Mapped[bool] = mapped_column(Boolean, nullable=False, default=False)
     worker_name: Mapped[str | None] = mapped_column(String(255))
     status: Mapped[JobStatus] = mapped_column(
         enum_type(JobStatus, "job_status"),

@@ -23,7 +23,7 @@ def job_allows_worker(
         return False
     if not schedule_windows_allow_now(job.schedule_windows, now=current):
         return False
-    if not schedule_windows_allow_now(worker.schedule_windows, now=current):
+    if not job.ignore_worker_schedule and not schedule_windows_allow_now(worker.schedule_windows, now=current):
         return False
     return True
 

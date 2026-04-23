@@ -106,7 +106,7 @@ export class ApiClient {
     if (!response.ok) {
       const message =
         typeof body === "object" && body !== null && "detail" in body
-          ? String((body as { detail: unknown }).detail)
+          ? formatDetailMessage((body as { detail: unknown }).detail)
           : response.statusText || "Request failed.";
 
       if (response.status === 401) {
@@ -147,4 +147,14 @@ export class ApiClient {
 
     return this.refreshPromise;
   }
+}
+
+function formatDetailMessage(detail: unknown) {
+  if (typeof detail === "string") {
+    return detail;
+  }
+  if (detail && typeof detail === "object" && "message" in detail) {
+    return String((detail as { message: unknown }).message);
+  }
+  return String(detail);
 }

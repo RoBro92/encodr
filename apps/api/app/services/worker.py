@@ -721,7 +721,11 @@ class WorkerService:
 
         if job.assigned_worker_id is None:
             repository.assign_worker(job, worker=worker)
-        requested_backend = normalise_backend_preference(job.preferred_backend_override or worker.preferred_backend or "cpu_only")
+        requested_backend = (
+            normalise_backend_preference(job.preferred_backend_override or worker.preferred_backend or "cpu_only")
+            if job.job_kind != JobKind.DRY_RUN
+            else None
+        )
         repository.mark_running_for_worker(job, worker=worker, requested_backend=requested_backend)
         claimed_at = job.started_at or datetime.now(timezone.utc)
         return {
@@ -753,11 +757,15 @@ class WorkerService:
         repository.mark_result(job, result)
         job.last_worker_id = worker.id
         job.worker_name = worker.display_name
-        tracked_files.update_file_state_from_execution_result(
-            job.tracked_file,
-            ProcessingPlan.model_validate(job.plan_snapshot.payload),
-            result,
-        )
+        plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
+        if job.job_kind == JobKind.DRY_RUN:
+            tracked_files.update_file_state_from_plan_result(job.tracked_file, plan)
+        else:
+            tracked_files.update_file_state_from_execution_result(
+                job.tracked_file,
+                plan,
+                result,
+            )
 
         if runtime_summary is not None:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
@@ -818,11 +826,15 @@ class WorkerService:
         repository.mark_result(job, result)
         job.last_worker_id = worker.id
         job.worker_name = worker.display_name
-        tracked_files.update_file_state_from_execution_result(
-            job.tracked_file,
-            ProcessingPlan.model_validate(job.plan_snapshot.payload),
-            result,
-        )
+        plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
+        if job.job_kind == JobKind.DRY_RUN:
+            tracked_files.update_file_state_from_plan_result(job.tracked_file, plan)
+        else:
+            tracked_files.update_file_state_from_execution_result(
+                job.tracked_file,
+                plan,
+                result,
+            )
 
         if runtime_summary is not None:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
@@ -1472,9 +1484,11 @@ class WorkerService:
             "job_id": job.id,
             "tracked_file_id": job.tracked_file_id,
             "plan_snapshot_id": job.plan_snapshot_id,
+            "job_kind": job.job_kind.value,
             "source_path": remapped_source,
             "plan_payload": job.plan_snapshot.payload,
             "media_payload": media_payload,
+            "analysis_payload": job.analysis_payload,
             "requested_worker_type": job.requested_worker_type.value if job.requested_worker_type is not None else None,
             "assignment_state": "claimed" if job.status == JobStatus.RUNNING else "assigned",
             "assigned_worker_id": job.assigned_worker_id,

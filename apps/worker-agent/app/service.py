@@ -209,7 +209,7 @@ class WorkerAgentService:
         job = assignment["job"]
         job_id = str(job["job_id"])
         preview_backend = getattr(self.execution_service, "preview_backend", None)
-        if callable(preview_backend):
+        if callable(preview_backend) and job.get("job_kind") != "dry_run":
             backend_preview = preview_backend(
                 job_id=job_id,
                 plan_payload=dict(job["plan_payload"]),
@@ -235,17 +235,28 @@ class WorkerAgentService:
             allow_cpu_fallback=session.allow_cpu_fallback,
             runtime_configuration=session.runtime_configuration,
         )
+        execute_signature = inspect.signature(self.execution_service.execute)
+        execute_parameters = execute_signature.parameters
         execute_kwargs = {
             "job_id": job_id,
             "plan_payload": dict(job["plan_payload"]),
             "media_payload": dict(job["media_payload"]),
         }
-        if "progress_callback" in inspect.signature(self.execution_service.execute).parameters:
+        if "job_kind" in execute_parameters:
+            execute_kwargs["job_kind"] = str(job.get("job_kind") or "execution")
+        if "analysis_request_payload" in execute_parameters:
+            execute_kwargs["analysis_request_payload"] = (
+                dict(job["analysis_payload"])
+                if isinstance(job.get("analysis_payload"), dict)
+                else None
+            )
+        if "progress_callback" in execute_parameters:
             execute_kwargs["progress_callback"] = progress_reporter
-        if "scratch_dir_override" in inspect.signature(self.execution_service.execute).parameters:
+        if "scratch_dir_override" in execute_parameters:
             execute_kwargs["scratch_dir_override"] = self._scratch_dir_for_runtime(session.runtime_configuration)
-        if "preferred_backend" in inspect.signature(self.execution_service.execute).parameters:
+        if "preferred_backend" in execute_parameters:
             execute_kwargs["preferred_backend"] = session.preferred_backend
+        if "allow_cpu_fallback" in execute_parameters:
             execute_kwargs["allow_cpu_fallback"] = session.allow_cpu_fallback
         try:
             result = self.execution_service.execute(**execute_kwargs)

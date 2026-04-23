@@ -41,6 +41,7 @@ class JobRepository:
         watched_job_id: str | None = None,
         job_kind: JobKind = JobKind.EXECUTION,
         analysis_payload: dict | None = None,
+        ignore_worker_schedule: bool = False,
     ) -> Job:
         payload = plan_snapshot.payload
         replace_payload = payload["replace"]
@@ -58,6 +59,7 @@ class JobRepository:
             else None,
             schedule_windows=schedule_windows,
             schedule_summary=schedule_windows_summary(schedule_windows),
+            ignore_worker_schedule=ignore_worker_schedule,
             worker_name=worker_name,
             status=JobStatus.SCHEDULED if starts_scheduled else JobStatus.PENDING,
             attempt_count=attempt_count,
@@ -272,6 +274,7 @@ class JobRepository:
         job.replacement_failure_message = (
             result.replacement.failure_message if result.replacement is not None else None
         )
+        job.analysis_payload = result.analysis_payload
         job.progress_stage = "completed" if result.status == "completed" else result.status
         job.progress_percent = 100 if result.status in {"completed", "skipped"} else job.progress_percent
         job.progress_updated_at = result.completed_at

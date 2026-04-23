@@ -49,6 +49,34 @@ class CreateBatchJobsRequest(BaseModel):
         return self
 
 
+class CreateDryRunJobsRequest(CreateBatchJobsRequest):
+    ignore_worker_schedule: bool = False
+
+
+class DryRunAnalysisResponse(BaseModel):
+    mode: str = "dry_run"
+    source_path: str
+    file_name: str
+    planned_action: str
+    confidence: str
+    requires_review: bool
+    is_protected: bool
+    reason_codes: list[str] = Field(default_factory=list)
+    warning_codes: list[str] = Field(default_factory=list)
+    selected_audio_stream_indices: list[int] = Field(default_factory=list)
+    selected_subtitle_stream_indices: list[int] = Field(default_factory=list)
+    output_filename: str
+    current_size_bytes: int | None = None
+    estimated_output_size_bytes: int | None = None
+    estimated_space_saved_bytes: int | None = None
+    audio_tracks_removed_count: int = 0
+    subtitle_tracks_removed_count: int = 0
+    summary: str
+    video_handling: str
+    manual_review_triggered: bool = False
+    manual_review_reasons: list[str] = Field(default_factory=list)
+
+
 class BatchJobItemResponse(BaseModel):
     source_path: str
     status: str
@@ -61,6 +89,16 @@ class BatchJobCreateResponse(BaseModel):
     total_files: int
     created_count: int
     blocked_count: int
+    items: list[BatchJobItemResponse]
+
+
+class DryRunJobCreateResponse(BaseModel):
+    mode: str = "dry_run"
+    scope: str
+    total_files: int
+    created_count: int
+    blocked_count: int
+    warning_threshold: int = 15
     items: list[BatchJobItemResponse]
 
 
@@ -100,6 +138,7 @@ class JobSummaryResponse(BaseModel):
     compression_reduction_percent: int | None = None
     audio_tracks_removed_count: int = 0
     subtitle_tracks_removed_count: int = 0
+    analysis_payload: DryRunAnalysisResponse | None = None
     verification_status: str
     replacement_status: str
     tracked_file_is_protected: bool | None = None
@@ -123,6 +162,11 @@ class JobSummaryResponse(BaseModel):
 
     @classmethod
     def from_model(cls, job: Job) -> "JobSummaryResponse":
+        analysis_payload = (
+            DryRunAnalysisResponse.model_validate(job.analysis_payload)
+            if isinstance(job.analysis_payload, dict)
+            else None
+        )
         return cls(
             id=job.id,
             tracked_file_id=job.tracked_file_id,
@@ -150,8 +194,12 @@ class JobSummaryResponse(BaseModel):
             failure_message=job.failure_message,
             failure_category=job.failure_category,
             input_size_bytes=job.input_size_bytes,
-            output_size_bytes=job.output_size_bytes,
-            space_saved_bytes=job.space_saved_bytes,
+            output_size_bytes=job.output_size_bytes if job.output_size_bytes is not None else (
+                analysis_payload.estimated_output_size_bytes if analysis_payload is not None else None
+            ),
+            space_saved_bytes=job.space_saved_bytes if job.space_saved_bytes is not None else (
+                analysis_payload.estimated_space_saved_bytes if analysis_payload is not None else None
+            ),
             video_input_size_bytes=job.video_input_size_bytes,
             video_output_size_bytes=job.video_output_size_bytes,
             video_space_saved_bytes=job.video_space_saved_bytes,
@@ -159,11 +207,12 @@ class JobSummaryResponse(BaseModel):
             compression_reduction_percent=job.compression_reduction_percent,
             audio_tracks_removed_count=job_removed_audio_tracks(job),
             subtitle_tracks_removed_count=job_removed_subtitle_tracks(job),
+            analysis_payload=analysis_payload,
             verification_status=job.verification_status.value,
             replacement_status=job.replacement_status.value,
             tracked_file_is_protected=job.tracked_file.is_protected if job.tracked_file is not None else None,
-            requires_review=job.status.value == "manual_review",
-            review_status="open" if job.status.value == "manual_review" else None,
+            requires_review=job.status.value == "manual_review" or dry_run_requires_review(job),
+            review_status="open" if job.status.value == "manual_review" else ("would_review" if dry_run_requires_review(job) else None),
             assigned_worker_id=job.assigned_worker_id,
             last_worker_id=job.last_worker_id,
             preferred_worker_id=job.preferred_worker_id,
@@ -240,6 +289,8 @@ def job_duration_seconds(job: Job) -> int | None:
 
 
 def job_removed_audio_tracks(job: Job) -> int:
+    if isinstance(job.analysis_payload, dict) and "audio_tracks_removed_count" in job.analysis_payload:
+        return int(job.analysis_payload.get("audio_tracks_removed_count") or 0)
     payload = getattr(job.plan_snapshot, "payload", None)
     if not isinstance(payload, dict):
         return 0
@@ -253,6 +304,8 @@ def job_removed_audio_tracks(job: Job) -> int:
 
 
 def job_removed_subtitle_tracks(job: Job) -> int:
+    if isinstance(job.analysis_payload, dict) and "subtitle_tracks_removed_count" in job.analysis_payload:
+        return int(job.analysis_payload.get("subtitle_tracks_removed_count") or 0)
     payload = getattr(job.plan_snapshot, "payload", None)
     if not isinstance(payload, dict):
         return 0
@@ -263,3 +316,10 @@ def job_removed_subtitle_tracks(job: Job) -> int:
     if not isinstance(dropped, list):
         return 0
     return len(dropped)
+
+
+def dry_run_requires_review(job: Job) -> bool:
+    payload = getattr(job, "analysis_payload", None)
+    if not isinstance(payload, dict):
+        return False
+    return bool(payload.get("requires_review"))

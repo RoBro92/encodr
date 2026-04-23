@@ -47,6 +47,7 @@ class ExecutionResult(ConfigModel):
     actual_accelerator: str | None = None
     backend_fallback_used: bool = False
     backend_selection_reason: str | None = None
+    analysis_payload: dict | None = None
     verification: VerificationResult | None = None
     replacement: ReplacementResult | None = None
     started_at: datetime

@@ -12,8 +12,9 @@ import { StatusBadge } from "../../components/StatusBadge";
 import {
   useBatchPlanMutation,
   useCreateBatchJobsMutation,
+  useCreateDryRunJobsMutation,
   useCreateWatchedJobMutation,
-  useDryRunMutation,
+  useJobsQuery,
   useLibraryRootsQuery,
   useScanFolderMutation,
   useScansQuery,
@@ -21,8 +22,9 @@ import {
   useWatchedJobsQuery,
   useWorkersQuery,
 } from "../../lib/api/hooks";
-import type { FolderScanSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
-import { formatDateTime, titleCase } from "../../lib/utils/format";
+import { ApiError } from "../../lib/api/client";
+import type { FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
+import { formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
 type LibraryTab = "browse" | "scan" | "dry-run" | "batch-plan";
@@ -54,6 +56,8 @@ const BACKEND_OPTIONS = [
   { value: "prefer_nvidia_gpu", label: "Prefer NVIDIA" },
   { value: "prefer_amd_gpu", label: "Prefer AMD" },
 ];
+
+const DRY_RUN_WARNING_THRESHOLD = 15;
 
 function inferWatcherDefaults(path: string | null, moviesRoot: string | null, tvRoot: string | null): WatcherDraft {
   const normalised = (path ?? "").toLowerCase();
@@ -110,24 +114,43 @@ export function FilesPage() {
   const [activeTab, setActiveTab] = useState<LibraryTab>("browse");
   const [activeScanDraft, setActiveScanDraft] = useState<FolderScanSummary | null>(null);
   const [watcherDraft, setWatcherDraft] = useState<WatcherDraft | null>(null);
+  const [dryRunModalOpen, setDryRunModalOpen] = useState(false);
+  const [dryRunWorkerId, setDryRunWorkerId] = useState("");
+  const [dryRunScheduleConflict, setDryRunScheduleConflict] = useState<{
+    worker_id: string;
+    worker_name: string;
+    schedule_summary: string | null;
+  } | null>(null);
+  const [latestDryRunJobIds, setLatestDryRunJobIds] = useState<string[]>([]);
 
   const rootsQuery = useLibraryRootsQuery();
   const scansQuery = useScansQuery();
   const watchedJobsQuery = useWatchedJobsQuery();
   const workersQuery = useWorkersQuery();
+  const dryRunJobsQuery = useJobsQuery({ job_kind: "dry_run", limit: 100 });
   const scanMutation = useScanFolderMutation();
-  const dryRunMutation = useDryRunMutation();
+  const createDryRunJobsMutation = useCreateDryRunJobsMutation();
   const batchPlanMutation = useBatchPlanMutation();
   const batchJobsMutation = useCreateBatchJobsMutation();
   const createWatchedJobMutation = useCreateWatchedJobMutation();
   const updateWatchedJobMutation = useUpdateWatchedJobMutation();
 
-  const loading = rootsQuery.isLoading || scansQuery.isLoading || watchedJobsQuery.isLoading || workersQuery.isLoading;
+  const loading =
+    rootsQuery.isLoading ||
+    scansQuery.isLoading ||
+    watchedJobsQuery.isLoading ||
+    workersQuery.isLoading ||
+    dryRunJobsQuery.isLoading;
   if (loading) {
     return <LoadingBlock label="Loading library" />;
   }
 
-  const error = rootsQuery.error ?? scansQuery.error ?? watchedJobsQuery.error ?? workersQuery.error;
+  const error =
+    rootsQuery.error ??
+    scansQuery.error ??
+    watchedJobsQuery.error ??
+    workersQuery.error ??
+    dryRunJobsQuery.error;
   if (error instanceof Error) {
     return <ErrorPanel title="Unable to load the library" message={error.message} />;
   }
@@ -140,6 +163,7 @@ export function FilesPage() {
   const recentScans = scansQuery.data?.items ?? [];
   const watchedJobs = watchedJobsQuery.data?.items ?? [];
   const workers = workersQuery.data?.items ?? [];
+  const dryRunJobs = (dryRunJobsQuery.data?.items ?? []).filter((job) => latestDryRunJobIds.includes(job.id));
   const moviesRoot = roots.movies_root;
   const tvRoot = roots.tv_root;
   const activeScan = activeScanDraft
@@ -160,6 +184,14 @@ export function FilesPage() {
   const showWorkspaceTabs = Boolean(selectedFolder);
   const currentTab = showWorkspaceTabs ? activeTab : "browse";
   const selectedCount = selectedPaths.length;
+  const dryRunSelectionCount =
+    selectedPaths.length > 0
+      ? selectedPaths.length
+      : activeScan?.folder_path === selectedFolder
+        ? activeScan.files.length
+        : selectedFolder
+          ? 1
+          : 0;
   const selectedCountLabel =
     selectedCount === 1 ? "1 file selected" : `${selectedCount} files selected`;
   const selectionScopeLabel =
@@ -179,6 +211,7 @@ export function FilesPage() {
     id: worker.id,
     label: `${worker.display_name} (${worker.worker_type === "local" ? "local" : "remote"})`,
   }));
+  const selectedDryRunWorker = workers.find((worker) => worker.id === dryRunWorkerId) ?? null;
 
   function togglePath(path: string) {
     setSelectedPaths((current) =>
@@ -245,12 +278,60 @@ export function FilesPage() {
     setWatcherDraft(null);
   }
 
-  function runDryRun() {
+  function openDryRunModal() {
     if (!activeSelection) {
       return;
     }
-    setActiveTab("dry-run");
-    dryRunMutation.mutate(activeSelection);
+    setDryRunScheduleConflict(null);
+    setDryRunModalOpen(true);
+  }
+
+  async function submitDryRun(ignoreWorkerSchedule = false) {
+    if (!activeSelection) {
+      return;
+    }
+    try {
+      const result = await createDryRunJobsMutation.mutateAsync({
+        ...activeSelection,
+        pinned_worker_id: dryRunWorkerId || undefined,
+        schedule_windows:
+          !ignoreWorkerSchedule && selectedDryRunWorker?.schedule_windows?.length
+            ? selectedDryRunWorker.schedule_windows
+            : [],
+        ignore_worker_schedule: ignoreWorkerSchedule,
+      });
+      setLatestDryRunJobIds(result.items.flatMap((item) => (item.job ? [item.job.id] : [])));
+      setActiveTab("dry-run");
+      setDryRunModalOpen(false);
+      setDryRunScheduleConflict(null);
+    } catch (error) {
+      if (
+        error instanceof ApiError &&
+        error.status === 409 &&
+        error.details &&
+        typeof error.details === "object" &&
+        "detail" in error.details
+      ) {
+        const detail = (error.details as { detail: unknown }).detail;
+        if (
+          detail &&
+          typeof detail === "object" &&
+          "code" in detail &&
+          (detail as { code: unknown }).code === "worker_schedule_conflict"
+        ) {
+          setDryRunScheduleConflict({
+            worker_id: String((detail as { worker_id?: unknown }).worker_id ?? ""),
+            worker_name: String((detail as { worker_name?: unknown }).worker_name ?? "Selected worker"),
+            schedule_summary:
+              detail && typeof detail === "object" && "schedule_summary" in detail
+                ? String((detail as { schedule_summary?: unknown }).schedule_summary ?? "")
+                : null,
+          });
+          return;
+        }
+      }
+      return;
+    }
   }
 
   function runBatchPlan() {
@@ -309,8 +390,8 @@ export function FilesPage() {
       {scanMutation.error instanceof Error ? (
         <ErrorPanel title="Scan failed" message={scanMutation.error.message} />
       ) : null}
-      {dryRunMutation.error instanceof Error ? (
-        <ErrorPanel title="Dry run failed" message={dryRunMutation.error.message} />
+      {createDryRunJobsMutation.error instanceof Error ? (
+        <ErrorPanel title="Dry run failed" message={createDryRunJobsMutation.error.message} />
       ) : null}
       {batchPlanMutation.error instanceof Error ? (
         <ErrorPanel title="Batch plan failed" message={batchPlanMutation.error.message} />
@@ -416,14 +497,14 @@ export function FilesPage() {
               >
                 {scanMutation.isPending ? "Scanning…" : "Scan folder"}
               </button>
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={runDryRun}
-                disabled={!activeSelection || dryRunMutation.isPending}
-              >
-                {dryRunMutation.isPending ? "Running…" : "Dry Run"}
-              </button>
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={openDryRunModal}
+                  disabled={!activeSelection || createDryRunJobsMutation.isPending}
+                >
+                  {createDryRunJobsMutation.isPending ? "Starting…" : "Dry Run"}
+                </button>
               <button
                 className="button button-secondary"
                 type="button"
@@ -805,44 +886,52 @@ export function FilesPage() {
           ) : null}
 
           {currentTab === "dry-run" ? (
-            dryRunMutation.data ? (
+            dryRunJobs.length > 0 ? (
               <div className="card-stack">
                 <div className="info-strip">
-                  <strong>Safe preview</strong>
-                  <span>Dry Run shows what Encodr would do without creating output files or replacing media.</span>
+                  <strong>Worker-backed analysis</strong>
+                  <span>Dry run jobs inspect and plan files on a worker without transcoding, deleting, or replacing media.</span>
                 </div>
                 <div className="metric-grid">
                   <div className="metric-panel">
                     <span className="metric-label">Files</span>
-                    <strong>{dryRunMutation.data.total_files}</strong>
+                    <strong>{dryRunJobs.length}</strong>
                   </div>
                   <div className="metric-panel">
-                    <span className="metric-label">Review</span>
-                    <strong>{dryRunMutation.data.review_count}</strong>
+                    <span className="metric-label">Completed</span>
+                    <strong>{dryRunJobs.filter((item) => item.status === "completed").length}</strong>
                   </div>
                   <div className="metric-panel">
-                    <span className="metric-label">Protected</span>
-                    <strong>{dryRunMutation.data.protected_count}</strong>
+                    <span className="metric-label">Running</span>
+                    <strong>{dryRunJobs.filter((item) => item.status === "running").length}</strong>
                   </div>
-                </div>
-                <div className="badge-list">
-                  {dryRunMutation.data.actions.map((item) => (
-                    <div key={item.value} className="metric-pill">
-                      <StatusBadge value={String(item.value)} />
-                      <strong>{item.count}</strong>
-                    </div>
-                  ))}
+                  <div className="metric-panel">
+                    <span className="metric-label">Would review</span>
+                    <strong>{dryRunJobs.filter((item) => item.analysis_payload?.requires_review).length}</strong>
+                  </div>
                 </div>
                 <div className="list-stack">
-                  {dryRunMutation.data.items.map((item) => (
-                    <div key={item.source_path} className="list-row">
+                  {dryRunJobs.map((item) => (
+                    <div key={item.id} className="list-row">
                       <div>
-                        <strong>{item.file_name}</strong>
-                        <p>{item.source_path}</p>
+                        <strong>{item.analysis_payload?.file_name ?? item.source_filename ?? item.source_path?.split("/").pop()}</strong>
+                        <p>{item.analysis_payload?.source_path ?? item.source_path ?? "Path unavailable"}</p>
+                        {item.analysis_payload ? (
+                          <p>
+                            {titleCase(item.analysis_payload.planned_action)} • {titleCase(item.analysis_payload.video_handling)} •
+                            Estimated {formatBytes(item.analysis_payload.estimated_output_size_bytes)}
+                          </p>
+                        ) : (
+                          <p>{titleCase(item.status)}{item.worker_name ? ` • ${item.worker_name}` : ""}</p>
+                        )}
+                        {item.analysis_payload?.summary ? <p>{item.analysis_payload.summary}</p> : null}
                       </div>
                       <div className="list-row-meta">
-                        <StatusBadge value={item.action} />
-                        {item.requires_review ? <StatusBadge value="manual_review" /> : null}
+                        <StatusBadge value={item.status} />
+                        <StatusBadge value="dry run" />
+                        {item.analysis_payload ? <StatusBadge value={item.analysis_payload.planned_action} /> : null}
+                        {item.analysis_payload?.requires_review ? <StatusBadge value="would review" /> : null}
+                        <Link className="text-link" to={APP_ROUTES.jobDetail(item.id)}>Open job</Link>
                       </div>
                     </div>
                   ))}
@@ -937,6 +1026,106 @@ export function FilesPage() {
           void runScan(path);
         }}
       />
+
+      {dryRunModalOpen ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Start dry run">
+          <section className="modal-panel">
+            <div className="card-stack">
+              <div>
+                <strong>Start dry run</strong>
+                <p className="muted-copy">
+                  Launch a safe analysis job on a worker. Dry run inspects and plans files without changing media.
+                </p>
+              </div>
+
+              {dryRunSelectionCount > DRY_RUN_WARNING_THRESHOLD ? (
+                <div className="info-strip info-strip-warning">
+                  <strong>Large dry run</strong>
+                  <span>
+                    {dryRunSelectionCount} files are selected. Inspection can take some time once more than {DRY_RUN_WARNING_THRESHOLD} files are queued.
+                  </span>
+                </div>
+              ) : null}
+
+              <label className="field">
+                <span>Worker</span>
+                <select
+                  aria-label="Dry run worker"
+                  value={dryRunWorkerId}
+                  onChange={(event) => {
+                    setDryRunWorkerId(event.target.value);
+                    setDryRunScheduleConflict(null);
+                  }}
+                >
+                  <option value="">Automatic</option>
+                  {workerOptions.map((worker) => (
+                    <option key={worker.id} value={worker.id}>{worker.label}</option>
+                  ))}
+                </select>
+              </label>
+
+              {selectedDryRunWorker?.schedule_summary ? (
+                <div className="info-strip">
+                  <strong>Worker schedule</strong>
+                  <span>{selectedDryRunWorker.schedule_summary}</span>
+                </div>
+              ) : null}
+
+              {dryRunScheduleConflict ? (
+                <div className="info-strip info-strip-warning">
+                  <strong>Outside worker schedule</strong>
+                  <span>
+                    {dryRunScheduleConflict.worker_name} is currently outside its execution window.
+                    {dryRunScheduleConflict.schedule_summary ? ` Allowed window: ${dryRunScheduleConflict.schedule_summary}.` : ""}
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="section-card-actions">
+                {dryRunScheduleConflict ? (
+                  <>
+                    <button
+                      className="button button-primary"
+                      type="button"
+                      onClick={() => void submitDryRun(true)}
+                      disabled={createDryRunJobsMutation.isPending}
+                    >
+                      {createDryRunJobsMutation.isPending ? "Starting…" : "Run now"}
+                    </button>
+                    <button
+                      className="button button-secondary"
+                      type="button"
+                      onClick={() => void submitDryRun(false)}
+                      disabled={createDryRunJobsMutation.isPending}
+                    >
+                      Queue for schedule
+                    </button>
+                  </>
+                ) : (
+                  <button
+                    className="button button-primary"
+                    type="button"
+                    onClick={() => void submitDryRun(false)}
+                    disabled={createDryRunJobsMutation.isPending}
+                  >
+                    {createDryRunJobsMutation.isPending ? "Starting…" : "Start dry run"}
+                  </button>
+                )}
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => {
+                    setDryRunModalOpen(false);
+                    setDryRunScheduleConflict(null);
+                  }}
+                >
+                  Cancel
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </div>
   );
 }

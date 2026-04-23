@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.config import WorkerAgentSettings
+from encodr_core.config import deserialise_config_bundle
 from encodr_core.execution import (
     BackendSelectionError,
     ExecutionProgressUpdate,
@@ -16,8 +17,8 @@ from encodr_core.execution import (
     calculate_media_savings,
 )
 from encodr_core.media.models import MediaFile
-from encodr_core.planning import ProcessingPlan
-from encodr_core.probe import FFprobeClient, ProbeError
+from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload, build_processing_plan
+from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
 
@@ -40,6 +41,8 @@ class RemoteExecutionService:
         job_id: str,
         plan_payload: dict,
         media_payload: dict,
+        job_kind: str = "execution",
+        analysis_request_payload: dict | None = None,
         scratch_dir_override: str | None = None,
         preferred_backend: str | None = None,
         allow_cpu_fallback: bool | None = None,
@@ -48,6 +51,13 @@ class RemoteExecutionService:
         plan = ProcessingPlan.model_validate(plan_payload)
         media_file = MediaFile.model_validate(media_payload)
         verifier = OutputVerifier(probe_client=FFprobeClient(binary_path=self.settings.ffprobe_path))
+
+        if job_kind == "dry_run":
+            return self._execute_analysis(
+                media_payload=media_payload,
+                analysis_request_payload=analysis_request_payload,
+                progress_callback=progress_callback,
+            )
 
         requested_backend = preferred_backend or self.settings.preferred_backend
         allow_fallback = self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback
@@ -117,6 +127,115 @@ class RemoteExecutionService:
                 progress_callback=progress_callback,
             )
         return result
+
+    def _execute_analysis(
+        self,
+        *,
+        media_payload: dict,
+        analysis_request_payload: dict | None,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+    ) -> ExecutionResult:
+        started_at = datetime.now(timezone.utc)
+        source_path = str(media_payload.get("file_path") or "")
+        if progress_callback is not None:
+            progress_callback(
+                ExecutionProgressUpdate(
+                    stage="probing",
+                    percent=10.0,
+                    updated_at=started_at,
+                )
+            )
+        try:
+            probe_client = FFprobeClient(binary_path=self.settings.ffprobe_path)
+            media_file = probe_client.probe_file(source_path)
+            if progress_callback is not None:
+                progress_callback(
+                    ExecutionProgressUpdate(
+                        stage="planning",
+                        percent=55.0,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+            config_bundle = deserialise_config_bundle(
+                dict((analysis_request_payload or {}).get("config_bundle") or {})
+            )
+            plan = build_processing_plan(
+                media_file,
+                config_bundle,
+                source_path=media_file.file_path,
+            )
+            analysis_payload = build_dry_run_analysis_payload(
+                media_file,
+                plan,
+                ffprobe_path=self.settings.ffprobe_path,
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    ExecutionProgressUpdate(
+                        stage="summarising",
+                        percent=90.0,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+            return ExecutionResult(
+                mode="dry_run",
+                status="completed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                backend_selection_reason="Dry run analysis inspects and plans files without encoding.",
+                analysis_payload=analysis_payload,
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+        except ProbeBinaryNotFoundError as error:
+            return ExecutionResult(
+                mode="dry_run",
+                status="failed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                failure_message=error.message,
+                failure_category="analysis_dependency_missing",
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+        except ProbeError as error:
+            return ExecutionResult(
+                mode="dry_run",
+                status="failed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                failure_message=error.message,
+                failure_category="analysis_probe_failed",
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
+        except Exception as error:
+            return ExecutionResult(
+                mode="dry_run",
+                status="failed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                failure_message=str(error),
+                failure_category="analysis_failed",
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=started_at,
+                completed_at=datetime.now(timezone.utc),
+            )
 
     def preview_backend(
         self,

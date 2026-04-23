@@ -402,9 +402,11 @@ class WorkerAssignedJobResponse(BaseModel):
     job_id: str
     tracked_file_id: str
     plan_snapshot_id: str
+    job_kind: str = "execution"
     source_path: str
     plan_payload: dict[str, Any]
     media_payload: dict[str, Any]
+    analysis_payload: dict[str, Any] | None = None
     requested_worker_type: str | None = None
     assignment_state: Literal["assigned", "claimed"] = "assigned"
     assigned_worker_id: str | None = None
