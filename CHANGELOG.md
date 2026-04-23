@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.3.5-rc.2 - 2026-04-23
+
+This release candidate focuses on UI/functionality stabilisation ahead of the next design pass, with an emphasis on operator clarity, truthful worker diagnostics, safer queue handling, and library scalability.
+
+- reworked the Workers page so inventory stays compact and worker detail no longer stretches the page layout
+- refocused worker detail around operator value, surfacing:
+  - health summary
+  - degraded reasons
+  - preferred vs usable backends
+  - current activity
+  - queue/concurrency summary
+  - storage/path access
+  - telemetry and recent jobs
+- improved local worker diagnostics so Intel iGPU/runtime issues are shown clearly, including:
+  - `/dev/dri` visibility
+  - ffmpeg and ffprobe readiness
+  - configured backend health
+  - CPU fallback-in-effect visibility
+  - clearer degraded-state explanations
+- added job cancellation support for:
+  - queued jobs
+  - scheduled jobs
+  - safe local running jobs
+  while keeping unsafe remote and running dry-run cancellation paths conservative
+- clarified queue and progress presentation with:
+  - real vertical worker accordions
+  - clearer per-job stage labels
+  - better handling of 0%-but-active jobs
+  - clearer cancelled vs interrupted visibility
+  - visually distinct dry-run jobs
+- corrected queue artwork sourcing so random frame extraction is no longer used as the default visual
+- scaled Library workspace behaviour with:
+  - search
+  - pagination
+  - TV show/season/episode hierarchy
+  - bulk selection for shows, seasons, and visible result sets
+- preserved existing:
+  - worker onboarding and editing
+  - per-worker backend, path-mapping, and scratch configuration
+  - scheduling and watched jobs
+  - dry-run jobs
+  - rules and compression safety
+  - local and remote execution
+- revalidated the branch with:
+  - `pytest -q`
+  - UI tests and production build
+  - clean local harness execution with `15/15` scenarios passing
+  - local and remote execution validated
+  - dry-run job validation
+
 ## 0.3.5-rc.1 - 2026-04-23
 
 This release candidate focuses on worker inventory correction, per-worker storage/runtime configuration, worker-backed dry runs, and grouped operational visibility.
