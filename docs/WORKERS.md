@@ -24,6 +24,45 @@ When enabled, the local worker:
 - can be enabled or disabled without being forgotten
 - has its own preferred backend and CPU fallback policy
 
+### Intel iGPU requirements
+
+Intel iGPU support is now validated conservatively through the worker runtime, not just by checking whether FFmpeg lists encoders.
+
+For Intel VAAPI to be considered usable:
+
+- the LXC or VM must expose `/dev/dri`
+- the worker container must also see `/dev/dri`
+- the worker image must include the Intel VAAPI userspace runtime packages on Intel-capable Debian targets:
+  - `vainfo`
+  - `intel-media-va-driver`
+  - `libva2`
+  - `libva-drm2`
+  - `mesa-va-drivers`
+- `LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128` must succeed inside the worker runtime
+- a short FFmpeg VAAPI encode smoke test must also succeed inside the worker runtime
+
+Encodr does not depend on `intel-media-va-driver-non-free`.
+
+Expected validation commands inside the worker container:
+
+```bash
+LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128
+LIBVA_DRIVER_NAME=iHD ffmpeg -hide_banner \
+  -vaapi_device /dev/dri/renderD128 \
+  -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 \
+  -vf "format=nv12,hwupload" \
+  -c:v h264_vaapi -f null -
+```
+
+If Intel VAAPI is not usable, Encodr now surfaces a specific reason such as:
+
+- device missing
+- permission denied
+- Intel driver missing
+- `vainfo` missing
+- VAAPI init failed
+- FFmpeg VAAPI encode test failed
+
 If the local worker is not configured, the Workers page shows that clearly and the local execution loop does not take jobs.
 
 ## Remote workers
@@ -68,6 +107,11 @@ Supported backend preferences are:
 - `prefer_amd_gpu`
 
 Encodr only advertises and uses hardware paths that are actually present and usable by FFmpeg in that worker's runtime.
+
+For Intel in this release line:
+
+- VAAPI is the validated Intel path
+- QSV remains deliberately unverified unless a separate production-grade QSV smoke test is introduced
 
 ## Worker states
 

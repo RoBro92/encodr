@@ -26,6 +26,36 @@
 - remote workers can register, heartbeat, claim jobs, execute them, and report results
 - Windows is the first practical remote worker target
 
+### Intel iGPU passthrough notes
+
+For Intel iGPU passthrough to work truthfully with the local worker:
+
+- the Proxmox host must expose `/dev/dri` into the LXC or VM
+- the Encodr worker container must also see `/dev/dri`
+- the worker image now includes the required Intel VAAPI userspace runtime packages on Intel-capable Debian targets:
+  - `vainfo`
+  - `intel-media-va-driver`
+  - `libva2`
+  - `libva-drm2`
+  - `mesa-va-drivers`
+
+Encodr validates Intel against the actual worker runtime by checking:
+
+- `/dev/dri` visibility
+- the Intel render node
+- `vainfo` availability
+- `LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128`
+- an FFmpeg VAAPI smoke test
+
+Expected worker-container validation commands:
+
+```bash
+docker compose exec worker sh -lc 'LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128'
+docker compose exec worker sh -lc 'LIBVA_DRIVER_NAME=iHD ffmpeg -hide_banner -vaapi_device /dev/dri/renderD128 -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 -vf "format=nv12,hwupload" -c:v h264_vaapi -f null -'
+```
+
+QSV is not treated as a validated Intel path in this release line unless it gains its own reliable smoke test.
+
 ## Required secrets
 
 - `ENCODR_AUTH_SECRET`

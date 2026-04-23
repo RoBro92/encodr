@@ -50,6 +50,12 @@ cd encodr
 7. if you want this host to execute jobs, open Workers and choose `Add this host as worker`
 8. if you want external execution nodes, generate a remote bootstrap command from Workers
 
+If you are enabling Intel iGPU acceleration for the local worker:
+
+- the LXC or VM must expose `/dev/dri`
+- the worker container must also see `/dev/dri`
+- Encodr will validate Intel VAAPI inside the worker runtime with `vainfo` and an FFmpeg VAAPI smoke test before treating the Intel path as usable
+
 Encodr expects:
 
 - `/media` as the standard library mount
