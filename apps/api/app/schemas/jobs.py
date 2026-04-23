@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import Any
 
-from pydantic import BaseModel, Field, model_validator
+from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.schemas.schedules import ScheduleWindowRequest, ScheduleWindowResponse
 from encodr_db.models import Job
@@ -162,11 +162,7 @@ class JobSummaryResponse(BaseModel):
 
     @classmethod
     def from_model(cls, job: Job) -> "JobSummaryResponse":
-        analysis_payload = (
-            DryRunAnalysisResponse.model_validate(job.analysis_payload)
-            if isinstance(job.analysis_payload, dict)
-            else None
-        )
+        analysis_payload = job_dry_run_analysis_payload(job)
         return cls(
             id=job.id,
             tracked_file_id=job.tracked_file_id,
@@ -319,7 +315,15 @@ def job_removed_subtitle_tracks(job: Job) -> int:
 
 
 def dry_run_requires_review(job: Job) -> bool:
+    payload = job_dry_run_analysis_payload(job)
+    return bool(payload.requires_review) if payload is not None else False
+
+
+def job_dry_run_analysis_payload(job: Job) -> DryRunAnalysisResponse | None:
     payload = getattr(job, "analysis_payload", None)
     if not isinstance(payload, dict):
-        return False
-    return bool(payload.get("requires_review"))
+        return None
+    try:
+        return DryRunAnalysisResponse.model_validate(payload)
+    except ValidationError:
+        return None

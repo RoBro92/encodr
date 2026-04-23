@@ -1,14 +1,17 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 from pathlib import Path
 
 import pytest
 
 from encodr_core.config import load_config_bundle
-from encodr_db.models import FileLifecycleState, Job, JobStatus, PlanSnapshot, ProbeSnapshot, TrackedFile
+from encodr_db.models import FileLifecycleState, Job, JobKind, JobStatus, PlanSnapshot, ProbeSnapshot, TrackedFile
+from encodr_db.repositories import WorkerRepository
 from encodr_db.runtime import WorkerExecutionService
 from encodr_core.verification import OutputVerifier
+from encodr_shared.scheduling import DAY_ORDER
 from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
@@ -227,6 +230,127 @@ def test_worker_run_once_endpoint_processes_pending_job(
         job = session.query(Job).one()
         assert job.status == JobStatus.COMPLETED
     assert source_path.read_text(encoding="utf-8") == "staged output"
+
+
+def test_dry_run_jobs_are_created_as_background_analysis_and_processed_by_worker(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Dry Run Film (2024).mkv", contents="dry-run")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+    context.app.state.probe_client_factory = lambda: StaticProbeClient(media)
+    monkeypatch.setattr(
+        "encodr_db.runtime.worker.FFprobeClient",
+        lambda binary_path=None: StaticProbeClient(media),
+    )
+
+    create_response = context.client.post(
+        "/api/jobs/dry-run",
+        json={"selected_paths": [source_path.as_posix()]},
+        headers=auth.headers,
+    )
+
+    assert create_response.status_code == 201
+    create_payload = create_response.json()
+    assert create_payload["created_count"] == 1
+    assert create_payload["blocked_count"] == 0
+    assert create_payload["items"][0]["job"]["job_kind"] == "dry_run"
+    job_id = create_payload["items"][0]["job"]["id"]
+
+    run_response = context.client.post("/api/worker/run-once", headers=auth.headers)
+
+    assert run_response.status_code == 200
+    run_payload = run_response.json()
+    assert run_payload["processed_job"] is True
+    assert run_payload["final_status"] == "completed"
+
+    jobs_response = context.client.get(
+        "/api/jobs",
+        params={"job_kind": "dry_run"},
+        headers=auth.headers,
+    )
+    assert jobs_response.status_code == 200
+    listed_job = jobs_response.json()["items"][0]
+    assert listed_job["id"] == job_id
+    assert listed_job["job_kind"] == "dry_run"
+    assert listed_job["analysis_payload"]["planned_action"] in {"skip", "remux", "transcode", "manual_review"}
+    assert listed_job["analysis_payload"]["output_filename"]
+    assert listed_job["analysis_payload"]["current_size_bytes"] >= 0
+    assert "estimated_output_size_bytes" in listed_job["analysis_payload"]
+    assert "audio_tracks_removed_count" in listed_job["analysis_payload"]
+    assert "subtitle_tracks_removed_count" in listed_job["analysis_payload"]
+
+    with session_factory() as session:
+        job = session.query(Job).one()
+        assert job.job_kind == JobKind.DRY_RUN
+        assert job.status == JobStatus.COMPLETED
+        assert isinstance(job.analysis_payload, dict)
+        assert job.analysis_payload["source_path"] == source_path.as_posix()
+        assert job.output_path is None
+
+
+def test_dry_run_job_creation_returns_schedule_conflict_for_pinned_worker_outside_window(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Scheduled Dry Run Film (2024).mkv", contents="scheduled")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+    context.app.state.probe_client_factory = lambda: StaticProbeClient(media)
+
+    next_day = DAY_ORDER[(datetime.now().astimezone().weekday() + 1) % len(DAY_ORDER)]
+    schedule_windows = [{"days": [next_day], "start_time": "01:00", "end_time": "02:00"}]
+
+    with session_factory() as session:
+        worker = WorkerRepository(session).upsert_local_worker(
+            worker_key="worker-local",
+            display_name="Local Worker",
+            enabled=True,
+            preferred_backend="cpu_only",
+            allow_cpu_fallback=True,
+            max_concurrent_jobs=1,
+            schedule_windows=schedule_windows,
+            path_mappings=None,
+            scratch_path=layout.scratch_dir.as_posix(),
+            host_metadata={"hostname": "encodr-host"},
+        )
+        session.commit()
+        worker_id = worker.id
+
+    conflict_response = context.client.post(
+        "/api/jobs/dry-run",
+        json={
+            "selected_paths": [source_path.as_posix()],
+            "pinned_worker_id": worker_id,
+        },
+        headers=auth.headers,
+    )
+
+    assert conflict_response.status_code == 409
+    conflict_payload = conflict_response.json()["detail"]
+    assert conflict_payload["code"] == "worker_schedule_conflict"
+    assert conflict_payload["worker_id"] == worker_id
+    assert conflict_payload["schedule_summary"]
+
+    override_response = context.client.post(
+        "/api/jobs/dry-run",
+        json={
+            "selected_paths": [source_path.as_posix()],
+            "pinned_worker_id": worker_id,
+            "ignore_worker_schedule": True,
+        },
+        headers=auth.headers,
+    )
+
+    assert override_response.status_code == 201
+    assert override_response.json()["created_count"] == 1
 
 
 def test_config_effective_endpoint_returns_sanitised_data(
