@@ -280,6 +280,10 @@ pre {
   padding: var(--space-5);
 }
 
+.modal-panel-wide {
+  width: min(1120px, 100%);
+}
+
 .update-modal {
   width: min(640px, 100%);
   display: grid;
@@ -771,9 +775,9 @@ pre {
 
 .selection-row {
   display: grid;
-  grid-template-columns: auto minmax(0, 1fr);
+  grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 14px;
-  align-items: flex-start;
+  align-items: center;
   padding: 14px 16px;
   border-radius: var(--radius-lg);
   border: 1px solid var(--border);
@@ -793,6 +797,12 @@ pre {
   margin: 6px 0 0;
   color: var(--text-muted);
   overflow-wrap: anywhere;
+}
+
+.selection-row-meta {
+  color: var(--text-muted);
+  font-size: 0.84rem;
+  justify-self: end;
 }
 
 .empty-inline {
@@ -1424,15 +1434,23 @@ pre {
   overflow: hidden;
 }
 
-.job-worker-group > summary {
+.job-worker-group-summary {
   list-style: none;
-  cursor: pointer;
   padding: 14px 16px;
   background: color-mix(in srgb, var(--bg-panel-strong) 92%, transparent);
 }
 
-.job-worker-group > summary::-webkit-details-marker {
-  display: none;
+.job-worker-group-trigger {
+  width: 100%;
+  border: 0;
+  text-align: left;
+  cursor: pointer;
+}
+
+.job-worker-group-trigger:hover,
+.job-worker-group-trigger:focus-visible {
+  background: color-mix(in srgb, var(--color-primary) 4%, var(--bg-panel-strong));
+  outline: none;
 }
 
 .job-worker-group-heading strong {
@@ -1467,6 +1485,15 @@ pre {
   padding: 10px 12px;
 }
 
+.job-progress-card-analysis {
+  border-color: color-mix(in srgb, var(--color-success) 18%, transparent);
+  background: color-mix(in srgb, var(--color-success) 5%, var(--bg-panel-strong));
+}
+
+.job-progress-card-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 30%, transparent);
+}
+
 .job-progress-header,
 .job-progress-meta {
   display: flex;
@@ -1495,6 +1522,14 @@ pre {
   border-radius: inherit;
   background: linear-gradient(90deg, var(--color-primary), var(--color-primary-strong));
   transition: width 220ms ease;
+}
+
+.queue-job-card {
+  align-items: start;
+}
+
+.queue-job-card-actions {
+  justify-content: flex-end;
 }
 
 .login-shell {

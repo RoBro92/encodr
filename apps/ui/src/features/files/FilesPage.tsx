@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import { EmptyState } from "../../components/EmptyState";
@@ -58,6 +58,25 @@ const BACKEND_OPTIONS = [
 ];
 
 const DRY_RUN_WARNING_THRESHOLD = 15;
+const LIBRARY_PAGE_SIZE = 25;
+
+type ScanKind = "movies" | "tv";
+type ScanFileEntry = FolderScanSummary["files"][number] & {
+  relative_path: string;
+};
+type TvSeasonGroup = {
+  id: string;
+  label: string;
+  episodes: ScanFileEntry[];
+  total_size_bytes: number;
+};
+type TvShowGroup = {
+  id: string;
+  label: string;
+  seasons: TvSeasonGroup[];
+  total_size_bytes: number;
+  episode_count: number;
+};
 
 function inferWatcherDefaults(path: string | null, moviesRoot: string | null, tvRoot: string | null): WatcherDraft {
   const normalised = (path ?? "").toLowerCase();
@@ -122,6 +141,10 @@ export function FilesPage() {
     schedule_summary: string | null;
   } | null>(null);
   const [latestDryRunJobIds, setLatestDryRunJobIds] = useState<string[]>([]);
+  const [scanSearch, setScanSearch] = useState("");
+  const [scanPage, setScanPage] = useState(1);
+  const [expandedShows, setExpandedShows] = useState<Record<string, boolean>>({});
+  const [expandedSeasons, setExpandedSeasons] = useState<Record<string, boolean>>({});
 
   const rootsQuery = useLibraryRootsQuery();
   const scansQuery = useScansQuery();
@@ -141,31 +164,19 @@ export function FilesPage() {
     watchedJobsQuery.isLoading ||
     workersQuery.isLoading ||
     dryRunJobsQuery.isLoading;
-  if (loading) {
-    return <LoadingBlock label="Loading library" />;
-  }
-
   const error =
     rootsQuery.error ??
     scansQuery.error ??
     watchedJobsQuery.error ??
     workersQuery.error ??
     dryRunJobsQuery.error;
-  if (error instanceof Error) {
-    return <ErrorPanel title="Unable to load the library" message={error.message} />;
-  }
-
   const roots = rootsQuery.data;
-  if (!roots) {
-    return <ErrorPanel title="Library is unavailable" message="The API did not return library roots." />;
-  }
-
   const recentScans = scansQuery.data?.items ?? [];
   const watchedJobs = watchedJobsQuery.data?.items ?? [];
   const workers = workersQuery.data?.items ?? [];
   const dryRunJobs = (dryRunJobsQuery.data?.items ?? []).filter((job) => latestDryRunJobIds.includes(job.id));
-  const moviesRoot = roots.movies_root;
-  const tvRoot = roots.tv_root;
+  const moviesRoot = roots?.movies_root ?? null;
+  const tvRoot = roots?.tv_root ?? null;
   const activeScan = activeScanDraft
     ? activeScanDraft.scan_id
       ? recentScans.find((item) => item.scan_id === activeScanDraft.scan_id) ?? activeScanDraft
@@ -173,8 +184,7 @@ export function FilesPage() {
     : null;
 
   const selectedSet = new Set(selectedPaths);
-  const allSelected = Boolean(activeScan && activeScan.files.length > 0 && selectedPaths.length === activeScan.files.length);
-  const hasSavedRoots = Boolean(roots.movies_root || roots.tv_root);
+  const hasSavedRoots = Boolean(roots?.movies_root || roots?.tv_root);
   const activeSelection =
     selectedPaths.length > 0
       ? { selected_paths: selectedPaths }
@@ -212,6 +222,71 @@ export function FilesPage() {
     label: `${worker.display_name} (${worker.worker_type === "local" ? "local" : "remote"})`,
   }));
   const selectedDryRunWorker = workers.find((worker) => worker.id === dryRunWorkerId) ?? null;
+  const scanKind = useMemo(
+    () => (activeScan ? inferScanKind(activeScan, moviesRoot, tvRoot) : "movies"),
+    [activeScan, moviesRoot, tvRoot],
+  );
+  const scanFiles = useMemo(
+    () => normaliseScanFiles(activeScan),
+    [activeScan],
+  );
+  const tvGroups = useMemo(
+    () => (scanKind === "tv" ? buildTvGroups(scanFiles, activeScan?.folder_path ?? "") : []),
+    [scanFiles, scanKind, activeScan?.folder_path],
+  );
+  const filteredMovieFiles = useMemo(
+    () => filterScanFiles(scanFiles, scanSearch),
+    [scanFiles, scanSearch],
+  );
+  const filteredTvGroups = useMemo(
+    () => filterTvGroups(tvGroups, scanSearch),
+    [tvGroups, scanSearch],
+  );
+  const topLevelMovieFiles = useMemo(
+    () => paginateItems(filteredMovieFiles, scanPage, LIBRARY_PAGE_SIZE),
+    [filteredMovieFiles, scanPage],
+  );
+  const topLevelTvGroups = useMemo(
+    () => paginateItems(filteredTvGroups, scanPage, LIBRARY_PAGE_SIZE),
+    [filteredTvGroups, scanPage],
+  );
+  const visibleScanPaths = useMemo(
+    () =>
+      scanKind === "tv"
+        ? topLevelTvGroups.flatMap((show) => show.seasons.flatMap((season) => season.episodes.map((episode) => episode.path)))
+        : topLevelMovieFiles.map((file) => file.path),
+    [scanKind, topLevelMovieFiles, topLevelTvGroups],
+  );
+  const totalTopLevelEntries = scanKind === "tv" ? filteredTvGroups.length : filteredMovieFiles.length;
+  const totalPages = Math.max(1, Math.ceil(totalTopLevelEntries / LIBRARY_PAGE_SIZE));
+  const allSelected = Boolean(
+    activeScan &&
+    visibleScanPaths.length > 0 &&
+    visibleScanPaths.every((path) => selectedSet.has(path)),
+  );
+
+  useEffect(() => {
+    setScanSearch("");
+    setScanPage(1);
+    setExpandedShows({});
+    setExpandedSeasons({});
+  }, [activeScan?.scan_id, activeScan?.folder_path]);
+
+  useEffect(() => {
+    setScanPage((current) => Math.min(current, totalPages));
+  }, [totalPages]);
+
+  if (loading) {
+    return <LoadingBlock label="Loading library" />;
+  }
+
+  if (error instanceof Error) {
+    return <ErrorPanel title="Unable to load the library" message={error.message} />;
+  }
+
+  if (!roots) {
+    return <ErrorPanel title="Library is unavailable" message="The API did not return library roots." />;
+  }
 
   function togglePath(path: string) {
     setSelectedPaths((current) =>
@@ -220,14 +295,38 @@ export function FilesPage() {
   }
 
   function selectAllVisible() {
-    if (!activeScan) {
+    if (!activeScan || visibleScanPaths.length === 0) {
       return;
     }
-    setSelectedPaths(activeScan.files.map((item) => item.path));
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      for (const path of visibleScanPaths) {
+        next.add(path);
+      }
+      return [...next];
+    });
   }
 
   function clearSelection() {
     setSelectedPaths([]);
+  }
+
+  function togglePathGroup(paths: string[]) {
+    if (paths.length === 0) {
+      return;
+    }
+    const shouldSelect = paths.some((path) => !selectedSet.has(path));
+    setSelectedPaths((current) => {
+      const next = new Set(current);
+      for (const path of paths) {
+        if (shouldSelect) {
+          next.add(path);
+        } else {
+          next.delete(path);
+        }
+      }
+      return [...next];
+    });
   }
 
   async function runScan(path: string) {
@@ -863,22 +962,169 @@ export function FilesPage() {
                   </div>
                 </div>
 
-                <div className="selection-list">
-                  {activeScan.files.map((file) => (
-                    <label key={file.path} className={`selection-row${selectedSet.has(file.path) ? " selection-row-active" : ""}`}>
-                      <input
-                        type="checkbox"
-                        aria-label={`Select ${file.name}`}
-                        checked={selectedSet.has(file.path)}
-                        onChange={() => togglePath(file.path)}
-                      />
-                      <div>
-                        <strong>{file.name}</strong>
-                        <p>{file.path}</p>
-                      </div>
-                    </label>
-                  ))}
+                <div className="jobs-toolbar">
+                  <label className="field">
+                    <span>Search this scan</span>
+                    <input
+                      aria-label="Search scan results"
+                      value={scanSearch}
+                      placeholder={scanKind === "tv" ? "Search shows, seasons, or episodes" : "Search films"}
+                      onChange={(event) => {
+                        setScanSearch(event.target.value);
+                        setScanPage(1);
+                      }}
+                    />
+                  </label>
+                  <div className="metric-pill">
+                    <span className="metric-label">Top-level entries</span>
+                    <strong>{totalTopLevelEntries}</strong>
+                  </div>
+                  <div className="metric-pill">
+                    <span className="metric-label">Page</span>
+                    <strong>{scanPage} / {totalPages}</strong>
+                  </div>
                 </div>
+
+                {totalTopLevelEntries === 0 ? (
+                  <EmptyState
+                    title="No matching items"
+                    message={scanSearch ? "Try a different search term or clear the filter." : "This scan did not return any video items."}
+                  />
+                ) : scanKind === "tv" ? (
+                  <div className="card-stack">
+                    {topLevelTvGroups.map((show) => {
+                      const showPaths = show.seasons.flatMap((season) => season.episodes.map((episode) => episode.path));
+                      const showSelected = showPaths.length > 0 && showPaths.every((path) => selectedSet.has(path));
+                      const showExpanded = expandedShows[show.id] ?? true;
+                      return (
+                        <section key={show.id} className="job-worker-group">
+                          <button
+                            className="job-worker-group-summary job-worker-group-trigger"
+                            type="button"
+                            aria-expanded={showExpanded}
+                            onClick={() =>
+                              setExpandedShows((current) => ({
+                                ...current,
+                                [show.id]: !(current[show.id] ?? true),
+                              }))
+                            }
+                          >
+                            <div className="job-worker-group-heading">
+                              <strong>{show.label}</strong>
+                              <span>{show.episode_count} episodes • {formatBytes(show.total_size_bytes)}</span>
+                            </div>
+                            <div className="job-worker-group-metrics">
+                              <span>{show.seasons.length} seasons</span>
+                              <span>{showSelected ? "Selected" : "Not fully selected"}</span>
+                              <span>{showPaths.filter((path) => selectedSet.has(path)).length} selected</span>
+                            </div>
+                          </button>
+                          {showExpanded ? (
+                            <div className="record-list">
+                              <div className="section-card-actions">
+                                <button className="button button-secondary button-small" type="button" onClick={() => togglePathGroup(showPaths)}>
+                                  {showSelected ? "Clear show" : "Select show"}
+                                </button>
+                              </div>
+                              {show.seasons.map((season) => {
+                                const seasonPaths = season.episodes.map((episode) => episode.path);
+                                const seasonSelected = seasonPaths.length > 0 && seasonPaths.every((path) => selectedSet.has(path));
+                                const seasonExpanded = expandedSeasons[season.id] ?? false;
+                                return (
+                                  <section key={season.id} className="job-worker-group">
+                                    <button
+                                      className="job-worker-group-summary job-worker-group-trigger"
+                                      type="button"
+                                      aria-expanded={seasonExpanded}
+                                      onClick={() =>
+                                        setExpandedSeasons((current) => ({
+                                          ...current,
+                                          [season.id]: !(current[season.id] ?? false),
+                                        }))
+                                      }
+                                    >
+                                      <div className="job-worker-group-heading">
+                                        <strong>{season.label}</strong>
+                                        <span>{season.episodes.length} episodes • {formatBytes(season.total_size_bytes)}</span>
+                                      </div>
+                                      <div className="job-worker-group-metrics">
+                                        <span>{seasonSelected ? "Selected" : "Not fully selected"}</span>
+                                      </div>
+                                    </button>
+                                    {seasonExpanded ? (
+                                      <div className="record-list">
+                                        <div className="section-card-actions">
+                                          <button className="button button-secondary button-small" type="button" onClick={() => togglePathGroup(seasonPaths)}>
+                                            {seasonSelected ? "Clear season" : "Select season"}
+                                          </button>
+                                        </div>
+                                        {season.episodes.map((file) => (
+                                          <label key={file.path} className={`selection-row${selectedSet.has(file.path) ? " selection-row-active" : ""}`}>
+                                            <input
+                                              type="checkbox"
+                                              aria-label={`Select ${file.name}`}
+                                              checked={selectedSet.has(file.path)}
+                                              onChange={() => togglePath(file.path)}
+                                            />
+                                            <div>
+                                              <strong>{file.name}</strong>
+                                              <p>{file.relative_path}</p>
+                                            </div>
+                                            <span className="selection-row-meta">{formatBytes(file.size_bytes)}</span>
+                                          </label>
+                                        ))}
+                                      </div>
+                                    ) : null}
+                                  </section>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </section>
+                      );
+                    })}
+                  </div>
+                ) : (
+                  <div className="selection-list">
+                    {topLevelMovieFiles.map((file) => (
+                      <label key={file.path} className={`selection-row${selectedSet.has(file.path) ? " selection-row-active" : ""}`}>
+                        <input
+                          type="checkbox"
+                          aria-label={`Select ${file.name}`}
+                          checked={selectedSet.has(file.path)}
+                          onChange={() => togglePath(file.path)}
+                        />
+                        <div>
+                          <strong>{file.name}</strong>
+                          <p>{file.relative_path}</p>
+                        </div>
+                        <span className="selection-row-meta">{formatBytes(file.size_bytes)}</span>
+                      </label>
+                    ))}
+                  </div>
+                )}
+
+                {totalPages > 1 ? (
+                  <div className="section-card-actions">
+                    <button
+                      className="button button-secondary button-small"
+                      type="button"
+                      onClick={() => setScanPage((current) => Math.max(1, current - 1))}
+                      disabled={scanPage <= 1}
+                    >
+                      Previous
+                    </button>
+                    <span className="muted-copy">Page {scanPage} of {totalPages}</span>
+                    <button
+                      className="button button-secondary button-small"
+                      type="button"
+                      onClick={() => setScanPage((current) => Math.min(totalPages, current + 1))}
+                      disabled={scanPage >= totalPages}
+                    >
+                      Next
+                    </button>
+                  </div>
+                ) : null}
               </div>
             ) : (
               <EmptyState title="No scan yet" message="Choose a folder and run a scan to inspect the files." />
@@ -1147,4 +1393,134 @@ function rulesetLabel(value: string) {
     tv: "TV",
     tv_4k: "TV 4K",
   }[value] ?? titleCase(value);
+}
+
+function inferScanKind(scan: FolderScanSummary, moviesRoot: string | null, tvRoot: string | null): ScanKind {
+  if (tvRoot && scan.folder_path.startsWith(tvRoot)) {
+    return "tv";
+  }
+  if (moviesRoot && scan.folder_path.startsWith(moviesRoot)) {
+    return "movies";
+  }
+  return scan.likely_episode_count > scan.likely_film_count ? "tv" : "movies";
+}
+
+function normaliseScanFiles(scan: FolderScanSummary | null): ScanFileEntry[] {
+  if (!scan) {
+    return [];
+  }
+  return scan.files.map((file) => ({
+    ...file,
+    relative_path: file.path.startsWith(scan.folder_path)
+      ? file.path.slice(scan.folder_path.length).replace(/^\/+/, "") || file.name
+      : file.name,
+  }));
+}
+
+function filterScanFiles(files: ScanFileEntry[], search: string) {
+  if (!search.trim()) {
+    return files;
+  }
+  const needle = search.trim().toLowerCase();
+  return files.filter((file) =>
+    file.name.toLowerCase().includes(needle) ||
+    file.relative_path.toLowerCase().includes(needle) ||
+    file.path.toLowerCase().includes(needle),
+  );
+}
+
+function buildTvGroups(files: ScanFileEntry[], folderPath: string): TvShowGroup[] {
+  const groups = new Map<string, TvShowGroup>();
+  const folderName = folderPath.split("/").filter(Boolean).at(-1) ?? "Show";
+  for (const file of files) {
+    const segments = file.relative_path.split("/").filter(Boolean);
+    const showLabel =
+      segments.length >= 3
+        ? segments[0]
+        : segments.length >= 2 && isSeasonLabel(segments[0])
+          ? folderName
+          : segments[0] ?? folderName;
+    const seasonLabel =
+      segments.length >= 3
+        ? segments[1]
+        : segments.length >= 2
+          ? segments[0]
+          : "Episodes";
+    const showKey = showLabel.toLowerCase();
+    const seasonKey = `${showKey}:${seasonLabel.toLowerCase()}`;
+    const show = groups.get(showKey) ?? {
+      id: showKey,
+      label: showLabel,
+      seasons: [],
+      total_size_bytes: 0,
+      episode_count: 0,
+    };
+    let season = show.seasons.find((item) => item.id === seasonKey);
+    if (!season) {
+      season = {
+        id: seasonKey,
+        label: seasonLabel,
+        episodes: [],
+        total_size_bytes: 0,
+      };
+      show.seasons.push(season);
+    }
+    season.episodes.push(file);
+    season.total_size_bytes += file.size_bytes ?? 0;
+    show.total_size_bytes += file.size_bytes ?? 0;
+    show.episode_count += 1;
+    groups.set(showKey, show);
+  }
+  return [...groups.values()].sort((left, right) => left.label.localeCompare(right.label));
+}
+
+function filterTvGroups(groups: TvShowGroup[], search: string) {
+  if (!search.trim()) {
+    return groups;
+  }
+  const needle = search.trim().toLowerCase();
+  return groups
+    .map((show) => {
+      if (show.label.toLowerCase().includes(needle)) {
+        return show;
+      }
+      const seasons = show.seasons
+        .map((season) => {
+          if (season.label.toLowerCase().includes(needle)) {
+            return season;
+          }
+          const episodes = season.episodes.filter((episode) =>
+            episode.name.toLowerCase().includes(needle) ||
+            episode.relative_path.toLowerCase().includes(needle),
+          );
+          if (episodes.length === 0) {
+            return null;
+          }
+          return {
+            ...season,
+            episodes,
+            total_size_bytes: episodes.reduce((sum, item) => sum + (item.size_bytes ?? 0), 0),
+          };
+        })
+        .filter((season): season is TvSeasonGroup => season !== null);
+      if (seasons.length === 0) {
+        return null;
+      }
+      return {
+        ...show,
+        seasons,
+        total_size_bytes: seasons.reduce((sum, item) => sum + item.total_size_bytes, 0),
+        episode_count: seasons.reduce((sum, item) => sum + item.episodes.length, 0),
+      };
+    })
+    .filter((show): show is TvShowGroup => show !== null);
+}
+
+function paginateItems<T>(items: T[], page: number, pageSize: number) {
+  const start = (page - 1) * pageSize;
+  return items.slice(start, start + pageSize);
+}
+
+function isSeasonLabel(value: string) {
+  return /^season\s*\d+$/i.test(value) || /^s\d{1,2}$/i.test(value);
 }

@@ -5,6 +5,7 @@ import {
   batchPlan,
   browseFolder,
   bootstrapAdmin,
+  cancelJob,
   checkUpdateStatus,
   clearReviewItemProtected,
   createWatchedJob,
@@ -204,6 +205,23 @@ export function useJobDetailQuery(jobId?: string) {
     queryKey: ["jobs", "detail", jobId],
     queryFn: () => getJob(apiClient, jobId as string),
     enabled: isAuthenticated && Boolean(jobId),
+  });
+}
+
+export function useCancelJobMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => cancelJob(apiClient, jobId),
+    onSuccess: async (job) => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["jobs", "detail", job.id] }),
+        queryClient.invalidateQueries({ queryKey: ["worker", "status"] }),
+        queryClient.invalidateQueries({ queryKey: ["workers", "inventory"] }),
+        queryClient.invalidateQueries({ queryKey: ["workers"] }),
+      ]);
+    },
   });
 }
 

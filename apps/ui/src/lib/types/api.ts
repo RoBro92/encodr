@@ -116,6 +116,7 @@ export type FolderBrowseEntry = {
   path: string;
   entry_type: string;
   is_video: boolean;
+  size_bytes: number | null;
 };
 
 export type FolderBrowseResponse = {

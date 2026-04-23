@@ -200,6 +200,73 @@ def test_retry_endpoint_creates_new_job_record(
         assert jobs[1].status == JobStatus.PENDING
 
 
+def test_cancel_endpoint_marks_pending_job_cancelled_without_execution(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Cancel Film (2024).mkv", contents="cancel")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    response = context.client.post(
+        f"/api/jobs/{persisted.job.id}/cancel",
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["status"] == JobStatus.INTERRUPTED.value
+    assert payload["failure_category"] == "cancelled_by_operator"
+    assert payload["progress_stage"] == "cancelled"
+    assert payload["assigned_worker_id"] is None
+
+    with session_factory() as session:
+        job = session.get(Job, persisted.job.id)
+        tracked_file = session.get(TrackedFile, persisted.job.tracked_file_id)
+        assert job is not None
+        assert tracked_file is not None
+        assert job.status == JobStatus.INTERRUPTED
+        assert job.failure_category == "cancelled_by_operator"
+        assert tracked_file.lifecycle_state == FileLifecycleState.PLANNED
+
+
+def test_job_artwork_endpoint_requires_local_sidecar_and_does_not_fallback_to_frames(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Artwork Film (2024).mkv", contents="artwork")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    missing_response = context.client.get(
+        f"/api/jobs/{persisted.job.id}/artwork",
+        headers=auth.headers,
+    )
+    assert missing_response.status_code == 404
+
+    poster_path = source_path.with_name(f"{source_path.stem}-poster.jpg")
+    poster_path.write_bytes(b"poster-bytes")
+
+    artwork_response = context.client.get(
+        f"/api/jobs/{persisted.job.id}/artwork",
+        headers=auth.headers,
+    )
+    assert artwork_response.status_code == 200
+    assert artwork_response.content == b"poster-bytes"
+
+
 def test_worker_run_once_endpoint_processes_pending_job(
     tmp_path: Path,
     repo_root: Path,

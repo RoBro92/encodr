@@ -46,6 +46,7 @@ class FolderBrowseEntryResponse(BaseModel):
     path: str
     entry_type: str
     is_video: bool
+    size_bytes: int | None = None
 
 
 class FolderBrowseResponse(BaseModel):

@@ -33,5 +33,9 @@ class FFmpegProcessError(ExecutionError):
     pass
 
 
+class ExecutionCancelledError(ExecutionError):
+    pass
+
+
 class ExecutionBackendUnavailableError(ExecutionError):
     pass

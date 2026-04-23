@@ -93,6 +93,7 @@ class LibraryService:
                     "path": item.resolve().as_posix(),
                     "entry_type": "directory" if item.is_dir() else "file",
                     "is_video": is_video,
+                    "size_bytes": item.stat().st_size if item.is_file() else None,
                 }
             )
 
@@ -142,6 +143,7 @@ class LibraryService:
                 "path": file_path.as_posix(),
                 "entry_type": "file",
                 "is_video": True,
+                "size_bytes": file_path.stat().st_size,
             }
             for file_path in sorted(video_files, key=lambda item: item.as_posix().lower())
         ]

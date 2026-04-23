@@ -1,13 +1,12 @@
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_config_bundle, get_session, require_admin_user
+from app.core.dependencies import get_config_bundle, get_local_worker_loop, get_session, require_admin_user
 from app.schemas.jobs import (
     BatchJobCreateResponse,
     BatchJobItemResponse,
@@ -29,6 +28,7 @@ from encodr_core.config import ConfigBundle
 from encodr_core.media.models import MediaFile
 from encodr_db.models import JobKind, JobStatus, User
 from encodr_db.repositories import WorkerRepository
+from encodr_db.runtime import LocalWorkerLoop
 from encodr_shared.scheduling import schedule_windows_allow_now, schedule_windows_summary
 
 router = APIRouter(
@@ -201,6 +201,23 @@ def retry_job(
         _raise_service_error(error)
 
 
+@router.post("/{job_id}/cancel", response_model=JobDetailResponse)
+def cancel_job(
+    job_id: str,
+    session: Session = Depends(get_session),
+    local_worker_loop: LocalWorkerLoop = Depends(get_local_worker_loop),
+    current_user: User = Depends(require_admin_user),
+) -> JobDetailResponse:
+    del current_user
+    try:
+        job = JobsService().cancel_job(session, job_id=job_id, local_worker_loop=local_worker_loop)
+        session.commit()
+        return JobDetailResponse.from_model(job)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
 def resolve_job_artwork_path(
     *,
     job_id: str,
@@ -209,69 +226,24 @@ def resolve_job_artwork_path(
     cache_dir: Path,
     duration_seconds: float | None,
 ) -> Path | None:
-    sidecar = find_local_artwork_sidecar(source_path)
-    if sidecar is not None:
-        return sidecar
-    generated = extract_local_frame_artwork(
-        job_id=job_id,
-        source_path=source_path,
-        ffmpeg_path=ffmpeg_path,
-        cache_dir=cache_dir,
-        duration_seconds=duration_seconds,
-    )
-    if generated is not None:
-        return generated
-    return None
+    del job_id, ffmpeg_path, cache_dir, duration_seconds
+    return find_local_artwork_sidecar(source_path)
 
 
 def find_local_artwork_sidecar(source_path: Path) -> Path | None:
     candidates = [
         *[source_path.with_suffix(extension) for extension in ARTWORK_EXTENSIONS],
+        *[source_path.with_name(f"{source_path.stem}-poster{extension}") for extension in ARTWORK_EXTENSIONS],
+        *[source_path.with_name(f"{source_path.stem}.poster{extension}") for extension in ARTWORK_EXTENSIONS],
+        *[source_path.with_name(f"{source_path.stem}-cover{extension}") for extension in ARTWORK_EXTENSIONS],
         *[source_path.parent / f"poster{extension}" for extension in ARTWORK_EXTENSIONS],
         *[source_path.parent / f"folder{extension}" for extension in ARTWORK_EXTENSIONS],
+        *[source_path.parent / f"cover{extension}" for extension in ARTWORK_EXTENSIONS],
     ]
     for candidate in candidates:
         if candidate.exists() and candidate.is_file():
             return candidate
     return None
-
-
-def extract_local_frame_artwork(
-    *,
-    job_id: str,
-    source_path: Path,
-    ffmpeg_path: Path | str,
-    cache_dir: Path,
-    duration_seconds: float | None,
-) -> Path | None:
-    if not source_path.exists():
-        return None
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    output_path = cache_dir / f"{job_id}.jpg"
-    if output_path.exists() and output_path.is_file():
-        return output_path
-    seek_seconds = 5.0
-    if duration_seconds is not None and duration_seconds > 0:
-        seek_seconds = max(1.0, min(30.0, duration_seconds * 0.15))
-    command = [
-        str(ffmpeg_path),
-        "-y",
-        "-ss",
-        f"{seek_seconds:.2f}",
-        "-i",
-        source_path.as_posix(),
-        "-frames:v",
-        "1",
-        "-vf",
-        "scale=320:-2",
-        "-q:v",
-        "4",
-        output_path.as_posix(),
-    ]
-    result = subprocess.run(command, capture_output=True, text=True, check=False)
-    if result.returncode != 0 or not output_path.exists():
-        return None
-    return output_path
 
 
 @router.post("/batch", response_model=BatchJobCreateResponse, status_code=201)
