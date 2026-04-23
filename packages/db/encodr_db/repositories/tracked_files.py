@@ -175,6 +175,9 @@ class TrackedFileRepository:
         elif result.status == "manual_review":
             tracked_file.lifecycle_state = FileLifecycleState.MANUAL_REVIEW
             tracked_file.compliance_state = ComplianceState.MANUAL_REVIEW
+        elif result.status == "cancelled":
+            tracked_file.lifecycle_state = lifecycle_state_for_plan(plan)
+            tracked_file.compliance_state = compliance_state_for_plan(plan)
         else:
             tracked_file.lifecycle_state = FileLifecycleState.FAILED
             tracked_file.compliance_state = (

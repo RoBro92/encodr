@@ -207,6 +207,12 @@ class JobRepository:
         self.session.flush()
         return job
 
+    def mark_cancelling(self, job: Job, *, requested_at: datetime) -> Job:
+        job.progress_stage = "cancelling"
+        job.progress_updated_at = requested_at
+        self.session.flush()
+        return job
+
     def promote_scheduled(self, job: Job) -> Job:
         job.status = JobStatus.PENDING
         job.scheduled_for_at = None
@@ -232,6 +238,7 @@ class JobRepository:
             "failed": JobStatus.FAILED,
             "skipped": JobStatus.SKIPPED,
             "manual_review": JobStatus.MANUAL_REVIEW,
+            "cancelled": JobStatus.INTERRUPTED,
         }
         job.status = status_map[result.status]
         job.completed_at = result.completed_at
@@ -275,10 +282,18 @@ class JobRepository:
             result.replacement.failure_message if result.replacement is not None else None
         )
         job.analysis_payload = result.analysis_payload
-        job.progress_stage = "completed" if result.status == "completed" else result.status
+        if result.status == "cancelled":
+            job.interrupted_at = result.completed_at
+            job.interruption_reason = result.failure_message
+            job.interruption_retryable = True
+            job.progress_stage = "cancelled"
+            job.progress_percent = None
+        else:
+            job.progress_stage = "completed" if result.status == "completed" else result.status
         job.progress_percent = 100 if result.status in {"completed", "skipped"} else job.progress_percent
         job.progress_updated_at = result.completed_at
         job.assigned_worker_id = None
+        job.scheduled_for_at = None
         self.session.flush()
         return job
 
@@ -299,6 +314,28 @@ class JobRepository:
         job.progress_stage = "interrupted"
         job.progress_updated_at = interrupted_at
         job.assigned_worker_id = None
+        self.session.flush()
+        return job
+
+    def mark_cancelled(
+        self,
+        job: Job,
+        *,
+        cancelled_at: datetime,
+        reason: str = "Cancelled by operator.",
+    ) -> Job:
+        job.status = JobStatus.INTERRUPTED
+        job.completed_at = cancelled_at
+        job.interrupted_at = cancelled_at
+        job.interruption_reason = reason
+        job.interruption_retryable = True
+        job.failure_message = reason
+        job.failure_category = "cancelled_by_operator"
+        job.progress_stage = "cancelled"
+        job.progress_percent = None
+        job.progress_updated_at = cancelled_at
+        job.assigned_worker_id = None
+        job.scheduled_for_at = None
         self.session.flush()
         return job
 

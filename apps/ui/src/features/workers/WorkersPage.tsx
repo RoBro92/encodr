@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
+import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { KeyValueList } from "../../components/KeyValueList";
@@ -32,7 +33,6 @@ import {
   formatBytes,
   formatDateTime,
   formatDurationSeconds,
-  formatRelativeBoolean,
   titleCase,
 } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
@@ -107,6 +107,7 @@ function workerDraftFromDetail(detail: WorkerInventoryDetail): WorkerPreferenceP
 
 export function WorkersPage() {
   const { workerId } = useParams();
+  const navigate = useNavigate();
   const workerStatusQuery = useWorkerStatusQuery();
   const workersQuery = useWorkersQuery();
   const detailQuery = useWorkerDetailQuery(workerId);
@@ -176,6 +177,20 @@ export function WorkersPage() {
   const noWorkersConfigured = workers.length === 0;
   const detailPathMappings = detail?.path_mappings ?? detail?.runtime_summary?.path_mappings ?? [];
   const detailRecentJobs = detail?.recent_jobs ?? [];
+  const localWorkerStatus = detail?.worker_type === "local" ? workerStatus : null;
+  const detailPrimaryIssues = detail ? buildWorkerPrimaryIssues(detail, localWorkerStatus) : [];
+  const detailCurrentBackend = detail?.current_backend ?? detail?.runtime_summary?.current_backend ?? null;
+  const cpuFallbackActive = Boolean(
+    detail?.preferred_backend &&
+    detailCurrentBackend &&
+    detail.preferred_backend !== "cpu_only" &&
+    detailCurrentBackend === "cpu",
+  );
+  const localBackendProbes = localWorkerStatus?.hardware_probes ?? [];
+  const localRuntimeDevices = localWorkerStatus?.runtime_device_paths ?? [];
+  const configuredBackendProbe = detail?.worker_type === "local"
+    ? localBackendProbes.find((item) => item.preference_key === detail.preferred_backend)
+    : null;
 
   return (
     <div className="page-stack">
@@ -217,57 +232,78 @@ export function WorkersPage() {
         <ErrorPanel title="Unable to remove worker" message={deleteWorkerMutation.error.message} />
       ) : null}
 
-      <section className={`jobs-review-layout${detail ? "" : " jobs-review-layout-single"}`}>
-        <SectionCard
-          title="Worker inventory"
-          subtitle={noWorkersConfigured ? "No workers configured yet." : `${workers.length} worker${workers.length === 1 ? "" : "s"} configured`}
-        >
-          {noWorkersConfigured ? (
-            <EmptyState
-              title="No workers configured"
-              message="Add this host as a worker or pair a remote worker when you are ready to give Encodr execution capacity."
-            />
-          ) : (
-            <div className="record-list" role="list" aria-label="Workers list">
-              {workers.map((item) => {
-                const isActive = item.id === workerId;
-                return (
-                  <Link
-                    key={item.id}
-                    className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
-                    to={APP_ROUTES.workerDetail(item.id)}
-                  >
-                    <div className="record-list-main">
-                      <div className="record-list-heading">
-                        <strong>{item.display_name}</strong>
-                        <span>{item.worker_key}</span>
-                      </div>
-                      <div className="badge-row">
-                        <StatusBadge value={item.worker_type} />
-                        <StatusBadge value={item.worker_state} />
-                        <StatusBadge value={item.enabled ? "enabled" : "disabled"} />
-                        <StatusBadge value={item.health_status} />
-                      </div>
+      <SectionCard
+        title="Worker inventory"
+        subtitle={noWorkersConfigured ? "No workers configured yet." : `${workers.length} worker${workers.length === 1 ? "" : "s"} configured`}
+      >
+        {noWorkersConfigured ? (
+          <EmptyState
+            title="No workers configured"
+            message="Add this host as a worker or pair a remote worker when you are ready to give Encodr execution capacity."
+          />
+        ) : (
+          <div className="record-list" role="list" aria-label="Workers list">
+            {workers.map((item) => {
+              const isActive = item.id === workerId;
+              return (
+                <Link
+                  key={item.id}
+                  className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
+                  to={APP_ROUTES.workerDetail(item.id)}
+                >
+                  <div className="record-list-main">
+                    <div className="record-list-heading">
+                      <strong>{item.display_name}</strong>
+                      <span>{item.worker_key}</span>
                     </div>
-                    <div className="record-list-meta">
-                      <span className="record-list-kicker">{item.worker_type === "local" ? "This host" : "Remote worker"}</span>
-                      <span>{formatBackendLabel(item.preferred_backend)}</span>
-                      <span>{formatConcurrencyLabel(item)}</span>
-                      <span>{item.schedule_summary ?? "Any time"}</span>
-                      <span className="record-list-emphasis">{item.health_summary ?? "No health summary reported."}</span>
+                    <div className="badge-row">
+                      <StatusBadge value={item.worker_type} />
+                      <StatusBadge value={item.worker_state} />
+                      <StatusBadge value={item.enabled ? "enabled" : "disabled"} />
+                      <StatusBadge value={item.health_status} />
                     </div>
-                  </Link>
-                );
-              })}
-            </div>
-          )}
-        </SectionCard>
+                  </div>
+                  <div className="record-list-meta">
+                    <span className="record-list-kicker">{item.worker_type === "local" ? "This host" : "Remote worker"}</span>
+                    <span>{formatBackendLabel(item.preferred_backend)}</span>
+                    <span>{formatConcurrencyLabel(item)}</span>
+                    <span>{item.schedule_summary ?? "Any time"}</span>
+                    <span className="record-list-emphasis">{item.health_summary ?? "No health summary reported."}</span>
+                  </div>
+                </Link>
+              );
+            })}
+          </div>
+        )}
+      </SectionCard>
 
-        {detail ? (
-          <SectionCard
-            title="Worker detail"
-            subtitle={detail.display_name}
-            actions={(
+      {workerId && detailQuery.isLoading ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Worker detail">
+          <section className="modal-panel">
+            <div className="section-card-header">
+              <div>
+                <h2>Worker detail</h2>
+                <p>Loading the selected worker.</p>
+              </div>
+              <div className="section-card-actions">
+                <button className="button button-secondary button-small" type="button" onClick={() => navigate(APP_ROUTES.workers)}>
+                  Close
+                </button>
+              </div>
+            </div>
+            <LoadingBlock label="Loading worker detail" />
+          </section>
+        </div>
+      ) : null}
+
+      {detail ? (
+        <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Worker detail">
+          <section className="modal-panel modal-panel-wide">
+            <div className="section-card-header">
+              <div>
+                <h2>Worker detail</h2>
+                <p>{detail.display_name}</p>
+              </div>
               <div className="section-card-actions">
                 <button
                   className="button button-secondary button-small"
@@ -295,10 +331,29 @@ export function WorkersPage() {
                     {enableMutation.isPending ? "Enabling…" : "Enable"}
                   </button>
                 )}
+                <button className="button button-secondary button-small" type="button" onClick={() => navigate(APP_ROUTES.workers)}>
+                  Close
+                </button>
               </div>
-            )}
-          >
+            </div>
+
             <div className="card-stack">
+              <div className="badge-row">
+                <StatusBadge value={detail.worker_type} />
+                <StatusBadge value={detail.worker_state} />
+                <StatusBadge value={detail.enabled ? "enabled" : "disabled"} />
+                <StatusBadge value={detail.health_status} />
+                <StatusBadge value={formatBackendLabel(detail.preferred_backend)} />
+                {cpuFallbackActive ? <StatusBadge value="cpu fallback active" /> : null}
+              </div>
+
+              {detailPrimaryIssues.length > 0 ? (
+                <div className="info-strip info-strip-warning" role="note">
+                  <strong>{detail.health_status === "healthy" ? "Attention" : "Why this worker is degraded"}</strong>
+                  <span>{detailPrimaryIssues.join(" • ")}</span>
+                </div>
+              ) : null}
+
               {detail.worker_state === "remote_pending_pairing" ? (
                 <div className="info-strip info-strip-warning" role="note">
                   <strong>Pending pairing</strong>
@@ -306,60 +361,139 @@ export function WorkersPage() {
                 </div>
               ) : null}
 
-              <KeyValueList
-                items={[
-                  { label: "Worker key", value: detail.worker_key },
-                  { label: "Type", value: <StatusBadge value={detail.worker_type} /> },
-                  { label: "State", value: <StatusBadge value={detail.worker_state} /> },
-                  { label: "Health", value: <StatusBadge value={detail.health_status} /> },
-                  { label: "Enabled", value: formatRelativeBoolean(detail.enabled) },
-                  { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
-                  { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
-                  { label: "Concurrency", value: formatConcurrencyLabel(detail) },
-                  { label: "Schedule", value: detail.schedule_summary ?? "Any time" },
-                  { label: "Scratch path", value: detail.scratch_path ?? detail.runtime_summary?.scratch_dir ?? "Not configured" },
-                  { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
-                  { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
-                  { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
-                  { label: "Last seen", value: formatDateTime(detail.last_seen_at) },
-                ]}
-              />
+              {cpuFallbackActive ? (
+                <div className="info-strip info-strip-warning" role="note">
+                  <strong>CPU fallback in effect</strong>
+                  <span>
+                    {detail.display_name} prefers {formatBackendLabel(detail.preferred_backend)}, but the current job is using CPU because the configured hardware path is not usable right now.
+                  </span>
+                </div>
+              ) : null}
 
-              <div className="metric-grid metric-grid-compact">
+              <section className="metric-grid metric-grid-compact">
+                <div className="metric-panel">
+                  <span className="metric-label">Health summary</span>
+                  <strong>{detail.health_summary ?? "No summary reported"}</strong>
+                </div>
+                <div className="metric-panel">
+                  <span className="metric-label">Current activity</span>
+                  <strong>{detail.current_stage ?? detail.runtime_summary?.current_stage ?? detail.current_job_id ?? "Idle"}</strong>
+                </div>
+                <div className="metric-panel">
+                  <span className="metric-label">Current backend</span>
+                  <strong>{formatBackendLabel(detailCurrentBackend)}</strong>
+                </div>
+                <div className="metric-panel">
+                  <span className="metric-label">Concurrency</span>
+                  <strong>{formatConcurrencyLabel(detail)}</strong>
+                </div>
                 <div className="metric-panel">
                   <span className="metric-label">Pending assignments</span>
                   <strong>{detail.pending_assignment_count}</strong>
                 </div>
                 <div className="metric-panel">
-                  <span className="metric-label">Current job</span>
-                  <strong>{detail.current_job_id ?? detail.runtime_summary?.current_job_id ?? "Idle"}</strong>
+                  <span className="metric-label">Schedule</span>
+                  <strong>{detail.schedule_summary ?? "Any time"}</strong>
                 </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Current backend</span>
-                  <strong>{formatBackendLabel(detail.current_backend ?? detail.runtime_summary?.current_backend)}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Progress</span>
-                  <strong>
-                    {detail.current_progress_percent ?? detail.runtime_summary?.current_progress_percent ?? detail.current_stage ?? detail.runtime_summary?.current_stage ?? "Idle"}
-                    {typeof (detail.current_progress_percent ?? detail.runtime_summary?.current_progress_percent) === "number" ? "%" : ""}
-                  </strong>
-                </div>
-              </div>
+              </section>
 
-              {detail.runtime_summary?.telemetry ? (
-                <SectionCard title="Current telemetry">
-                  <TelemetrySummary telemetry={detail.runtime_summary.telemetry} />
+              <SectionCard title="Health and execution">
+                <KeyValueList
+                  items={[
+                    { label: "Worker key", value: detail.worker_key },
+                    { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
+                    { label: "Actual backend", value: formatBackendLabel(detailCurrentBackend) },
+                    { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
+                    { label: "Current job", value: detail.current_job_id ?? detail.runtime_summary?.current_job_id ?? "Idle" },
+                    {
+                      label: "Progress",
+                      value: formatWorkerProgress(detail.current_progress_percent ?? detail.runtime_summary?.current_progress_percent, detail.current_stage ?? detail.runtime_summary?.current_stage),
+                    },
+                    { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
+                    { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
+                    { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
+                    { label: "Last seen", value: formatDateTime(detail.last_seen_at) },
+                  ]}
+                />
+              </SectionCard>
+
+              {detail.worker_type === "local" ? (
+                <SectionCard title="Local backend diagnostics" subtitle="Runtime truth for the current host worker.">
+                  <div className="card-stack">
+                    <KeyValueList
+                      items={[
+                        { label: "Eligibility", value: localWorkerStatus?.eligibility_summary ?? "Not reported" },
+                        { label: "FFmpeg", value: localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffmpeg.status} /> : "Unknown" },
+                        { label: "FFprobe", value: localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffprobe.status} /> : "Unknown" },
+                        {
+                          label: "Configured backend health",
+                          value: configuredBackendProbe ? <StatusBadge value={configuredBackendProbe.status} /> : "No probe available",
+                        },
+                        {
+                          label: "Configured backend reason",
+                          value: configuredBackendProbe?.reason_unavailable ?? configuredBackendProbe?.message ?? "No specific issue reported",
+                        },
+                      ]}
+                    />
+                    <CapabilityStrip
+                      title="Validated execution backends"
+                      items={localBackendProbes.map((item) => ({
+                        label: formatBackendLabel(item.backend),
+                        status: item.status,
+                        message: item.reason_unavailable ?? item.message,
+                      }))}
+                    />
+                    <div className="list-stack">
+                      {localRuntimeDevices.map((device) => (
+                        <div key={device.path} className="list-row">
+                          <div>
+                            <strong>{device.path}</strong>
+                            <p>{device.message}</p>
+                          </div>
+                          <StatusBadge value={device.status} />
+                        </div>
+                      ))}
+                    </div>
+                  </div>
                 </SectionCard>
-              ) : null}
+              ) : (
+                <SectionCard title="Worker capability summary" subtitle="What the worker has actually reported.">
+                  <KeyValueList
+                    items={[
+                      {
+                        label: "Execution modes",
+                        value: detail.capability_summary.execution_modes.length > 0
+                          ? detail.capability_summary.execution_modes.join(" • ")
+                          : "Not reported",
+                      },
+                      {
+                        label: "Hardware hints",
+                        value: detail.capability_summary.hardware_hints.length > 0
+                          ? detail.capability_summary.hardware_hints.join(" • ")
+                          : "Not reported",
+                      },
+                      {
+                        label: "Recommended concurrency",
+                        value: detail.capability_summary.recommended_concurrency != null
+                          ? `${detail.capability_summary.recommended_concurrency} • ${detail.capability_summary.recommended_concurrency_reason ?? "Worker reported recommendation"}`
+                          : "Not reported",
+                      },
+                    ]}
+                  />
+                </SectionCard>
+              )}
 
-              <SectionCard title="Storage access">
+              <SectionCard title="Storage and path access">
                 <div className="card-stack">
                   <KeyValueList
                     items={[
                       {
                         label: "Scratch validation",
                         value: formatScratchStatus(detail.runtime_summary?.scratch_status),
+                      },
+                      {
+                        label: "Scratch path",
+                        value: detail.scratch_path ?? detail.runtime_summary?.scratch_dir ?? "Not configured",
                       },
                       {
                         label: "Path mappings",
@@ -389,6 +523,12 @@ export function WorkersPage() {
                 </div>
               </SectionCard>
 
+              {(detail.runtime_summary?.telemetry ?? localWorkerStatus?.telemetry) ? (
+                <SectionCard title="Current telemetry">
+                  <TelemetrySummary telemetry={(detail.runtime_summary?.telemetry ?? localWorkerStatus?.telemetry) as Record<string, unknown>} />
+                </SectionCard>
+              ) : null}
+
               {detailRecentJobs.length > 0 ? (
                 <SectionCard title="Recent jobs">
                   <div className="list-stack">
@@ -409,10 +549,27 @@ export function WorkersPage() {
                   </div>
                 </SectionCard>
               ) : null}
+
+              <CollapsibleSection title="Advanced metadata" subtitle="Host and worker metadata for debugging.">
+                <KeyValueList
+                  items={[
+                    { label: "Worker source", value: detail.source },
+                    { label: "Registration state", value: detail.registration_status },
+                    { label: "Agent version", value: detail.host_summary.agent_version ?? "Not reported" },
+                    { label: "Python version", value: detail.host_summary.python_version ?? "Not reported" },
+                    {
+                      label: "Assigned job ids",
+                      value: detail.assigned_job_ids.length > 0 ? detail.assigned_job_ids.join(" • ") : "None",
+                    },
+                    { label: "Recent failure", value: detail.recent_failure_message ?? "None" },
+                    { label: "Pairing expires", value: formatDateTime(detail.pairing_expires_at) },
+                  ]}
+                />
+              </CollapsibleSection>
             </div>
-          </SectionCard>
-        ) : null}
-      </section>
+          </section>
+        </div>
+      ) : null}
 
       {isAddWorkerOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Add worker">
@@ -1020,6 +1177,44 @@ function formatGpuMetric(gpu: Record<string, unknown> | null | undefined) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function buildWorkerPrimaryIssues(detail: WorkerInventoryDetail, localWorkerStatus: WorkerStatus | null) {
+  const issues = new Set<string>();
+  if (detail.health_status !== "healthy" && detail.health_summary) {
+    issues.add(detail.health_summary);
+  }
+  if (detail.worker_state === "remote_pending_pairing") {
+    issues.add("This worker has not paired yet.");
+  }
+  if (localWorkerStatus) {
+    if (!localWorkerStatus.eligible) {
+      issues.add(localWorkerStatus.eligibility_summary);
+    }
+    const preferredProbe = localWorkerStatus.hardware_probes.find(
+      (item) => item.preference_key === detail.preferred_backend,
+    );
+    if (preferredProbe && !preferredProbe.usable_by_ffmpeg) {
+      issues.add(preferredProbe.reason_unavailable ?? preferredProbe.message);
+    }
+    const missingRenderNode = localWorkerStatus.runtime_device_paths.find(
+      (item) => item.path.includes("/dev/dri/render") && item.status !== "healthy",
+    );
+    if (missingRenderNode) {
+      issues.add(missingRenderNode.message);
+    }
+  }
+  return [...issues];
+}
+
+function formatWorkerProgress(progressPercent: number | null | undefined, stage: string | null | undefined) {
+  if (typeof progressPercent === "number") {
+    return `${progressPercent}%`;
+  }
+  if (stage) {
+    return titleCase(stage.replace(/_/g, " "));
+  }
+  return "Idle";
 }
 
 function formatBackendLabel(value: string | null | undefined) {

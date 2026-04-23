@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import inspect
+import subprocess
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
@@ -29,6 +30,8 @@ class ExecutionRunner:
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
         preferred_backend: str = "cpu_only",
         allow_cpu_fallback: bool = True,
+        process_started_callback: Callable[[subprocess.Popen[str]], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> ExecutionResult:
         started_at = datetime.now(timezone.utc)
         try:
@@ -88,6 +91,8 @@ class ExecutionRunner:
                 command_plan,
                 total_duration_seconds=total_duration_seconds,
                 progress_callback=progress_callback,
+                process_started_callback=process_started_callback,
+                cancel_requested=cancel_requested,
             )
         else:
             execution_result = self.ffmpeg_client.run(command_plan)

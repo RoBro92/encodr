@@ -5,7 +5,7 @@ import threading
 from collections.abc import Callable
 from datetime import datetime, timezone
 
-from encodr_core.execution.errors import FFmpegBinaryNotFoundError, FFmpegProcessError
+from encodr_core.execution.errors import ExecutionCancelledError, FFmpegBinaryNotFoundError, FFmpegProcessError
 from encodr_core.execution.models import ExecutionCommandPlan, ExecutionProgressUpdate, ExecutionResult
 
 
@@ -16,6 +16,8 @@ class FFmpegClient:
         *,
         total_duration_seconds: float | None = None,
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+        process_started_callback: Callable[[subprocess.Popen[str]], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> ExecutionResult:
         started_at = datetime.now(timezone.utc)
         try:
@@ -39,6 +41,8 @@ class FFmpegClient:
                     "backend_selection_reason": command_plan.backend_selection_reason,
                 },
             ) from error
+        if process_started_callback is not None:
+            process_started_callback(process)
 
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
@@ -72,6 +76,22 @@ class FFmpegClient:
         completed_at = datetime.now(timezone.utc)
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
+        if cancel_requested is not None and cancel_requested():
+            raise ExecutionCancelledError(
+                "ffmpeg execution was cancelled by the operator.",
+                file_path=command_plan.input_path,
+                command=command_plan.command,
+                details={
+                    "exit_code": returncode,
+                    "stdout": stdout,
+                    "stderr": stderr,
+                    "requested_backend": command_plan.requested_backend,
+                    "actual_backend": command_plan.actual_backend,
+                    "actual_accelerator": command_plan.actual_accelerator,
+                    "backend_fallback_used": command_plan.fallback_used,
+                    "backend_selection_reason": command_plan.backend_selection_reason,
+                },
+            )
         if returncode != 0:
             raise FFmpegProcessError(
                 "ffmpeg returned a non-zero exit status.",

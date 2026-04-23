@@ -213,6 +213,10 @@ export function getJob(client: ApiClient, jobId: string): Promise<JobDetail> {
   return client.request<JobDetail>(`/jobs/${jobId}`);
 }
 
+export function cancelJob(client: ApiClient, jobId: string): Promise<JobDetail> {
+  return client.request<JobDetail>(`/jobs/${jobId}/cancel`, { method: "POST" });
+}
+
 export function listWorkers(client: ApiClient): Promise<WorkerInventoryListResponse> {
   return client.request<WorkerInventoryListResponse>("/workers");
 }

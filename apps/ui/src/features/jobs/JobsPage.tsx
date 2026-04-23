@@ -11,12 +11,14 @@ import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import { useSession } from "../auth/AuthProvider";
 import {
+  useCancelJobMutation,
   useCreateJobMutation,
   useFilesQuery,
   useJobDetailQuery,
   useJobsQuery,
   useRetryJobMutation,
   useRunWorkerOnceMutation,
+  useWorkerStatusQuery,
 } from "../../lib/api/hooks";
 import type { FileSummary, JobSummary } from "../../lib/types/api";
 import { formatBytes, formatDateTime, formatDurationSeconds, titleCase } from "../../lib/utils/format";
@@ -76,10 +78,46 @@ export function JobsPage() {
   const jobsQuery = useJobsQuery(filters);
   const detailQuery = useJobDetailQuery(jobId);
   const retryMutation = useRetryJobMutation();
+  const cancelMutation = useCancelJobMutation();
   const createJobMutation = useCreateJobMutation();
   const runOnceMutation = useRunWorkerOnceMutation();
+  const workerStatusQuery = useWorkerStatusQuery();
+  const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
   const error = filterFilesQuery.error ?? createFilesQuery.error ?? jobsQuery.error ?? detailQuery.error;
+  const filterFiles = filterFilesQuery.data?.items ?? [];
+  const createFiles = createFilesQuery.data?.items ?? [];
+  const files = deduplicateTrackedFiles([...filterFiles, ...createFiles]);
+  const jobs = jobsQuery.data?.items ?? [];
+  const orderedJobs = sortJobsForDisplay(jobs);
+  const groupedJobs = groupJobsByWorker(orderedJobs);
+  const localWorkerId = workerStatusQuery.data?.worker_id ?? null;
+  const detail = detailQuery.data;
+  const metrics = summariseJobs(jobs);
+  const canRetry = detail ? ["failed", "interrupted", "manual_review", "skipped"].includes(detail.status) : false;
+  const selectedJobId = detail?.id;
+
+  useEffect(() => {
+    setExpandedGroups((current) => {
+      const next: Record<string, boolean> = {};
+      let changed = false;
+      for (const group of groupedJobs) {
+        if (current[group.key] == null) {
+          next[group.key] = group.initiallyOpen;
+          changed = true;
+        } else {
+          next[group.key] = current[group.key];
+        }
+      }
+      for (const key of Object.keys(current)) {
+        if (!(key in next)) {
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [groupedJobs]);
+
   if (jobsQuery.isLoading || filterFilesQuery.isLoading || createFilesQuery.isLoading) {
     return <LoadingBlock label="Loading jobs" />;
   }
@@ -87,17 +125,6 @@ export function JobsPage() {
   if (error instanceof Error) {
     return <ErrorPanel title="Unable to load jobs" message={error.message} />;
   }
-
-  const filterFiles = filterFilesQuery.data?.items ?? [];
-  const createFiles = createFilesQuery.data?.items ?? [];
-  const files = deduplicateTrackedFiles([...filterFiles, ...createFiles]);
-  const jobs = jobsQuery.data?.items ?? [];
-  const orderedJobs = sortJobsForDisplay(jobs);
-  const groupedJobs = groupJobsByWorker(orderedJobs);
-  const detail = detailQuery.data;
-  const metrics = summariseJobs(jobs);
-  const canRetry = detail ? ["failed", "interrupted", "manual_review", "skipped"].includes(detail.status) : false;
-  const selectedJobId = detail?.id;
 
   return (
     <div className="page-stack">
@@ -122,6 +149,9 @@ export function JobsPage() {
 
       {retryMutation.error instanceof Error ? (
         <ErrorPanel title="Retry failed" message={retryMutation.error.message} />
+      ) : null}
+      {cancelMutation.error instanceof Error ? (
+        <ErrorPanel title="Cancel failed" message={cancelMutation.error.message} />
       ) : null}
       {createJobMutation.error instanceof Error ? (
         <ErrorPanel title="Job creation failed" message={createJobMutation.error.message} />
@@ -229,8 +259,18 @@ export function JobsPage() {
           ) : (
             <div className="job-worker-groups" role="list" aria-label="Jobs list">
               {groupedJobs.map((group) => (
-                <details key={group.key} className="job-worker-group" open={group.initiallyOpen}>
-                  <summary className="job-worker-group-summary">
+                <section key={group.key} className="job-worker-group">
+                  <button
+                    className="job-worker-group-summary job-worker-group-trigger"
+                    type="button"
+                    aria-expanded={expandedGroups[group.key] ?? group.initiallyOpen}
+                    onClick={() =>
+                      setExpandedGroups((current) => ({
+                        ...current,
+                        [group.key]: !(current[group.key] ?? group.initiallyOpen),
+                      }))
+                    }
+                  >
                     <div className="job-worker-group-heading">
                       <strong>{group.label}</strong>
                       <span>{group.kindSummary}</span>
@@ -244,58 +284,76 @@ export function JobsPage() {
                       <span>{group.totalAudioTracksRemoved} audio removed</span>
                       <span>{group.totalSubtitleTracksRemoved} subtitles removed</span>
                     </div>
-                  </summary>
-                  <div className="record-list">
-                    {group.jobs.map((item) => {
-                      const isActive = item.id === jobId;
-                      return (
-                        <Link
-                          key={item.id}
-                          className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
-                          to={APP_ROUTES.jobDetail(item.id)}
-                        >
-                          <div className="record-list-item-body">
-                            <JobArtwork jobId={item.id} title={jobPrimaryLabel(item, files)} />
-                            <div className="record-list-main">
-                              <div className="record-list-heading">
-                                <strong>{jobPrimaryLabel(item, files)}</strong>
-                                <span>{jobSecondaryLabel(item)}</span>
-                              </div>
-                              <div className="badge-row">
-                                <StatusBadge value={item.status} />
-                                {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
-                                {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
-                                {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
-                                {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                                  <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
+                  </button>
+                  {expandedGroups[group.key] ?? group.initiallyOpen ? (
+                    <div className="record-list">
+                      {group.jobs.map((item) => {
+                        const isActive = item.id === jobId;
+                        return (
+                          <article
+                            key={item.id}
+                            className={`record-list-item queue-job-card${isActive ? " record-list-item-active" : ""}`}
+                          >
+                            <div className="record-list-item-body">
+                              <JobArtwork jobId={item.id} title={jobPrimaryLabel(item, files)} />
+                              <div className="record-list-main">
+                                <div className="record-list-heading">
+                                  <Link className="text-link" to={APP_ROUTES.jobDetail(item.id)}>
+                                    <strong>{jobPrimaryLabel(item, files)}</strong>
+                                  </Link>
+                                  <span>{jobSecondaryLabel(item)}</span>
+                                </div>
+                                <div className="badge-row">
+                                  <StatusBadge value={displayJobStatus(item)} />
+                                  {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
+                                  {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
+                                  {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
+                                  {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                                    <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
+                                  ) : null}
+                                  {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
+                                </div>
+                                <JobProgressBar job={item} compact />
+                                {item.job_kind === "dry_run" && item.analysis_payload?.summary ? (
+                                  <p className="muted-copy">{item.analysis_payload.summary}</p>
                                 ) : null}
-                                {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
                               </div>
-                              {item.status === "running" || item.status === "pending" ? <JobProgressBar job={item} compact /> : null}
-                              {item.job_kind === "dry_run" && item.analysis_payload?.summary ? (
-                                <p className="muted-copy">{item.analysis_payload.summary}</p>
+                            </div>
+                            <div className="record-list-meta">
+                              <span className="record-list-kicker">{jobOutcomeLabel(item)}</span>
+                              <span>{item.worker_name ?? group.label}</span>
+                              <span>{jobMediaInfoLabel(item)}</span>
+                              {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                                <span>{formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)}</span>
+                              ) : null}
+                              <span>{formatDateTime(item.updated_at)}</span>
+                              {item.failure_message ? (
+                                <span className="record-list-emphasis">{truncate(item.failure_message, 84)}</span>
+                              ) : item.status === "completed" ? (
+                                <span className="record-list-emphasis">{replacementSummary(item)}</span>
                               ) : null}
                             </div>
-                          </div>
-                          <div className="record-list-meta">
-                            <span className="record-list-kicker">{jobOutcomeLabel(item)}</span>
-                            <span>{item.worker_name ?? group.label}</span>
-                            <span>{jobMediaInfoLabel(item)}</span>
-                            {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                              <span>{formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)}</span>
-                            ) : null}
-                            <span>{formatDateTime(item.updated_at)}</span>
-                            {item.failure_message ? (
-                              <span className="record-list-emphasis">{truncate(item.failure_message, 84)}</span>
-                            ) : item.status === "completed" ? (
-                              <span className="record-list-emphasis">{replacementSummary(item)}</span>
-                            ) : null}
-                          </div>
-                        </Link>
-                      );
-                    })}
-                  </div>
-                </details>
+                            <div className="section-card-actions queue-job-card-actions">
+                              <Link className="button button-secondary button-small" to={APP_ROUTES.jobDetail(item.id)}>
+                                Open
+                              </Link>
+                              {canCancelJob(item, localWorkerId) ? (
+                                <button
+                                  className="button button-secondary button-small"
+                                  type="button"
+                                  onClick={() => cancelMutation.mutate(item.id)}
+                                  disabled={cancelMutation.isPending}
+                                >
+                                  {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
+                                </button>
+                              ) : null}
+                            </div>
+                          </article>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </section>
               ))}
             </div>
           )}
@@ -309,32 +367,51 @@ export function JobsPage() {
           <SectionCard
             title="Selected job"
             subtitle={jobPrimaryLabel(detail, files)}
-            actions={
-              canRetry ? (
-                <button
-                  className="button button-primary button-small"
-                  type="button"
-                  onClick={() => {
-                    if (selectedJobId) {
-                      retryMutation.mutate(selectedJobId);
-                    }
-                  }}
-                  disabled={retryMutation.isPending}
-                >
-                  {retryMutation.isPending ? "Retrying…" : "Retry job"}
-                </button>
-              ) : null
-            }
+            actions={(
+              <div className="section-card-actions">
+                {canRetry ? (
+                  <button
+                    className="button button-primary button-small"
+                    type="button"
+                    onClick={() => {
+                      if (selectedJobId) {
+                        retryMutation.mutate(selectedJobId);
+                      }
+                    }}
+                    disabled={retryMutation.isPending}
+                  >
+                    {retryMutation.isPending ? "Retrying…" : "Retry job"}
+                  </button>
+                ) : null}
+                {canCancelJob(detail, localWorkerId) ? (
+                  <button
+                    className="button button-secondary button-small"
+                    type="button"
+                    onClick={() => cancelMutation.mutate(detail.id)}
+                    disabled={cancelMutation.isPending}
+                  >
+                    {cancelMutation.isPending ? "Cancelling…" : "Cancel job"}
+                  </button>
+                ) : null}
+              </div>
+            )}
           >
             <div className="card-stack">
               <div className="badge-row">
-                <StatusBadge value={detail.status} />
+                <StatusBadge value={displayJobStatus(detail)} />
                 <StatusBadge value={detail.verification_status} />
                 <StatusBadge value={detail.replacement_status} />
                 {detail.requires_review ? <StatusBadge value={detail.review_status ?? "open"} /> : null}
                 {detail.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
                 {detail.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
               </div>
+
+              {isOperatorCancelled(detail) ? (
+                <div className="info-strip">
+                  <strong>Cancelled</strong>
+                  <span>{detail.failure_message ?? "This job was cancelled by the operator."}</span>
+                </div>
+              ) : null}
 
               {detail.status === "scheduled" && detail.schedule_summary ? (
                 <div className="info-strip info-strip-warning">
@@ -348,12 +425,12 @@ export function JobsPage() {
 
               {detail.status === "interrupted" && detail.interruption_reason ? (
                 <div className="info-strip info-strip-warning">
-                  <strong>Interrupted</strong>
+                  <strong>{isOperatorCancelled(detail) ? "Cancelled" : "Interrupted"}</strong>
                   <span>{detail.interruption_reason}</span>
                 </div>
               ) : null}
 
-              {detail.failure_message ? (
+              {detail.failure_message && !isOperatorCancelled(detail) ? (
                 <div className="info-strip info-strip-danger">
                   <strong>Failure</strong>
                   <span>{detail.failure_message}</span>
@@ -367,7 +444,7 @@ export function JobsPage() {
                 </div>
               ) : null}
 
-              {(detail.status === "running" || detail.status === "pending") ? <JobProgressBar job={detail} /> : null}
+              <JobProgressBar job={detail} />
 
               <section className="metric-grid metric-grid-compact">
                 <div className="metric-pill">
@@ -384,7 +461,7 @@ export function JobsPage() {
                 </div>
                 <div className="metric-pill">
                   <span className="metric-label">Stage</span>
-                  <strong>{detail.progress_stage ? titleCase(detail.progress_stage) : titleCase(detail.status)}</strong>
+                  <strong>{describeJobProgress(detail).stageLabel}</strong>
                 </div>
                 <div className="metric-pill">
                   <span className="metric-label">Requested backend</span>
@@ -663,25 +740,37 @@ function JobProgressBar({
   job,
   compact = false,
 }: {
-  job: Pick<JobSummary, "progress_stage" | "progress_percent" | "progress_fps" | "progress_speed" | "progress_out_time_seconds" | "worker_name" | "status">;
+  job: Pick<
+    JobSummary,
+    | "progress_stage"
+    | "progress_percent"
+    | "progress_fps"
+    | "progress_speed"
+    | "progress_out_time_seconds"
+    | "progress_updated_at"
+    | "worker_name"
+    | "status"
+    | "failure_category"
+    | "job_kind"
+  >;
   compact?: boolean;
 }) {
-  const percent = clampProgress(job.progress_percent);
-  const stage = job.progress_stage ? titleCase(job.progress_stage) : titleCase(job.status);
+  const progress = describeJobProgress(job);
   return (
-    <div className={`job-progress-card${compact ? " job-progress-card-compact" : ""}`}>
+    <div className={`job-progress-card${compact ? " job-progress-card-compact" : ""}${job.job_kind === "dry_run" ? " job-progress-card-analysis" : ""}${progress.stalled ? " job-progress-card-warning" : ""}`}>
       <div className="job-progress-header">
-        <strong>{stage}</strong>
-        <span>{percent == null ? "Starting…" : `${Math.round(percent)}%`}</span>
+        <strong>{progress.stageLabel}</strong>
+        <span>{progress.percentLabel}</span>
       </div>
       <div className="job-progress-track" aria-label="Job progress">
-        <span className="job-progress-fill" style={{ width: `${percent ?? 6}%` }} />
+        <span className="job-progress-fill" style={{ width: `${progress.barPercent}%` }} />
       </div>
       <div className="job-progress-meta">
-        <span>{job.worker_name ?? "Waiting for worker"}</span>
+        <span>{progress.metaLabel ?? job.worker_name ?? "Waiting for worker"}</span>
         {job.progress_out_time_seconds != null ? <span>{formatDurationSeconds(job.progress_out_time_seconds)}</span> : null}
         {job.progress_fps != null ? <span>{job.progress_fps.toFixed(1)} fps</span> : null}
         {job.progress_speed != null ? <span>{job.progress_speed.toFixed(2)}x</span> : null}
+        {progress.detail ? <span>{progress.detail}</span> : null}
       </div>
     </div>
   );
@@ -771,7 +860,11 @@ function jobOutcomeLabel(job: {
   requires_review: boolean;
   tracked_file_is_protected: boolean | null;
   job_kind?: string;
+  failure_category?: string | null;
 }) {
+  if (isOperatorCancelled(job)) {
+    return "Cancelled";
+  }
   if (job.failure_message) {
     return "Failed";
   }
@@ -811,12 +904,141 @@ function sortJobsForDisplay(jobs: JobSummary[]) {
     completed: 7,
   };
   return [...jobs].sort((left, right) => {
-    const statusDelta = (rank[left.status] ?? 99) - (rank[right.status] ?? 99);
+    const statusDelta = (rank[normalisedJobStatus(left)] ?? 99) - (rank[normalisedJobStatus(right)] ?? 99);
     if (statusDelta !== 0) {
       return statusDelta;
     }
     return right.updated_at.localeCompare(left.updated_at);
   });
+}
+
+function canCancelJob(
+  job: Pick<JobSummary, "id" | "status" | "assigned_worker_id" | "job_kind">,
+  localWorkerId: string | null,
+) {
+  if (job.status === "pending" || job.status === "scheduled") {
+    return true;
+  }
+  if (job.status !== "running") {
+    return false;
+  }
+  if (job.job_kind === "dry_run") {
+    return false;
+  }
+  return Boolean(localWorkerId && job.assigned_worker_id === localWorkerId);
+}
+
+type JobStatusWithFailureCategory = {
+  status: string;
+  failure_category?: string | null;
+};
+
+function normalisedJobStatus(job: JobStatusWithFailureCategory) {
+  return isOperatorCancelled(job) ? "cancelled" : job.status;
+}
+
+function displayJobStatus(job: JobStatusWithFailureCategory) {
+  return normalisedJobStatus(job);
+}
+
+function isOperatorCancelled(job: JobStatusWithFailureCategory) {
+  return job.status === "interrupted" && job.failure_category === "cancelled_by_operator";
+}
+
+function describeJobProgress(
+  job: Pick<
+    JobSummary,
+    | "progress_stage"
+    | "progress_percent"
+    | "progress_updated_at"
+    | "status"
+    | "failure_category"
+    | "worker_name"
+    | "job_kind"
+  >,
+) {
+  const status = normalisedJobStatus(job);
+  const staleAgeSeconds = staleProgressAgeSeconds(job.progress_updated_at);
+  const stalled = status === "running" && staleAgeSeconds != null && staleAgeSeconds >= 180;
+  const percent = clampProgress(job.progress_percent);
+  const rawStage = job.progress_stage ?? status;
+
+  let stageLabel = titleCase(rawStage.replace(/_/g, " "));
+  if (status === "pending") {
+    stageLabel = job.job_kind === "dry_run" ? "Queued For Analysis" : "Queued";
+  } else if (status === "scheduled") {
+    stageLabel = "Scheduled";
+  } else if (status === "cancelled") {
+    stageLabel = "Cancelled";
+  } else if (status === "interrupted") {
+    stageLabel = "Interrupted";
+  } else if (rawStage === "starting") {
+    stageLabel = "Preparing";
+  } else if (rawStage === "probing" || rawStage === "planning" || rawStage === "summarising") {
+    stageLabel = "Analysing";
+  } else if (rawStage === "encoding" && (percent ?? 0) === 0) {
+    stageLabel = "Initialising Backend";
+  }
+  if (stalled) {
+    stageLabel = "Stalled";
+  }
+
+  const percentLabel =
+    status === "scheduled"
+      ? "Waiting"
+      : status === "pending"
+        ? "Queued"
+        : status === "completed"
+          ? "Done"
+          : status === "skipped"
+            ? "Skipped"
+            : status === "manual_review"
+              ? "Needs review"
+              : status === "failed"
+                ? "Failed"
+                : status === "interrupted"
+                  ? "Stopped"
+        : status === "cancelled"
+          ? "Stopped"
+          : percent == null
+            ? rawStage === "starting" || rawStage === "probing" || rawStage === "planning" || rawStage === "summarising"
+              ? "Starting…"
+              : "Awaiting progress"
+            : `${Math.round(percent)}%`;
+
+  const detail =
+    stalled && staleAgeSeconds != null
+      ? `No progress update for ${formatDurationSeconds(staleAgeSeconds)}`
+      : rawStage === "encoding" && (percent ?? 0) === 0
+        ? "Worker is preparing the backend before meaningful output begins."
+        : rawStage === "probing" || rawStage === "planning" || rawStage === "summarising"
+          ? "Inspecting the media and building a safe plan."
+          : null;
+
+  return {
+    stageLabel,
+    percentLabel,
+    barPercent: percent ?? (status === "running" ? 6 : status === "completed" ? 100 : 4),
+    metaLabel:
+      status === "scheduled"
+        ? "Waiting for schedule window"
+        : status === "pending"
+          ? "Waiting for worker"
+          : job.worker_name ?? "Waiting for worker",
+    detail,
+    stalled,
+  };
+}
+
+function staleProgressAgeSeconds(progressUpdatedAt: string | null) {
+  if (!progressUpdatedAt) {
+    return null;
+  }
+  const updatedAt = Date.parse(progressUpdatedAt);
+  if (Number.isNaN(updatedAt)) {
+    return null;
+  }
+  return Math.max(0, Math.round((Date.now() - updatedAt) / 1000));
 }
 
 function groupJobsByWorker(jobs: JobSummary[]): JobWorkerGroup[] {

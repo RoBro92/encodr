@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+import subprocess
+import threading
 import time
 from pathlib import Path
 from collections.abc import Callable
@@ -16,6 +18,7 @@ from encodr_core.execution import (
     BackendSelectionError,
     ExecutionProgressUpdate,
     ExecutionResult,
+    ExecutionCancelledError,
     ExecutionRunner,
     FFmpegBinaryNotFoundError,
     FFmpegProcessError,
@@ -209,6 +212,8 @@ class WorkerExecutionService:
         preferred_backend: str = "cpu_only",
         allow_cpu_fallback: bool = True,
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+        process_started_callback: Callable[[subprocess.Popen[str]], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> ExecutionResult:
         job_repository = JobRepository(session)
         tracked_file_repository = TrackedFileRepository(session)
@@ -228,6 +233,28 @@ class WorkerExecutionService:
                 progress_callback=progress_callback,
                 preferred_backend=preferred_backend,
                 allow_cpu_fallback=allow_cpu_fallback,
+                process_started_callback=process_started_callback,
+                cancel_requested=cancel_requested,
+            )
+        except ExecutionCancelledError as error:
+            completed_at = datetime.now(timezone.utc)
+            result = ExecutionResult(
+                mode="cancelled",
+                status="cancelled",
+                command=error.command or [],
+                output_path=None,
+                stdout=error.details.get("stdout"),
+                stderr=error.details.get("stderr"),
+                failure_message="Cancelled by operator.",
+                failure_category="cancelled_by_operator",
+                exit_code=error.details.get("exit_code"),
+                requested_backend=error.details.get("requested_backend"),
+                actual_backend=error.details.get("actual_backend"),
+                actual_accelerator=error.details.get("actual_accelerator"),
+                backend_fallback_used=bool(error.details.get("backend_fallback_used", False)),
+                backend_selection_reason=error.details.get("backend_selection_reason"),
+                started_at=job.started_at or completed_at,
+                completed_at=completed_at,
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
@@ -650,6 +677,10 @@ class LocalWorkerLoop:
         self.poll_interval_seconds = poll_interval_seconds
         self.execution_service = execution_service or WorkerExecutionService()
         self.status_tracker = status_tracker or WorkerStatusTracker()
+        self._control_lock = threading.Lock()
+        self._active_job_id: str | None = None
+        self._active_process: subprocess.Popen[str] | None = None
+        self._cancel_requested_job_ids: set[str] = set()
 
     def run_forever(self) -> None:
         while True:
@@ -659,6 +690,16 @@ class LocalWorkerLoop:
 
     def run_once(self) -> bool:
         return self.run_once_with_summary().processed_job
+
+    def request_cancel(self, job_id: str) -> bool:
+        with self._control_lock:
+            self._cancel_requested_job_ids.add(job_id)
+            if self._active_job_id != job_id:
+                return False
+            process = self._active_process
+            if process is not None and process.poll() is None:
+                process.terminate()
+            return True
 
     def run_once_with_summary(self) -> WorkerRunSummary:
         run_started_at = datetime.now(timezone.utc)
@@ -773,36 +814,42 @@ class LocalWorkerLoop:
 
             logger.info("processing job %s for %s", job.id, media_file.file_name)
             progress_reporter = self._build_progress_reporter(job_id=job.id, session=session)
-            if job.job_kind == JobKind.DRY_RUN:
-                config_bundle_payload = (
-                    dict(job.analysis_payload.get("config_bundle", {}))
-                    if isinstance(job.analysis_payload, dict)
-                    and isinstance(job.analysis_payload.get("config_bundle"), dict)
-                    else {}
-                )
-                result = self.execution_service.execute_analysis_job(
-                    session,
-                    job_id=job.id,
-                    source_path=media_file.file_path,
-                    config_bundle_payload=config_bundle_payload,
-                    ffprobe_path=self.config_bundle.app.media.ffprobe_path,
-                    progress_callback=progress_reporter,
-                )
-            else:
-                result = self.execution_service.execute_job(
-                    session,
-                    job_id=job.id,
-                    plan=plan,
-                    media_file=media_file,
-                    ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
-                    scratch_dir=self.config_bundle.app.scratch_dir,
-                    preferred_backend=_effective_preferred_backend(
-                        job,
-                        default_backend=local_worker_config.preferred_backend,
-                    ),
-                    allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
-                    progress_callback=progress_reporter,
-                )
+            self._set_active_job(job.id)
+            try:
+                if job.job_kind == JobKind.DRY_RUN:
+                    config_bundle_payload = (
+                        dict(job.analysis_payload.get("config_bundle", {}))
+                        if isinstance(job.analysis_payload, dict)
+                        and isinstance(job.analysis_payload.get("config_bundle"), dict)
+                        else {}
+                    )
+                    result = self.execution_service.execute_analysis_job(
+                        session,
+                        job_id=job.id,
+                        source_path=media_file.file_path,
+                        config_bundle_payload=config_bundle_payload,
+                        ffprobe_path=self.config_bundle.app.media.ffprobe_path,
+                        progress_callback=progress_reporter,
+                    )
+                else:
+                    result = self.execution_service.execute_job(
+                        session,
+                        job_id=job.id,
+                        plan=plan,
+                        media_file=media_file,
+                        ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
+                        scratch_dir=self.config_bundle.app.scratch_dir,
+                        preferred_backend=_effective_preferred_backend(
+                            job,
+                            default_backend=local_worker_config.preferred_backend,
+                        ),
+                        allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
+                        progress_callback=progress_reporter,
+                        process_started_callback=lambda process: self._set_active_process(job.id, process),
+                        cancel_requested=lambda: self._cancel_requested(job.id),
+                    )
+            finally:
+                self._clear_active_job(job.id)
             session.commit()
             self.status_tracker.record_processed_run(
                 job_id=job.id,
@@ -848,6 +895,29 @@ class LocalWorkerLoop:
                 progress_session.commit()
 
         return report
+
+    def _set_active_job(self, job_id: str) -> None:
+        with self._control_lock:
+            self._active_job_id = job_id
+            self._active_process = None
+
+    def _set_active_process(self, job_id: str, process: subprocess.Popen[str]) -> None:
+        with self._control_lock:
+            self._active_job_id = job_id
+            self._active_process = process
+            if job_id in self._cancel_requested_job_ids and process.poll() is None:
+                process.terminate()
+
+    def _clear_active_job(self, job_id: str) -> None:
+        with self._control_lock:
+            if self._active_job_id == job_id:
+                self._active_job_id = None
+                self._active_process = None
+            self._cancel_requested_job_ids.discard(job_id)
+
+    def _cancel_requested(self, job_id: str) -> bool:
+        with self._control_lock:
+            return job_id in self._cancel_requested_job_ids
 
 
 def file_size_or_none(path: Path | str | None) -> int | None:

@@ -6,8 +6,10 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from app.services.errors import ApiConflictError, ApiNotFoundError
-from encodr_db.models import Job, JobKind, JobStatus, ManualReviewDecisionType, PlanSnapshot, TrackedFile
-from encodr_db.repositories import JobRepository, ManualReviewDecisionRepository, TrackedFileRepository
+from encodr_core.planning import ProcessingPlan
+from encodr_db.models import Job, JobKind, JobStatus, ManualReviewDecisionType, PlanSnapshot, TrackedFile, WorkerType
+from encodr_db.repositories import JobRepository, ManualReviewDecisionRepository, TrackedFileRepository, WorkerRepository
+from encodr_db.runtime import LocalWorkerLoop
 
 
 class JobsService:
@@ -101,6 +103,43 @@ class JobsService:
             analysis_payload=original_job.analysis_payload,
             ignore_worker_schedule=original_job.ignore_worker_schedule,
         )
+
+    def cancel_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        local_worker_loop: LocalWorkerLoop,
+    ) -> Job:
+        job = self.get_job(session, job_id=job_id)
+        if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.SKIPPED, JobStatus.MANUAL_REVIEW}:
+            raise ApiConflictError("This job can no longer be cancelled.")
+
+        jobs = JobRepository(session)
+        tracked_files = TrackedFileRepository(session)
+        cancelled_at = datetime.now(timezone.utc)
+
+        if job.status in {JobStatus.PENDING, JobStatus.SCHEDULED}:
+            jobs.mark_cancelled(job, cancelled_at=cancelled_at)
+            tracked_files.update_file_state_from_plan_result(
+                job.tracked_file,
+                ProcessingPlan.model_validate(job.plan_snapshot.payload),
+            )
+            return job
+
+        assigned_worker = (
+            WorkerRepository(session).get_by_id(job.assigned_worker_id)
+            if job.assigned_worker_id is not None
+            else None
+        )
+        if assigned_worker is not None and assigned_worker.worker_type != WorkerType.LOCAL:
+            raise ApiConflictError("Running remote jobs cannot yet be cancelled safely.")
+        if job.job_kind == JobKind.DRY_RUN:
+            raise ApiConflictError("Running dry run analysis cannot yet be cancelled safely.")
+        if not local_worker_loop.request_cancel(job.id):
+            raise ApiConflictError("The local worker is not actively processing this job.")
+        jobs.mark_cancelling(job, requested_at=cancelled_at)
+        return job
 
     def create_batch_jobs(
         self,

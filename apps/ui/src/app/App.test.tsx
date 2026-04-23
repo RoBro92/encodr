@@ -934,6 +934,7 @@ describe("Encodr UI shell", () => {
 
   it("shows running job progress and worker details in the jobs queue", async () => {
     mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
       {
         method: "GET",
         path: "/api/files",
@@ -978,6 +979,81 @@ describe("Encodr UI shell", () => {
     expect(screen.getAllByText(/worker-remote-a/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/83\.2 fps/i)).toBeInTheDocument();
     expect(screen.getAllByText(/nvidia/i).length).toBeGreaterThan(0);
+  });
+
+  it("shows a cancel action for cancellable local jobs and calls the cancel endpoint", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/worker/status",
+        body: workerStatus(),
+      },
+      {
+        method: "GET",
+        path: "/api/files",
+        body: {
+          items: [],
+          limit: 25,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-running",
+              assigned_worker_id: "worker-local-1",
+              worker_name: "worker-local",
+              source_filename: "Stuck Film (2024).mkv",
+              source_path: "/media/Movies/Stuck Film (2024).mkv",
+              status: "running",
+              progress_stage: "initialising_backend",
+              progress_percent: 0,
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/job-running/cancel",
+        body: {
+          ...jobDetail(),
+          id: "job-running",
+          assigned_worker_id: null,
+          worker_name: "worker-local",
+          source_filename: "Stuck Film (2024).mkv",
+          source_path: "/media/Movies/Stuck Film (2024).mkv",
+          status: "interrupted",
+          failure_category: "cancelled_by_operator",
+          failure_message: "Cancelled by operator.",
+          progress_stage: "cancelled",
+          progress_percent: null,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    const [queueTitle] = await screen.findAllByText(/stuck film \(2024\)\.mkv/i);
+    expect(queueTitle).toBeInTheDocument();
+    const queueCard = queueTitle.closest(".queue-job-card");
+    expect(queueCard).not.toBeNull();
+    const cancelButton = within(queueCard as HTMLElement).getByRole("button", { name: /^cancel$/i });
+    expect(cancelButton).toBeEnabled();
+
+    await userEvent.click(cancelButton);
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/job-running/cancel"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
   });
 
   it("uses tracked-file search requests instead of a fixed local picker list", async () => {
