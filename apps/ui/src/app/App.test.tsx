@@ -1587,6 +1587,17 @@ function executionPreferences() {
 function runtimeDevicePaths() {
   return [
     {
+      path: "/dev/dri/card1",
+      exists: true,
+      readable: true,
+      writable: true,
+      is_character_device: true,
+      status: "healthy",
+      message: "Device path is present and readable.",
+      vendor_id: "0x8086",
+      vendor_name: "Intel",
+    },
+    {
       path: "/dev/dri/renderD128",
       exists: true,
       readable: true,
@@ -1622,11 +1633,22 @@ function executionBackendStatuses() {
       usable_by_ffmpeg: false,
       ffmpeg_path_verified: false,
       status: "failed",
-      message: "Intel iGPU passthrough is not fully usable by FFmpeg.",
-      reason_unavailable: "Intel QSV hardware is visible but FFmpeg could not initialise it.",
-      recommended_usage: "Expose /dev/dri render devices to the runtime and confirm FFmpeg QSV or VAAPI support.",
+      message: "Intel iGPU passthrough is not fully usable in this runtime.",
+      reason_unavailable: "Intel driver missing",
+      recommended_usage: "Expose /dev/dri to the worker runtime and validate Intel VAAPI before selecting Intel iGPU.",
       device_paths: runtimeDevicePaths(),
-      details: {},
+      details: {
+        qsv: {
+          usable: false,
+          status: "unknown",
+          message: "Intel QSV is visible in FFmpeg but remains unverified in this runtime.",
+        },
+        vaapi: {
+          usable: false,
+          message: "Intel VAAPI userspace driver is missing or could not be loaded.",
+          reason_unavailable: "Intel driver missing",
+        },
+      },
     },
     {
       backend: "nvidia_gpu",

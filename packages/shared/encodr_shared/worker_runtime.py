@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import shutil
 import subprocess
+from typing import Any
 
 
 @dataclass(frozen=True, slots=True)
@@ -136,6 +137,26 @@ def _run_ffmpeg_probe(command: list[str], *, timeout: int = 10) -> tuple[bool, s
     return False, stderr[:1000] if stderr else "FFmpeg hardware probe failed."
 
 
+def _run_command_capture(
+    command: list[str],
+    *,
+    env: dict[str, str] | None = None,
+    timeout: int = 10,
+) -> tuple[int | None, str, str]:
+    try:
+        completed = subprocess.run(
+            command,
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+            env={**os.environ, **(env or {})},
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return None, "", str(error)
+    return completed.returncode, completed.stdout or "", completed.stderr or ""
+
+
 def _run_text_command(command: list[str], *, timeout: int = 10) -> str:
     try:
         completed = subprocess.run(
@@ -244,6 +265,236 @@ def probe_vaapi(ffmpeg_path: Path | str, *, device_path: Path | str) -> Hardware
             "hwaccels": hwaccels,
             "device_paths": [device_probe],
             "stderr": error,
+        },
+    )
+
+
+def _device_probe_from_path(path: Path | None) -> dict[str, object] | None:
+    if path is None:
+        return None
+    return _device_probe(path)
+
+
+def _classify_intel_vaapi_failure(stderr: str) -> tuple[str, str]:
+    lowered = stderr.lower()
+    if "permission denied" in lowered:
+        return "permission denied", "Permission denied while accessing the Intel render device."
+    if "command not found" in lowered or "no such file or directory" in lowered:
+        return "vainfo missing", "Intel VAAPI validation cannot run because vainfo is not installed."
+    if (
+        "driver not found" in lowered
+        or "failed to open" in lowered
+        or "failed to initialize display" in lowered
+        or "init failed" in lowered
+        or "dlopen" in lowered
+        or "ihd_drv_video" in lowered
+    ):
+        return "Intel driver missing", "Intel VAAPI userspace driver is missing or could not be loaded."
+    if "vaapi" in lowered or "libva" in lowered:
+        return "VAAPI init failed", "Intel VAAPI initialisation failed in the current runtime."
+    return "VAAPI init failed", "Intel VAAPI initialisation failed in the current runtime."
+
+
+def probe_intel_vaapi(ffmpeg_path: Path | str) -> HardwareProbe:
+    hwaccels = detect_ffmpeg_hwaccels(ffmpeg_path)
+    dri_root = Path("/dev/dri")
+    render_device = next(
+        (
+            Path(item["path"])
+            for item in discover_runtime_devices()
+            if item.get("vendor_name") == "Intel" and str(item.get("path", "")).startswith("/dev/dri/renderD")
+        ),
+        None,
+    )
+    card_device = next(
+        (
+            Path(item["path"])
+            for item in discover_runtime_devices()
+            if item.get("vendor_name") == "Intel" and str(item.get("path", "")).startswith("/dev/dri/card")
+        ),
+        None,
+    )
+    dri_visible = dri_root.exists()
+    render_probe = _device_probe_from_path(render_device)
+    card_probe = _device_probe_from_path(card_device)
+    device_paths = [item for item in [render_probe, card_probe] if item is not None]
+
+    base_details: dict[str, Any] = {
+        "hwaccels": hwaccels,
+        "device_paths": device_paths,
+        "dri_root_visible": dri_visible,
+        "render_node": render_probe,
+        "card_node": card_probe,
+        "driver_name": "iHD",
+    }
+
+    if not dri_visible:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=False,
+            usable=False,
+            status="failed",
+            message="Intel VAAPI is unavailable because /dev/dri is not visible in the runtime.",
+            details=base_details
+            | {
+                "validation_state": "device missing",
+                "reason_unavailable": "device missing",
+                "recommended_usage": "Expose /dev/dri from the LXC or VM into the worker container before selecting Intel iGPU.",
+            },
+        )
+
+    if render_probe is None or not render_probe["exists"]:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=False,
+            usable=False,
+            status="failed",
+            message="Intel VAAPI is unavailable because no Intel render node is visible in the runtime.",
+            details=base_details
+            | {
+                "validation_state": "device missing",
+                "reason_unavailable": "device missing",
+                "recommended_usage": "Expose the Intel render node, such as /dev/dri/renderD128, to the worker container.",
+            },
+        )
+
+    if not render_probe["readable"]:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="Intel VAAPI is unavailable because the render node is present but not readable.",
+            details=base_details
+            | {
+                "validation_state": "permission denied",
+                "reason_unavailable": "permission denied",
+                "recommended_usage": "Grant the worker container permission to read the Intel render node before enabling Intel iGPU.",
+            },
+        )
+
+    vainfo_probe = probe_binary("vainfo")
+    vainfo_details = {
+        "configured_path": vainfo_probe.configured_path,
+        "resolved_path": vainfo_probe.resolved_path,
+        "discoverable": vainfo_probe.discoverable,
+        "message": vainfo_probe.message,
+    }
+    if not vainfo_probe.discoverable:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="Intel VAAPI runtime validation cannot run because vainfo is not installed.",
+            details=base_details
+            | {
+                "vainfo": vainfo_details,
+                "validation_state": "vainfo missing",
+                "reason_unavailable": "vainfo missing",
+                "recommended_usage": "Install vainfo plus the Intel VAAPI runtime packages in the worker image.",
+            },
+        )
+
+    vainfo_command = [
+        vainfo_probe.resolved_path or "vainfo",
+        "--display",
+        "drm",
+        "--device",
+        render_device.as_posix(),
+    ]
+    vainfo_returncode, vainfo_stdout, vainfo_stderr = _run_command_capture(
+        vainfo_command,
+        env={"LIBVA_DRIVER_NAME": "iHD"},
+        timeout=10,
+    )
+    vainfo_payload = vainfo_details | {
+        "command": "LIBVA_DRIVER_NAME=iHD " + " ".join(vainfo_command),
+        "returncode": vainfo_returncode,
+        "stdout": vainfo_stdout.strip()[:1000] if vainfo_stdout else None,
+        "stderr": vainfo_stderr.strip()[:1000] if vainfo_stderr else None,
+    }
+    if vainfo_returncode != 0:
+        reason, message = _classify_intel_vaapi_failure(vainfo_stderr or vainfo_stdout)
+        return HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=False,
+            status="failed",
+            message=message,
+            details=base_details
+            | {
+                "vainfo": vainfo_payload,
+                "validation_state": reason,
+                "reason_unavailable": reason,
+                "recommended_usage": "Validate Intel VAAPI with LIBVA_DRIVER_NAME=iHD vainfo against the render node inside the worker runtime.",
+            },
+        )
+
+    resolved_ffmpeg = probe_binary(ffmpeg_path).resolved_path or str(ffmpeg_path)
+    ffmpeg_command = [
+        resolved_ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-vaapi_device",
+        render_device.as_posix(),
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1280x720:rate=30",
+        "-t",
+        "3",
+        "-vf",
+        "format=nv12,hwupload",
+        "-c:v",
+        "h264_vaapi",
+        "-f",
+        "null",
+        "-",
+    ]
+    ffmpeg_returncode, ffmpeg_stdout, ffmpeg_stderr = _run_command_capture(
+        ffmpeg_command,
+        env={"LIBVA_DRIVER_NAME": "iHD"},
+        timeout=20,
+    )
+    ffmpeg_payload = {
+        "command": "LIBVA_DRIVER_NAME=iHD " + " ".join(ffmpeg_command),
+        "returncode": ffmpeg_returncode,
+        "stdout": ffmpeg_stdout.strip()[:1000] if ffmpeg_stdout else None,
+        "stderr": ffmpeg_stderr.strip()[:1000] if ffmpeg_stderr else None,
+    }
+    if ffmpeg_returncode != 0:
+        return HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="Intel VAAPI initialised, but the FFmpeg VAAPI encode smoke test failed.",
+            details=base_details
+            | {
+                "vainfo": vainfo_payload,
+                "ffmpeg_smoke_test": ffmpeg_payload,
+                "validation_state": "ffmpeg VAAPI encode test failed",
+                "reason_unavailable": "ffmpeg VAAPI encode test failed",
+                "recommended_usage": "Check the worker FFmpeg VAAPI path with a short h264_vaapi smoke test against the Intel render node.",
+            },
+        )
+
+    return HardwareProbe(
+        backend="vaapi",
+        detected=True,
+        usable=True,
+        status="healthy",
+        message="Intel VAAPI is available and validated in the current runtime.",
+        details=base_details
+        | {
+            "vainfo": vainfo_payload,
+            "ffmpeg_smoke_test": ffmpeg_payload,
+            "ffmpeg_path_verified": True,
+            "reason_unavailable": None,
+            "recommended_usage": "Intel VAAPI is ready to use in this worker runtime.",
+            "validation_state": "usable",
         },
     )
 
@@ -392,6 +643,14 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
         ),
         None,
     )
+    intel_card = next(
+        (
+            Path(item["path"])
+            for item in all_devices
+            if item.get("vendor_name") == "Intel" and item["path"].startswith("/dev/dri/card")
+        ),
+        None,
+    )
     amd_render = next(
         (
             Path(item["path"])
@@ -409,41 +668,43 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
         message="FFmpeg is not discoverable, so Intel QSV cannot be tested.",
         details={"device_paths": [], "hwaccels": hwaccels},
     )
-    intel_vaapi_probe = probe_vaapi(ffmpeg_path, device_path=intel_render) if ffmpeg_probe.discoverable and intel_render else HardwareProbe(
+    intel_vaapi_probe = probe_intel_vaapi(ffmpeg_path) if ffmpeg_probe.discoverable else HardwareProbe(
         backend="vaapi",
         detected=bool(intel_render),
         usable=False,
         status="failed",
         message=(
-            "Intel render device is not visible to the runtime."
-            if intel_render is None
-            else "Intel VAAPI could not be tested."
+            "FFmpeg is not discoverable, so Intel VAAPI cannot be tested."
         ),
-        details={"device_paths": [_device_probe(intel_render)] if intel_render else [], "hwaccels": hwaccels},
+        details={
+            "device_paths": [_device_probe(intel_render)] if intel_render else [],
+            "hwaccels": hwaccels,
+            "reason_unavailable": "ffmpeg missing",
+        },
     )
-    intel_usable = qsv_probe.usable or intel_vaapi_probe.usable
-    intel_reason = None if intel_usable else (qsv_probe.message if qsv_probe.detected else intel_vaapi_probe.message)
+    intel_usable = intel_vaapi_probe.usable
+    intel_reason = None if intel_usable else (intel_vaapi_probe.details.get("reason_unavailable") or intel_vaapi_probe.message)
     intel_probe = HardwareProbe(
         backend="intel_igpu",
         detected=intel_render is not None or qsv_probe.detected or any("intel" in item.lower() for item in windows_adapters),
         usable=intel_usable,
         status="healthy" if intel_usable else "failed",
         message=(
-            "Intel iGPU is available to FFmpeg."
+            "Intel iGPU is available via VAAPI in this runtime."
             if intel_usable
-            else "Intel iGPU passthrough is not fully usable by FFmpeg."
+            else "Intel iGPU passthrough is not fully usable in this runtime."
         ),
         details={
-            "device_paths": [_device_probe(intel_render)] if intel_render else [],
+            "device_paths": [item for item in [_device_probe_from_path(intel_render), _device_probe_from_path(intel_card)] if item is not None],
             "ffmpeg_hwaccels": hwaccels,
-            "ffmpeg_path_verified": intel_usable,
+            "ffmpeg_path_verified": intel_vaapi_probe.usable,
             "reason_unavailable": intel_reason,
             "recommended_usage": (
-                "Prefer Intel QSV where available, with VAAPI as a fallback path."
+                "Use Intel VAAPI once the render node, vainfo validation, and FFmpeg smoke test all succeed."
                 if intel_usable
-                else "Expose /dev/dri render devices to the runtime and confirm FFmpeg QSV or VAAPI support."
+                else "Expose /dev/dri to the worker runtime and validate Intel VAAPI before selecting Intel iGPU."
             ),
-            "qsv": qsv_probe.details | {"usable": qsv_probe.usable, "message": qsv_probe.message},
+            "qsv": qsv_probe.details | {"usable": qsv_probe.usable, "message": qsv_probe.message, "status": qsv_probe.status},
             "vaapi": intel_vaapi_probe.details | {"usable": intel_vaapi_probe.usable, "message": intel_vaapi_probe.message},
             "windows_adapters": windows_adapters,
         },
@@ -607,74 +868,16 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
             message="FFmpeg does not report QSV hardware acceleration support.",
             details={"hwaccels": hwaccels, "render_devices": render_devices},
         )
-
-    resolved_ffmpeg = probe_binary(ffmpeg_path).resolved_path or str(ffmpeg_path)
-    init_hw_device = "qsv=qsv"
-    if not is_windows:
-        device = render_devices[0]
-        init_hw_device = f"qsv=qsv:{device}"
-    command = [
-        resolved_ffmpeg,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-        "-init_hw_device",
-        init_hw_device,
-        "-filter_hw_device",
-        "qsv",
-        "-f",
-        "lavfi",
-        "-i",
-        "testsrc=size=16x16:rate=1",
-        "-frames:v",
-        "1",
-        "-vf",
-        "format=nv12,hwupload=extra_hw_frames=8",
-        "-c:v",
-        "h264_qsv",
-        "-f",
-        "null",
-        "-",
-    ]
-    try:
-        completed = subprocess.run(
-            command,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=10,
-        )
-    except (OSError, subprocess.SubprocessError) as error:
-        return HardwareProbe(
-            backend="intel_qsv",
-            detected=True,
-            usable=False,
-            status="failed",
-            message=f"QSV probe could not be executed: {error}",
-            details={"hwaccels": hwaccels, "render_devices": render_devices},
-        )
-
-    if completed.returncode == 0:
-        return HardwareProbe(
-            backend="intel_qsv",
-            detected=True,
-            usable=True,
-            status="healthy",
-            message="Intel QSV is available and FFmpeg can initialise it.",
-            details={"hwaccels": hwaccels, "render_devices": render_devices},
-        )
-
-    stderr = (completed.stderr or completed.stdout or "").strip()
     return HardwareProbe(
         backend="intel_qsv",
         detected=True,
         usable=False,
-        status="failed",
-        message="Intel QSV hardware is visible but FFmpeg could not initialise it.",
+        status="unknown",
+        message="Intel QSV is visible in FFmpeg but remains unverified in this runtime.",
         details={
             "hwaccels": hwaccels,
             "render_devices": render_devices,
-            "stderr": stderr[:1000] if stderr else None,
+            "reason_unavailable": "QSV remains deliberately unverified until a reliable smoke test is validated in production.",
         },
     )
 

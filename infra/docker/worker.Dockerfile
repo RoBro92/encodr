@@ -4,7 +4,10 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends ffmpeg \
+    && packages="ffmpeg libva-drm2 libva2 mesa-va-drivers vainfo" \
+    && arch="$(dpkg --print-architecture)" \
+    && if [ "$arch" = "amd64" ] || [ "$arch" = "i386" ]; then packages="$packages intel-media-va-driver"; fi \
+    && apt-get install -y --no-install-recommends $packages \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

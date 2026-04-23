@@ -314,8 +314,9 @@ class WorkerService:
             "ffmpeg": bool(ffmpeg["discoverable"]),
             "ffprobe": bool(ffprobe["discoverable"]),
             "intel_qsv": any(
-                item["backend"] == "intel_igpu" and item["usable_by_ffmpeg"]
+                bool((item.get("details") or {}).get("qsv", {}).get("usable"))
                 for item in runtime_probes["hardware_probes"]
+                if item["backend"] == "intel_igpu"
             ),
             "nvenc": any(
                 item["backend"] == "nvidia_gpu" and item["usable_by_ffmpeg"]
