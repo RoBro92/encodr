@@ -659,34 +659,43 @@ class WorkerService:
     ) -> dict[str, object]:
         self._ensure_remote_worker_can_execute(worker)
         repository = JobRepository(session)
-        if repository.count_active_assignments_for_worker(worker.id) >= max(1, int(worker.max_concurrent_jobs or 1)):
-            return {"status": "no_job", "job": None}
+        active_assignments = repository.count_active_assignments_for_worker(worker.id)
+        max_concurrent_jobs = max(1, int(worker.max_concurrent_jobs or 1))
+        compatible_jobs = [
+            candidate
+            for candidate in repository.fetch_next_pending_remote_jobs(worker)
+            if job_allows_worker(
+                candidate,
+                worker,
+                preferred_worker=(
+                    WorkerRepository(session).get_by_id(candidate.preferred_worker_id)
+                    if candidate.preferred_worker_id
+                    else None
+                ),
+            )
+            if self._remote_worker_can_run_job(
+                worker,
+                ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
+                source_path=(
+                    candidate.tracked_file.source_path
+                    if candidate.tracked_file is not None
+                    else candidate.plan_snapshot.probe_snapshot.payload.get("file_path", "")
+                ),
+                preferred_backend=candidate.preferred_backend_override,
+            )
+        ]
         job = next(
             (
                 candidate
-                for candidate in repository.fetch_next_pending_remote_jobs(worker)
-                if job_allows_worker(
-                    candidate,
-                    worker,
-                    preferred_worker=(
-                        WorkerRepository(session).get_by_id(candidate.preferred_worker_id)
-                        if candidate.preferred_worker_id
-                        else None
-                    ),
-                )
-                if self._remote_worker_can_run_job(
-                    worker,
-                    ProcessingPlan.model_validate(candidate.plan_snapshot.payload),
-                    source_path=(
-                        candidate.tracked_file.source_path
-                        if candidate.tracked_file is not None
-                        else candidate.plan_snapshot.probe_snapshot.payload.get("file_path", "")
-                    ),
-                    preferred_backend=candidate.preferred_backend_override,
-                )
+                for candidate in compatible_jobs
+                if candidate.assigned_worker_id == worker.id and active_assignments <= max_concurrent_jobs
             ),
             None,
         )
+        if job is None and active_assignments >= max_concurrent_jobs:
+            return {"status": "no_job", "job": None}
+        if job is None:
+            job = next((candidate for candidate in compatible_jobs if candidate.assigned_worker_id is None), None)
         if job is None:
             return {"status": "no_job", "job": None}
 
@@ -1747,24 +1756,19 @@ class WorkerService:
         scheme = parsed.scheme or request.url.scheme
         port = parsed.port
         host = parsed.hostname or request.url.hostname or "127.0.0.1"
-        resolved_host = self._resolve_host_ip(host)
-        authority = resolved_host
+        authority = self._remote_api_host(host)
         if port is not None:
             authority = f"{authority}:{port}"
         return f"{scheme}://{authority}{self.config_bundle.app.api.base_path}"
 
-    def _resolve_host_ip(self, host: str) -> str:
-        try:
-            ipaddress.ip_address(host)
-            return host
-        except ValueError:
-            pass
+    def _remote_api_host(self, host: str) -> str:
         if host in {"localhost", "127.0.0.1", "::1"}:
             return self._detect_local_ip()
         try:
-            return socket.gethostbyname(host)
-        except OSError:
-            return self._detect_local_ip()
+            ipaddress.ip_address(host)
+        except ValueError:
+            return host
+        return host
 
     @staticmethod
     def _detect_local_ip() -> str:
