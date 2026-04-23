@@ -21,6 +21,7 @@ from encodr_core.planning.models import (
     SubtitleSelectionIntent,
     VideoPlan,
 )
+from encodr_core.planning.dry_run import build_dry_run_analysis_payload, estimate_output_size_bytes, preview_output_filename
 from encodr_core.planning.planner import build_processing_plan
 
 __all__ = [
@@ -43,5 +44,8 @@ __all__ = [
     "SubtitleSelectionIntent",
     "VideoHandling",
     "VideoPlan",
+    "build_dry_run_analysis_payload",
     "build_processing_plan",
+    "estimate_output_size_bytes",
+    "preview_output_filename",
 ]

@@ -367,23 +367,24 @@ class SystemService:
         first_user_setup_required = user_count == 0 if user_count is not None else False
 
         warnings: list[str] = []
+        notes: list[str] = []
         if not db_reachable:
             warnings.append("Database connectivity is unavailable.")
         if db_reachable and not schema_reachable:
             warnings.append("Database is reachable but the expected schema is unavailable.")
         if local_worker is None:
-            warnings.append("This host is not configured as a worker.")
+            notes.append("This host is not configured as a worker.")
         elif not local_worker.enabled:
-            warnings.append("The local worker is disabled.")
+            notes.append("The local worker is disabled.")
         elif not self.config_bundle.workers.local.enabled:
-            warnings.append("The local worker runtime is disabled.")
+            notes.append("The local worker runtime is disabled.")
         if storage["status"] != HealthStatus.HEALTHY:
             warnings.append(str(storage["summary"]))
         for backend in execution_backends:
             if backend["backend"] == "cpu":
                 continue
             if backend["detected"] and not backend["usable_by_ffmpeg"]:
-                warnings.append(str(backend["message"]))
+                notes.append(str(backend["message"]))
                 break
         if queue_health["status"] == HealthStatus.DEGRADED:
             warnings.append(str(queue_health["summary"]))
@@ -420,7 +421,7 @@ class SystemService:
                 "policy": self.config_bundle.paths.policy.resolved_path.as_posix(),
                 "workers": self.config_bundle.paths.workers.resolved_path.as_posix(),
             },
-            "warnings": warnings,
+            "warnings": [*warnings, *notes],
             "execution_backends": execution_backends,
             "runtime_device_paths": runtime_device_paths,
             "execution_preferences": execution_preferences,

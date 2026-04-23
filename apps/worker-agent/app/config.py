@@ -14,6 +14,7 @@ class WorkerAgentSettings:
     pairing_token: str | None
     worker_token: str | None
     worker_token_file: Path | None
+    runtime_config_file: Path | None
     heartbeat_interval_seconds: int
     queue: str
     scratch_dir: str | None
@@ -27,6 +28,7 @@ class WorkerAgentSettings:
 def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
     env = environ or os.environ
     token_file = env.get("ENCODR_WORKER_AGENT_TOKEN_FILE")
+    runtime_config_file = env.get("ENCODR_WORKER_AGENT_RUNTIME_CONFIG_FILE")
     api_base_url = env.get("ENCODR_WORKER_AGENT_API_BASE_URL", "http://localhost:8000/api").rstrip("/")
     worker_key = env.get("ENCODR_WORKER_AGENT_KEY", "worker-remote").strip()
     display_name = env.get("ENCODR_WORKER_AGENT_DISPLAY_NAME", env.get("ENCODR_WORKER_AGENT_KEY", "worker-remote")).strip()
@@ -49,6 +51,7 @@ def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
         pairing_token=env.get("ENCODR_WORKER_AGENT_PAIRING_TOKEN"),
         worker_token=env.get("ENCODR_WORKER_AGENT_TOKEN"),
         worker_token_file=Path(token_file) if token_file else None,
+        runtime_config_file=Path(runtime_config_file) if runtime_config_file else None,
         heartbeat_interval_seconds=heartbeat_interval,
         queue=env.get("ENCODR_WORKER_AGENT_QUEUE", "remote-default"),
         scratch_dir=env.get("ENCODR_WORKER_AGENT_SCRATCH_DIR"),

@@ -11,6 +11,7 @@ from sqlalchemy import select
 from sqlalchemy.orm import Session, sessionmaker
 
 from encodr_core.config import ConfigBundle
+from encodr_core.config import deserialise_config_bundle
 from encodr_core.execution import (
     BackendSelectionError,
     ExecutionProgressUpdate,
@@ -23,11 +24,11 @@ from encodr_core.execution import (
     normalise_backend_preference,
 )
 from encodr_core.media.models import MediaFile
-from encodr_core.planning import ProcessingPlan
-from encodr_core.probe import ProbeError
+from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload, build_processing_plan
+from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
-from encodr_db.models import Job, Worker, WorkerRegistrationStatus, WorkerType
+from encodr_db.models import Job, JobKind, Worker, WorkerRegistrationStatus, WorkerType
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime.dispatch import job_allows_worker
 from encodr_shared import collect_runtime_telemetry, load_execution_preferences
@@ -166,7 +167,10 @@ def resolve_local_worker_configuration(
             enabled=True,
             preferred_backend=str(execution_preferences["preferred_backend"]),
             allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+            max_concurrent_jobs=int(config_bundle.workers.local.max_concurrent_jobs),
             schedule_windows=None,
+            path_mappings=None,
+            scratch_path=str(config_bundle.workers.local.scratch_dir),
             host_metadata={"hostname": config_bundle.workers.local.host},
         )
     if worker is None:
@@ -279,6 +283,136 @@ class WorkerExecutionService:
 
         job_repository.mark_result(job, result)
         tracked_file_repository.update_file_state_from_execution_result(job.tracked_file, plan, result)
+        session.flush()
+        return result
+
+    def execute_analysis_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        source_path: Path | str,
+        config_bundle_payload: dict[str, object],
+        ffprobe_path: Path | str,
+        progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+    ) -> ExecutionResult:
+        job_repository = JobRepository(session)
+        tracked_file_repository = TrackedFileRepository(session)
+
+        job = session.get(Job, job_id)
+        if job is None:
+            raise ValueError(f"Job '{job_id}' could not be found.")
+
+        if progress_callback is not None:
+            progress_callback(
+                ExecutionProgressUpdate(
+                    stage="probing",
+                    percent=10.0,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
+
+        fallback_plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
+        try:
+            probe_client = FFprobeClient(binary_path=ffprobe_path)
+            media_file = probe_client.probe_file(source_path)
+            if progress_callback is not None:
+                progress_callback(
+                    ExecutionProgressUpdate(
+                        stage="planning",
+                        percent=55.0,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+            config_bundle = deserialise_config_bundle(config_bundle_payload)
+            plan = build_processing_plan(
+                media_file,
+                config_bundle,
+                source_path=Path(source_path).resolve().as_posix(),
+            )
+            analysis_payload = build_dry_run_analysis_payload(
+                media_file,
+                plan,
+                ffprobe_path=ffprobe_path,
+            )
+            if progress_callback is not None:
+                progress_callback(
+                    ExecutionProgressUpdate(
+                        stage="summarising",
+                        percent=90.0,
+                        updated_at=datetime.now(timezone.utc),
+                    )
+                )
+            result = ExecutionResult(
+                mode="dry_run",
+                status="completed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                requested_backend=job.requested_execution_backend,
+                actual_backend=None,
+                actual_accelerator=None,
+                backend_fallback_used=False,
+                backend_selection_reason="Dry run analysis inspects and plans files without encoding.",
+                analysis_payload=analysis_payload,
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=job.started_at or datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+            applied_plan = plan
+        except ProbeBinaryNotFoundError as error:
+            result = ExecutionResult(
+                mode="dry_run",
+                status="failed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                failure_message=error.message,
+                failure_category="analysis_dependency_missing",
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=job.started_at or datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+            applied_plan = fallback_plan
+        except ProbeError as error:
+            result = ExecutionResult(
+                mode="dry_run",
+                status="failed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                failure_message=error.message,
+                failure_category="analysis_probe_failed",
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=job.started_at or datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+            applied_plan = fallback_plan
+        except Exception as error:
+            result = ExecutionResult(
+                mode="dry_run",
+                status="failed",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                failure_message=str(error),
+                failure_category="analysis_failed",
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=job.started_at or datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+            applied_plan = fallback_plan
+
+        job_repository.mark_result(job, result)
+        tracked_file_repository.update_file_state_from_plan_result(job.tracked_file, applied_plan)
         session.flush()
         return result
 
@@ -590,24 +724,38 @@ class LocalWorkerLoop:
 
             plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
             media_file = MediaFile.model_validate(job.plan_snapshot.probe_snapshot.payload)
-            backend_preview = _preview_local_backend(
-                plan=plan,
-                media_file=media_file,
-                ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
-                scratch_dir=self.config_bundle.app.scratch_dir,
-                preferred_backend=_effective_preferred_backend(
-                    job,
-                    default_backend=local_worker_config.preferred_backend,
-                ),
-                allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
-                job_id=job.id,
+            backend_preview = (
+                _preview_local_backend(
+                    plan=plan,
+                    media_file=media_file,
+                    ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
+                    scratch_dir=self.config_bundle.app.scratch_dir,
+                    preferred_backend=_effective_preferred_backend(
+                        job,
+                        default_backend=local_worker_config.preferred_backend,
+                    ),
+                    allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
+                    job_id=job.id,
+                )
+                if job.job_kind != JobKind.DRY_RUN
+                else {
+                    "requested_backend": None,
+                    "actual_backend": None,
+                    "actual_accelerator": None,
+                    "fallback_used": False,
+                    "selection_reason": "Dry run analysis does not perform encoding.",
+                }
             )
             jobs.mark_running_for_worker(
                 job,
                 worker=local_worker_config.worker,
-                requested_backend=_effective_preferred_backend(
-                    job,
-                    default_backend=local_worker_config.preferred_backend,
+                requested_backend=(
+                    _effective_preferred_backend(
+                        job,
+                        default_backend=local_worker_config.preferred_backend,
+                    )
+                    if job.job_kind != JobKind.DRY_RUN
+                    else None
                 ),
             )
             self.status_tracker.record_job_started(
@@ -625,20 +773,36 @@ class LocalWorkerLoop:
 
             logger.info("processing job %s for %s", job.id, media_file.file_name)
             progress_reporter = self._build_progress_reporter(job_id=job.id, session=session)
-            result = self.execution_service.execute_job(
-                session,
-                job_id=job.id,
-                plan=plan,
-                media_file=media_file,
-                ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
-                scratch_dir=self.config_bundle.app.scratch_dir,
-                preferred_backend=_effective_preferred_backend(
-                    job,
-                    default_backend=local_worker_config.preferred_backend,
-                ),
-                allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
-                progress_callback=progress_reporter,
-            )
+            if job.job_kind == JobKind.DRY_RUN:
+                config_bundle_payload = (
+                    dict(job.analysis_payload.get("config_bundle", {}))
+                    if isinstance(job.analysis_payload, dict)
+                    and isinstance(job.analysis_payload.get("config_bundle"), dict)
+                    else {}
+                )
+                result = self.execution_service.execute_analysis_job(
+                    session,
+                    job_id=job.id,
+                    source_path=media_file.file_path,
+                    config_bundle_payload=config_bundle_payload,
+                    ffprobe_path=self.config_bundle.app.media.ffprobe_path,
+                    progress_callback=progress_reporter,
+                )
+            else:
+                result = self.execution_service.execute_job(
+                    session,
+                    job_id=job.id,
+                    plan=plan,
+                    media_file=media_file,
+                    ffmpeg_path=self.config_bundle.app.media.ffmpeg_path,
+                    scratch_dir=self.config_bundle.app.scratch_dir,
+                    preferred_backend=_effective_preferred_backend(
+                        job,
+                        default_backend=local_worker_config.preferred_backend,
+                    ),
+                    allow_cpu_fallback=local_worker_config.allow_cpu_fallback,
+                    progress_callback=progress_reporter,
+                )
             session.commit()
             self.status_tracker.record_processed_run(
                 job_id=job.id,

@@ -1,5 +1,55 @@
 # Changelog
 
+## 0.3.5-rc.1 - 2026-04-23
+
+This release candidate focuses on worker inventory correction, per-worker storage/runtime configuration, worker-backed dry runs, and grouped operational visibility.
+
+- corrected the worker model so no workers appear by default and only explicitly configured local workers or paired remote workers appear in inventory
+- moved worker execution/runtime configuration fully to the worker level, including:
+  - preferred backend
+  - CPU fallback policy
+  - concurrency
+  - schedule windows
+  - per-worker scratch paths
+  - per-worker path mappings
+- simplified Settings to the intended sections:
+  - Library folders
+  - Storage
+  - Updates
+  - Processing rules
+- reworked Workers around explicit onboarding and modal configuration flows, including:
+  - Add worker
+  - Add this host as worker
+  - Add remote worker
+  - modal-based worker editing
+  - remote uninstall/revoke guidance
+- hardened remote worker bootstrap and runtime handling with:
+  - sane OS-specific install locations
+  - pairing/runtime configuration carrying scratch and mapping data
+  - safer remote preview handling for transport payloads
+  - hardened pairing/runtime serialisation for mapped workers
+- implemented direct shared-storage remote execution support through:
+  - server-path to worker-path mappings
+  - worker-local scratch paths
+  - mapping-aware assignment and execution assumptions
+- turned dry run into a real background worker job with:
+  - worker assignment
+  - schedule-aware launch handling
+  - queue visibility
+  - persisted analysis payloads
+  - file-count warning prompts
+  - richer per-file analysis output
+- extended Jobs to keep worker-grouped queue views while adding:
+  - richer queue item presentation
+  - worker summaries
+  - dry-run visibility
+  - local-first artwork support via sidecars or frame extraction
+- revalidated the branch with:
+  - `pytest -q`
+  - UI tests and production build
+  - clean local harness execution with `15/15` scenarios passing
+  - local and remote execution validated
+  - dry-run background job validation
 ## 0.3.4 - 2026-04-22
 
 This release focuses on worker orchestration, persistent scan state, watched jobs, schedule-aware dispatch, and conservative interruption handling.

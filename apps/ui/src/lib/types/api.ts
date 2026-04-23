@@ -216,6 +216,30 @@ export type DryRunBatchResponse = {
   items: DryRunItem[];
 };
 
+export type DryRunAnalysis = {
+  mode: string;
+  source_path: string;
+  file_name: string;
+  planned_action: string;
+  confidence: string;
+  requires_review: boolean;
+  is_protected: boolean;
+  reason_codes: string[];
+  warning_codes: string[];
+  selected_audio_stream_indices: number[];
+  selected_subtitle_stream_indices: number[];
+  output_filename: string;
+  current_size_bytes: number | null;
+  estimated_output_size_bytes: number | null;
+  estimated_space_saved_bytes: number | null;
+  audio_tracks_removed_count: number;
+  subtitle_tracks_removed_count: number;
+  summary: string;
+  video_handling: string;
+  manual_review_triggered: boolean;
+  manual_review_reasons: string[];
+};
+
 export type BatchPlanItem = {
   tracked_file: FileSummary;
   latest_probe_snapshot: ProbeSnapshotDetail;
@@ -233,11 +257,13 @@ export type JobSummary = {
   id: string;
   tracked_file_id: string;
   plan_snapshot_id: string;
+  job_kind: string;
   source_path: string | null;
   source_filename: string | null;
   worker_name: string | null;
   status: string;
   attempt_count: number;
+  duration_seconds: number | null;
   started_at: string | null;
   completed_at: string | null;
   progress_stage: string | null;
@@ -266,6 +292,9 @@ export type JobSummary = {
   video_space_saved_bytes: number | null;
   non_video_space_saved_bytes: number | null;
   compression_reduction_percent: number | null;
+  audio_tracks_removed_count: number;
+  subtitle_tracks_removed_count: number;
+  analysis_payload: DryRunAnalysis | null;
   assigned_worker_id: string | null;
   last_worker_id: string | null;
   preferred_worker_id: string | null;
@@ -320,6 +349,24 @@ export type BatchJobCreateResponse = {
   items: BatchJobItem[];
 };
 
+export type CreateDryRunJobsPayload = FileSelectionPayload & {
+  preferred_worker_id?: string;
+  pinned_worker_id?: string;
+  preferred_backend_override?: string;
+  schedule_windows?: ScheduleWindow[];
+  ignore_worker_schedule?: boolean;
+};
+
+export type DryRunJobCreateResponse = {
+  mode: string;
+  scope: string;
+  total_files: number;
+  created_count: number;
+  blocked_count: number;
+  warning_threshold: number;
+  items: BatchJobItem[];
+};
+
 export type BinaryStatus = {
   configured_path: string;
   discoverable: boolean;
@@ -358,6 +405,18 @@ export type ExecutionBackendStatus = {
 export type ExecutionPreferences = {
   preferred_backend: string;
   allow_cpu_fallback: boolean;
+};
+
+export type WorkerPathMapping = {
+  label: string | null;
+  server_path: string;
+  worker_path: string;
+  marker_relative_path: string | null;
+  validation_status: string | null;
+  validation_message: string | null;
+  validated_at: string | null;
+  marker_server_path: string | null;
+  marker_worker_path: string | null;
 };
 
 export type QueueHealthSummary = {
@@ -516,6 +575,8 @@ export type WorkerCapabilitySummary = {
   hardware_hints: string[];
   binary_support: Record<string, boolean>;
   max_concurrent_jobs: number | null;
+  recommended_concurrency: number | null;
+  recommended_concurrency_reason: string | null;
   tags: string[];
 };
 
@@ -529,9 +590,12 @@ export type WorkerHostSummary = {
 export type WorkerRuntimeSummary = {
   queue: string | null;
   scratch_dir: string | null;
+  scratch_status: Record<string, unknown> | null;
   media_mounts: string[];
+  path_mappings: WorkerPathMapping[];
   preferred_backend: string | null;
   allow_cpu_fallback: boolean | null;
+  max_concurrent_jobs: number | null;
   schedule_windows: ScheduleWindow[];
   current_job_id: string | null;
   current_backend: string | null;
@@ -567,6 +631,9 @@ export type WorkerInventorySummary = {
   host_summary: WorkerHostSummary;
   preferred_backend: string | null;
   allow_cpu_fallback: boolean | null;
+  max_concurrent_jobs: number | null;
+  scratch_path: string | null;
+  path_mappings: WorkerPathMapping[];
   schedule_windows: ScheduleWindow[];
   schedule_summary: string | null;
   current_job_id: string | null;
@@ -606,7 +673,14 @@ export type WorkerPreferencePayload = {
   display_name?: string | null;
   preferred_backend: string;
   allow_cpu_fallback: boolean;
+  max_concurrent_jobs?: number;
   schedule_windows?: ScheduleWindow[];
+  scratch_path?: string | null;
+  path_mappings?: Array<{
+    label?: string | null;
+    server_path: string;
+    worker_path: string;
+  }>;
 };
 
 export type RemoteWorkerOnboardingPayload = WorkerPreferencePayload & {
@@ -618,6 +692,15 @@ export type RemoteWorkerOnboardingResponse = {
   status: "pending_pairing";
   pairing_token_expires_at: string;
   bootstrap_command: string;
+  uninstall_command: string;
+  notes: string[];
+};
+
+export type WorkerRemovalResponse = {
+  worker_id: string;
+  worker_key: string;
+  status: "removed";
+  uninstall_command: string;
   notes: string[];
 };
 

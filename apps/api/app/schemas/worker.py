@@ -57,6 +57,34 @@ class ExecutionPreferenceResponse(BaseModel):
     allow_cpu_fallback: bool
 
 
+class PathMappingRequest(BaseModel):
+    label: str | None = Field(default=None, max_length=255)
+    server_path: str = Field(min_length=1)
+    worker_path: str = Field(min_length=1)
+
+    @field_validator("label", "server_path", "worker_path", mode="before")
+    @classmethod
+    def strip_optional_text(cls, value: Any) -> Any:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            cleaned = value.strip()
+            return cleaned or None
+        return value
+
+
+class PathMappingResponse(BaseModel):
+    label: str | None = None
+    server_path: str
+    worker_path: str
+    marker_relative_path: str | None = None
+    validation_status: str | None = None
+    validation_message: str | None = None
+    validated_at: datetime | None = None
+    marker_server_path: str | None = None
+    marker_worker_path: str | None = None
+
+
 class WorkerPreferenceRequest(BaseModel):
     display_name: str | None = Field(default=None, min_length=1, max_length=255)
     preferred_backend: Literal[
@@ -66,7 +94,10 @@ class WorkerPreferenceRequest(BaseModel):
         "prefer_amd_gpu",
     ]
     allow_cpu_fallback: bool = True
+    max_concurrent_jobs: int = Field(default=1, ge=1, le=8)
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
+    scratch_path: str | None = None
+    path_mappings: list[PathMappingRequest] = Field(default_factory=list)
 
     @field_validator("display_name", mode="before")
     @classmethod
@@ -109,6 +140,8 @@ class WorkerCapabilitySummaryResponse(BaseModel):
     hardware_hints: list[str] = Field(default_factory=list)
     binary_support: dict[str, bool] = Field(default_factory=dict)
     max_concurrent_jobs: int | None = None
+    recommended_concurrency: int | None = None
+    recommended_concurrency_reason: str | None = None
     tags: list[str] = Field(default_factory=list)
 
 
@@ -122,9 +155,12 @@ class WorkerHostSummaryResponse(BaseModel):
 class WorkerRuntimeSummaryResponse(BaseModel):
     queue: str | None = None
     scratch_dir: str | None = None
+    scratch_status: dict[str, Any] | None = None
     media_mounts: list[str] = Field(default_factory=list)
+    path_mappings: list[PathMappingResponse] = Field(default_factory=list)
     preferred_backend: str | None = None
     allow_cpu_fallback: bool | None = None
+    max_concurrent_jobs: int | None = None
     current_job_id: str | None = None
     current_backend: str | None = None
     current_stage: str | None = None
@@ -228,6 +264,9 @@ class WorkerInventorySummaryResponse(BaseModel):
     host_summary: WorkerHostSummaryResponse
     preferred_backend: str | None = None
     allow_cpu_fallback: bool | None = None
+    max_concurrent_jobs: int | None = None
+    scratch_path: str | None = None
+    path_mappings: list[PathMappingResponse] = Field(default_factory=list)
     schedule_windows: list[ScheduleWindowResponse] = Field(default_factory=list)
     schedule_summary: str | None = None
     current_job_id: str | None = None
@@ -302,6 +341,7 @@ class WorkerRegistrationResponse(BaseModel):
     registration_status: str
     enabled: bool
     execution_preferences: ExecutionPreferenceResponse
+    runtime_configuration: WorkerRuntimeSummaryResponse | None = None
     health_status: HealthStatus
     health_summary: str | None = None
     issued_at: datetime
@@ -322,6 +362,7 @@ class WorkerHeartbeatResponse(BaseModel):
     enabled: bool
     registration_status: str
     execution_preferences: ExecutionPreferenceResponse
+    runtime_configuration: WorkerRuntimeSummaryResponse | None = None
     health_status: HealthStatus
     health_summary: str | None = None
     heartbeat_at: datetime
@@ -345,6 +386,15 @@ class RemoteWorkerOnboardingResponse(BaseModel):
     status: Literal["pending_pairing"]
     pairing_token_expires_at: datetime
     bootstrap_command: str
+    uninstall_command: str
+    notes: list[str] = Field(default_factory=list)
+
+
+class WorkerRemovalResponse(BaseModel):
+    worker_id: str
+    worker_key: str
+    status: Literal["removed"]
+    uninstall_command: str
     notes: list[str] = Field(default_factory=list)
 
 
@@ -352,9 +402,11 @@ class WorkerAssignedJobResponse(BaseModel):
     job_id: str
     tracked_file_id: str
     plan_snapshot_id: str
+    job_kind: str = "execution"
     source_path: str
     plan_payload: dict[str, Any]
     media_payload: dict[str, Any]
+    analysis_payload: dict[str, Any] | None = None
     requested_worker_type: str | None = None
     assignment_state: Literal["assigned", "claimed"] = "assigned"
     assigned_worker_id: str | None = None

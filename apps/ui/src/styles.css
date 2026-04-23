@@ -572,6 +572,23 @@ pre {
   box-shadow: var(--shadow-md);
 }
 
+.record-list-item-body {
+  display: flex;
+  gap: var(--space-3);
+  align-items: flex-start;
+  min-width: 0;
+}
+
+.job-artwork {
+  width: 72px;
+  height: 104px;
+  flex: 0 0 72px;
+  object-fit: cover;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border);
+  background: color-mix(in srgb, var(--bg-panel-strong) 90%, transparent);
+}
+
 .record-list-main,
 .record-list-meta,
 .record-list-heading,
@@ -1391,6 +1408,52 @@ pre {
   font-weight: 600;
 }
 
+.job-worker-groups,
+.job-worker-group,
+.job-worker-group-summary,
+.job-worker-group-heading,
+.job-worker-group-metrics {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.job-worker-group {
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-panel) 96%, transparent);
+  overflow: hidden;
+}
+
+.job-worker-group > summary {
+  list-style: none;
+  cursor: pointer;
+  padding: 14px 16px;
+  background: color-mix(in srgb, var(--bg-panel-strong) 92%, transparent);
+}
+
+.job-worker-group > summary::-webkit-details-marker {
+  display: none;
+}
+
+.job-worker-group-heading strong {
+  font-size: 1rem;
+  color: var(--text);
+}
+
+.job-worker-group-heading span {
+  color: var(--text-muted);
+}
+
+.job-worker-group-metrics {
+  grid-template-columns: repeat(auto-fit, minmax(132px, 1fr));
+  color: var(--text-muted);
+  font-size: 0.84rem;
+}
+
+.job-worker-group .record-list {
+  padding: var(--space-3);
+}
+
 .job-progress-card {
   display: grid;
   gap: 10px;
@@ -1518,6 +1581,17 @@ pre {
 
   .record-list-item {
     grid-template-columns: 1fr;
+  }
+
+  .record-list-item-body {
+    flex-direction: column;
+  }
+
+  .job-artwork {
+    width: 100%;
+    max-width: 220px;
+    height: auto;
+    aspect-ratio: 16 / 9;
   }
 
   .record-list-meta {

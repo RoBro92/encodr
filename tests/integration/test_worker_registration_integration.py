@@ -232,6 +232,14 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
             "platform": "linux",
             "preferred_backend": "prefer_nvidia_gpu",
             "allow_cpu_fallback": False,
+            "scratch_path": "/worker-scratch",
+            "path_mappings": [
+                {
+                    "label": "Media",
+                    "server_path": "/media",
+                    "worker_path": "/worker-media",
+                }
+            ],
         },
         headers=auth.headers,
     )
@@ -277,6 +285,10 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
     assert registration_payload_json["display_name"] == "Linux worker 01"
     assert registration_payload_json["execution_preferences"]["preferred_backend"] == "prefer_nvidia_gpu"
     assert registration_payload_json["execution_preferences"]["allow_cpu_fallback"] is False
+    assert registration_payload_json["runtime_configuration"]["scratch_dir"] == "/worker-scratch"
+    assert registration_payload_json["runtime_configuration"]["path_mappings"][0]["server_path"] == "/media"
+    assert registration_payload_json["runtime_configuration"]["path_mappings"][0]["worker_path"] == "/worker-media"
+    assert registration_payload_json["runtime_configuration"]["path_mappings"][0]["validated_at"] is not None
 
     with session_factory() as session:
         worker = WorkerRepository(session).get_by_id(worker_id)
@@ -284,7 +296,42 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
         assert worker.pairing_token_hash is None
         assert worker.preferred_backend == "prefer_nvidia_gpu"
         assert worker.allow_cpu_fallback is False
+        assert worker.scratch_path == "/worker-scratch"
+        assert worker.path_mappings == [
+            {
+                "label": "Media",
+                "server_path": "/media",
+                "worker_path": "/worker-media",
+                "marker_relative_path": ".encodr/worker-marker.txt",
+            }
+        ]
         assert worker.auth_token_hash is not None
+
+
+def test_remote_worker_onboarding_preserves_configured_hostname_in_bootstrap_command(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _ = build_context(tmp_path, repo_root, monkeypatch)
+    context.bundle.app.ui.public_url = "https://encodr.example.test:8443"
+    auth = authenticate(context)
+
+    onboarding_response = context.client.post(
+        "/api/workers/remote/onboarding",
+        json={
+            "display_name": "macOS worker 01",
+            "platform": "macos",
+            "preferred_backend": "cpu_only",
+            "allow_cpu_fallback": True,
+        },
+        headers=auth.headers,
+    )
+
+    assert onboarding_response.status_code == 200
+    bootstrap_command = onboarding_response.json()["bootstrap_command"]
+    assert "https://encodr.example.test:8443/api" in bootstrap_command
+    assert "encodr.example.test" in bootstrap_command
 
 
 def test_remote_worker_can_request_claim_and_submit_job_result(
@@ -368,6 +415,49 @@ def test_remote_worker_can_request_claim_and_submit_job_result(
         assert saved_job is not None
         assert saved_job.status == JobStatus.COMPLETED
         assert saved_job.last_worker_id == worker.id
+
+
+def test_remote_worker_can_reclaim_already_assigned_pending_job(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Reclaim Example.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        create_job(
+            session,
+            context.bundle,
+            media,
+            source_path=source_path.as_posix(),
+        )
+        session.commit()
+
+    registration = context.client.post("/api/worker/register", json=registration_payload("valid-secret"))
+    worker_token = registration.json()["worker_token"]
+
+    first_request = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert first_request.status_code == 200
+    first_payload = first_request.json()
+    assert first_payload["status"] == "assigned"
+    job_id = first_payload["job"]["job_id"]
+
+    second_request = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert second_request.status_code == 200
+    second_payload = second_request.json()
+    assert second_payload["status"] == "assigned"
+    assert second_payload["job"]["job_id"] == job_id
 
 
 def test_remote_worker_can_report_failure_after_claim(

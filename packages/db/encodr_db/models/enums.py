@@ -30,6 +30,11 @@ class JobStatus(StrEnum):
     MANUAL_REVIEW = "manual_review"
 
 
+class JobKind(StrEnum):
+    EXECUTION = "execution"
+    DRY_RUN = "dry_run"
+
+
 class WorkerType(StrEnum):
     LOCAL = "local"
     REMOTE = "remote"

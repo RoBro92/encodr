@@ -67,6 +67,9 @@ class WorkerRepository:
         auth_token_hash: str,
         preferred_backend: str = "cpu_only",
         allow_cpu_fallback: bool = True,
+        max_concurrent_jobs: int = 1,
+        path_mappings: list[dict] | None = None,
+        scratch_path: str | None = None,
         host_metadata: dict | None,
         capability_payload: dict | None,
         runtime_payload: dict | None,
@@ -94,6 +97,9 @@ class WorkerRepository:
         )
         worker.preferred_backend = preferred_backend
         worker.allow_cpu_fallback = allow_cpu_fallback
+        worker.max_concurrent_jobs = max_concurrent_jobs
+        worker.path_mappings = path_mappings
+        worker.scratch_path = scratch_path
         worker.auth_token_hash = auth_token_hash
         worker.pairing_token_hash = None
         worker.pairing_requested_at = None
@@ -118,7 +124,10 @@ class WorkerRepository:
         enabled: bool,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        max_concurrent_jobs: int,
         schedule_windows: list[dict] | None,
+        path_mappings: list[dict] | None,
+        scratch_path: str | None,
         host_metadata: dict | None,
     ) -> Worker:
         worker = self.get_local_worker(worker_key)
@@ -139,7 +148,10 @@ class WorkerRepository:
         )
         worker.preferred_backend = preferred_backend
         worker.allow_cpu_fallback = allow_cpu_fallback
+        worker.max_concurrent_jobs = max_concurrent_jobs
         worker.schedule_windows = schedule_windows
+        worker.path_mappings = path_mappings
+        worker.scratch_path = scratch_path
         worker.host_metadata = host_metadata
         if not enabled:
             worker.last_health_status = WorkerHealthStatus.UNKNOWN
@@ -154,11 +166,15 @@ class WorkerRepository:
         display_name: str,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        max_concurrent_jobs: int,
         schedule_windows: list[dict] | None,
+        path_mappings: list[dict] | None,
+        scratch_path: str | None,
         pairing_token_hash: str,
         pairing_requested_at: datetime,
         pairing_expires_at: datetime,
         onboarding_platform: str,
+        install_dir: str | None,
     ) -> Worker:
         worker = Worker(
             worker_key=worker_key,
@@ -168,11 +184,15 @@ class WorkerRepository:
             registration_status=WorkerRegistrationStatus.UNKNOWN,
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            max_concurrent_jobs=max_concurrent_jobs,
             schedule_windows=schedule_windows,
+            path_mappings=path_mappings,
+            scratch_path=scratch_path,
             pairing_token_hash=pairing_token_hash,
             pairing_requested_at=pairing_requested_at,
             pairing_expires_at=pairing_expires_at,
             onboarding_platform=onboarding_platform,
+            install_dir=install_dir,
             last_health_status=WorkerHealthStatus.UNKNOWN,
             last_health_summary="Worker is waiting to pair with Encodr.",
             host_metadata={"expected_platform": onboarding_platform},
@@ -188,7 +208,10 @@ class WorkerRepository:
         display_name: str | None = None,
         preferred_backend: str | None = None,
         allow_cpu_fallback: bool | None = None,
+        max_concurrent_jobs: int | None = None,
         schedule_windows: list[dict] | None = None,
+        path_mappings: list[dict] | None = None,
+        scratch_path: str | None = None,
     ) -> Worker:
         if display_name is not None:
             worker.display_name = display_name
@@ -196,8 +219,14 @@ class WorkerRepository:
             worker.preferred_backend = preferred_backend
         if allow_cpu_fallback is not None:
             worker.allow_cpu_fallback = allow_cpu_fallback
+        if max_concurrent_jobs is not None:
+            worker.max_concurrent_jobs = max_concurrent_jobs
         if schedule_windows is not None:
             worker.schedule_windows = schedule_windows
+        if path_mappings is not None:
+            worker.path_mappings = path_mappings
+        if scratch_path is not None:
+            worker.scratch_path = scratch_path
         self.session.flush()
         return worker
 
@@ -253,3 +282,7 @@ class WorkerRepository:
             )
         self.session.flush()
         return worker
+
+    def delete_worker(self, worker: Worker) -> None:
+        self.session.delete(worker)
+        self.session.flush()

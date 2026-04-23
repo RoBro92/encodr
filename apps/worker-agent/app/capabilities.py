@@ -1,15 +1,19 @@
 from __future__ import annotations
 
+import os
 import platform
 
 from app.config import WorkerAgentSettings
 from app.version import read_agent_version
-from encodr_shared import collect_runtime_telemetry
+from encodr_shared import collect_runtime_telemetry, recommend_worker_concurrency, validate_worker_path_mapping
 from encodr_core.execution import normalise_backend_preference
 from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_execution_backends
 
 
-def build_capability_summary(settings: WorkerAgentSettings) -> dict[str, object]:
+def build_capability_summary(
+    settings: WorkerAgentSettings,
+    runtime_configuration: dict[str, object] | None = None,
+) -> dict[str, object]:
     ffmpeg = probe_binary(settings.ffmpeg_path)
     ffprobe = probe_binary(settings.ffprobe_path)
     execution_modes: list[str] = []
@@ -24,6 +28,15 @@ def build_capability_summary(settings: WorkerAgentSettings) -> dict[str, object]
     ]
     if not hardware_hints:
         hardware_hints.append("cpu_only")
+    recommended_concurrency, recommendation_reason = recommend_worker_concurrency(
+        cpu_count=os.cpu_count(),
+        hardware_hints=hardware_hints,
+    )
+    max_concurrent_jobs = (
+        int(runtime_configuration.get("max_concurrent_jobs", recommended_concurrency))
+        if isinstance(runtime_configuration, dict)
+        else recommended_concurrency
+    )
 
     return {
         "execution_modes": execution_modes,
@@ -31,7 +44,9 @@ def build_capability_summary(settings: WorkerAgentSettings) -> dict[str, object]
         "supported_audio_codecs": [],
         "hardware_hints": hardware_hints,
         "binary_support": {"ffmpeg": ffmpeg.discoverable, "ffprobe": ffprobe.discoverable},
-        "max_concurrent_jobs": 1,
+        "max_concurrent_jobs": max_concurrent_jobs,
+        "recommended_concurrency": recommended_concurrency,
+        "recommended_concurrency_reason": recommendation_reason,
         "tags": ["remote", settings.queue],
     }
 
@@ -45,13 +60,48 @@ def build_host_summary() -> dict[str, object]:
     }
 
 
-def build_runtime_summary(settings: WorkerAgentSettings) -> dict[str, object]:
+def build_runtime_summary(
+    settings: WorkerAgentSettings,
+    runtime_configuration: dict[str, object] | None = None,
+) -> dict[str, object]:
+    configured = runtime_configuration or {}
+    scratch_dir = str(configured.get("scratch_dir") or settings.scratch_dir or ".")
+    path_mappings: list[dict[str, object]] = []
+    for item in configured.get("path_mappings", []) if isinstance(configured, dict) else []:
+        worker_path = str(item.get("worker_path") or "").strip()
+        if not worker_path:
+            continue
+        validation = validate_worker_path_mapping(worker_path)
+        path_mappings.append(
+            {
+                "label": item.get("label"),
+                "server_path": item.get("server_path"),
+                "worker_path": worker_path,
+                "marker_relative_path": item.get("marker_relative_path"),
+                "validation_status": validation.get("status"),
+                "validation_message": validation.get("message"),
+                "marker_server_path": item.get("marker_server_path"),
+                "marker_worker_path": validation.get("marker_worker_path"),
+            }
+        )
     return {
         "queue": settings.queue,
-        "scratch_dir": settings.scratch_dir,
+        "scratch_dir": scratch_dir,
+        "scratch_status": probe_directory(scratch_dir, writable_required=True),
         "media_mounts": list(settings.media_mounts),
-        "preferred_backend": settings.preferred_backend,
-        "allow_cpu_fallback": settings.allow_cpu_fallback,
+        "path_mappings": path_mappings,
+        "preferred_backend": str(configured.get("preferred_backend") or settings.preferred_backend),
+        "allow_cpu_fallback": bool(
+            configured.get("allow_cpu_fallback")
+            if isinstance(configured, dict) and configured.get("allow_cpu_fallback") is not None
+            else settings.allow_cpu_fallback
+        ),
+        "max_concurrent_jobs": (
+            int(configured.get("max_concurrent_jobs"))
+            if isinstance(configured, dict) and configured.get("max_concurrent_jobs") is not None
+            else 1
+        ),
+        "schedule_windows": list(configured.get("schedule_windows", [])) if isinstance(configured, dict) else [],
         "telemetry": collect_runtime_telemetry(),
         "last_completed_job_id": None,
     }
@@ -76,17 +126,33 @@ def build_binary_summary(settings: WorkerAgentSettings) -> list[dict[str, object
     ]
 
 
-def build_worker_health(settings: WorkerAgentSettings) -> tuple[str, str]:
+def build_worker_health(
+    settings: WorkerAgentSettings,
+    runtime_configuration: dict[str, object] | None = None,
+) -> tuple[str, str]:
     ffmpeg = probe_binary(settings.ffmpeg_path)
     ffprobe = probe_binary(settings.ffprobe_path)
-    scratch = probe_directory(settings.scratch_dir or ".", writable_required=True)
+    runtime_summary = build_runtime_summary(settings, runtime_configuration=runtime_configuration)
+    scratch = runtime_summary.get("scratch_status") or probe_directory(settings.scratch_dir or ".", writable_required=True)
     backends = probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else []
-    preferred_backend = normalise_backend_preference(settings.preferred_backend)
+    preferred_backend = normalise_backend_preference(
+        str((runtime_configuration or {}).get("preferred_backend") or settings.preferred_backend)
+    )
     preferred_probe = next((item for item in backends if item.backend == preferred_backend), None)
     if not ffmpeg.discoverable or not ffprobe.discoverable:
         return "failed", "FFmpeg or FFprobe is not available on the worker."
     if scratch["status"] != "healthy":
         return "degraded", "Scratch path is not ready for execution."
+    invalid_mapping = next(
+        (
+            item
+            for item in runtime_summary.get("path_mappings", [])
+            if item.get("validation_status") not in {None, "usable"}
+        ),
+        None,
+    )
+    if invalid_mapping is not None:
+        return "degraded", str(invalid_mapping.get("validation_message") or "One or more worker path mappings are invalid.")
     if preferred_backend != "cpu" and preferred_probe is not None and not preferred_probe.usable:
         if settings.allow_cpu_fallback:
             return "degraded", "Preferred hardware backend is unavailable, so this worker will fall back to CPU."

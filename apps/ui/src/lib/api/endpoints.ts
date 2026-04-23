@@ -12,6 +12,7 @@ import type {
   BatchPlanResponse,
   BatchJobCreateResponse,
   CreateJobPayload,
+  CreateDryRunJobsPayload,
   CreateBatchJobsPayload,
   CurrentUser,
   EffectiveConfig,
@@ -34,6 +35,7 @@ import type {
   ProbeOrPlanPayload,
   ProbeSnapshotDetail,
   DryRunBatchResponse,
+  DryRunJobCreateResponse,
   RecentAnalytics,
   RuntimeStatus,
   RemoteWorkerOnboardingPayload,
@@ -47,6 +49,7 @@ import type {
   WorkerInventoryDetail,
   WorkerInventoryListResponse,
   WorkerPreferencePayload,
+  WorkerRemovalResponse,
   WatchedJob,
   WatchedJobListResponse,
   WatchedJobPayload,
@@ -175,6 +178,16 @@ export function dryRunSelection(client: ApiClient, payload: FileSelectionPayload
   });
 }
 
+export function createDryRunJobs(
+  client: ApiClient,
+  payload: CreateDryRunJobsPayload,
+): Promise<DryRunJobCreateResponse> {
+  return client.request<DryRunJobCreateResponse>("/jobs/dry-run", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
 export function batchPlan(client: ApiClient, payload: FileSelectionPayload): Promise<BatchPlanResponse> {
   return client.request<BatchPlanResponse>("/files/batch-plan", {
     method: "POST",
@@ -242,6 +255,10 @@ export function createRemoteWorkerOnboarding(
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function deleteWorker(client: ApiClient, workerId: string): Promise<WorkerRemovalResponse> {
+  return client.request<WorkerRemovalResponse>(`/workers/${workerId}`, { method: "DELETE" });
 }
 
 export function listReviewItems(

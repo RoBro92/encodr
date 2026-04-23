@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, ForeignKey, Index, String, Text
+from sqlalchemy import Boolean, DateTime, ForeignKey, Index, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin, json_type
@@ -37,12 +37,16 @@ class Worker(Base, IdMixin, TimestampMixin):
     )
     preferred_backend: Mapped[str] = mapped_column(String(64), nullable=False, default="cpu_only")
     allow_cpu_fallback: Mapped[bool] = mapped_column(Boolean, nullable=False, default=True)
+    max_concurrent_jobs: Mapped[int] = mapped_column(Integer, nullable=False, default=1)
     schedule_windows: Mapped[list[dict] | None] = mapped_column(json_type())
+    path_mappings: Mapped[list[dict] | None] = mapped_column(json_type())
+    scratch_path: Mapped[str | None] = mapped_column(Text)
     auth_token_hash: Mapped[str | None] = mapped_column(String(128), index=True)
     pairing_token_hash: Mapped[str | None] = mapped_column(String(128), index=True)
     pairing_requested_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     pairing_expires_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     onboarding_platform: Mapped[str | None] = mapped_column(String(32))
+    install_dir: Mapped[str | None] = mapped_column(Text)
     host_metadata: Mapped[dict | None] = mapped_column(json_type())
     capability_payload: Mapped[dict | None] = mapped_column(json_type())
     runtime_payload: Mapped[dict | None] = mapped_column(json_type())

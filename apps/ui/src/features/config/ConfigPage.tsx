@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useState } from "react";
-import { Link } from "react-router-dom";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { FolderPickerModal } from "../../components/FolderPickerModal";
@@ -23,7 +22,6 @@ import type {
   ProcessingRuleset,
   ProcessingRuleValues,
 } from "../../lib/types/api";
-import { APP_ROUTES } from "../../lib/utils/routes";
 
 type PickerTarget = "movies" | "tv" | null;
 type RulesetKey = "movies" | "movies_4k" | "tv" | "tv_4k";
@@ -180,89 +178,40 @@ export function ConfigPage() {
         </SectionCard>
 
         <SectionCard title="Storage" subtitle="Check your media and scratch paths before you run jobs.">
-          <KeyValueList
-            items={[
-              { label: "Media root", value: storage.standard_media_root },
-              { label: "Media status", value: <StatusBadge value={storage.media_mounts[0]?.status ?? "unknown"} /> },
-              { label: "Scratch", value: <StatusBadge value={storage.scratch.status} /> },
-              { label: "Runtime", value: <StatusBadge value={runtime.status} /> },
-            ]}
-          />
-          {storage.warnings.length > 0 ? (
-            <div className="card-stack">
-              {storage.warnings.map((warning) => (
-                <div key={warning} className="info-strip" role="note">
-                  <span>{warning}</span>
-                </div>
-              ))}
-            </div>
-          ) : null}
-        </SectionCard>
-      </section>
-
-      <SectionCard title="Runtime" subtitle="A concise view of the live runtime.">
-        <KeyValueList
-          items={[
-            { label: "Environment", value: runtime.environment },
-            { label: "Version", value: runtime.version },
-            { label: "Scratch path", value: runtime.scratch_dir },
-            { label: "Data path", value: runtime.data_dir },
-          ]}
-        />
-      </SectionCard>
-
-      <section className="dashboard-grid">
-        <SectionCard
-          title="Execution backends"
-          subtitle="Encodr validates what this runtime can really see and what FFmpeg can actually use."
-        >
           <div className="card-stack">
             <div className="info-strip">
-              <strong>Operator-managed passthrough</strong>
+              <strong>Host runtime</strong>
               <span>
-                Keep host-level GPU and mount passthrough managed outside Encodr. Encodr only validates what is already exposed inside this runtime.
+                Runtime health here only reflects the Encodr host itself: storage, scratch, and core runtime reachability. Worker backends are configured per worker on the Workers page.
               </span>
             </div>
-            <div className="info-strip" role="note">
-              <strong>Worker-level backends</strong>
-              <span>
-                Backend preference is now set per worker. Configure the local worker and any paired remote workers
-                from the <Link to={APP_ROUTES.workers}>Workers</Link> page.
-              </span>
-            </div>
-            <div className="status-grid">
-              {runtime.execution_backends.map((backend) => (
-                <article
-                  key={backend.backend}
-                  className={`status-card ${
-                    backend.status === "degraded" || backend.status === "failed" ? "status-card-alert" : ""
-                  }`}
-                >
-                  <div className="badge-row">
-                    <StatusBadge value={backend.usable_by_ffmpeg ? "healthy" : backend.detected ? "degraded" : "failed"} />
-                    <strong>{formatBackendLabel(backend.backend)}</strong>
+            <KeyValueList
+              items={[
+                { label: "Runtime health", value: <StatusBadge value={runtime.status} /> },
+                { label: "Environment", value: runtime.environment },
+                { label: "Version", value: runtime.version },
+                { label: "Media root", value: storage.standard_media_root },
+                { label: "Media status", value: <StatusBadge value={storage.media_mounts[0]?.status ?? "unknown"} /> },
+                { label: "Scratch status", value: <StatusBadge value={storage.scratch.status} /> },
+                { label: "Scratch path", value: runtime.scratch_dir },
+                { label: "Data path", value: runtime.data_dir },
+              ]}
+            />
+            {storage.warnings.length > 0 ? (
+              <div className="card-stack">
+                {storage.warnings.map((warning) => (
+                  <div key={warning} className="info-strip" role="note">
+                    <span>{warning}</span>
                   </div>
-                  <p className="muted-copy">{backend.message}</p>
-                  <KeyValueList
-                    items={[
-                      { label: "Detected", value: backend.detected ? "Yes" : "No" },
-                      { label: "Usable by FFmpeg", value: backend.usable_by_ffmpeg ? "Yes" : "No" },
-                      { label: "Verified path", value: backend.ffmpeg_path_verified ? "Yes" : "No" },
-                    ]}
-                  />
-                  {backend.reason_unavailable ? <p className="muted-copy">{backend.reason_unavailable}</p> : null}
-                  {backend.recommended_usage ? (
-                    <div className="info-strip" role="note">
-                      <strong>Recommended usage</strong>
-                      <span>{backend.recommended_usage}</span>
-                    </div>
-                  ) : null}
-                </article>
-              ))}
-            </div>
+                ))}
+              </div>
+            ) : null}
           </div>
         </SectionCard>
 
+      </section>
+
+      <section className="dashboard-grid">
         <SectionCard title="Updates" subtitle="Check what is installed and what to run from the root console.">
           <div className="card-stack">
             <div className="info-strip">
