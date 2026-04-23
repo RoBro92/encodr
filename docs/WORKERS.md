@@ -46,12 +46,11 @@ Encodr does not depend on `intel-media-va-driver-non-free`.
 Expected validation commands inside the worker container:
 
 ```bash
-LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128
-LIBVA_DRIVER_NAME=iHD ffmpeg -hide_banner \
-  -vaapi_device /dev/dri/renderD128 \
-  -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 \
-  -vf "format=nv12,hwupload" \
-  -c:v h264_vaapi -f null -
+encodr compose-config | grep /dev/dri
+docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml exec worker sh -lc \
+  'LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128'
+docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml exec worker sh -lc \
+  'LIBVA_DRIVER_NAME=iHD ffmpeg -hide_banner -vaapi_device /dev/dri/renderD128 -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 -vf "format=nv12,hwupload" -c:v h264_vaapi -f null -'
 ```
 
 If Intel VAAPI is not usable, Encodr now surfaces a specific reason such as:

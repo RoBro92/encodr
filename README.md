@@ -112,6 +112,7 @@ Useful commands:
 ```bash
 encodr doctor
 encodr status
+encodr compose-config | grep /dev/dri
 ```
 
 If something is wrong, check:

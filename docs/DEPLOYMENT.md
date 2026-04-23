@@ -50,8 +50,9 @@ Encodr validates Intel against the actual worker runtime by checking:
 Expected worker-container validation commands:
 
 ```bash
-docker compose exec worker sh -lc 'LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128'
-docker compose exec worker sh -lc 'LIBVA_DRIVER_NAME=iHD ffmpeg -hide_banner -vaapi_device /dev/dri/renderD128 -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 -vf "format=nv12,hwupload" -c:v h264_vaapi -f null -'
+encodr compose-config | grep /dev/dri
+docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml exec worker sh -lc 'LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128'
+docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml exec worker sh -lc 'LIBVA_DRIVER_NAME=iHD ffmpeg -hide_banner -vaapi_device /dev/dri/renderD128 -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 -vf "format=nv12,hwupload" -c:v h264_vaapi -f null -'
 ```
 
 QSV is not treated as a validated Intel path in this release line unless it gains its own reliable smoke test.

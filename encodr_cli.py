@@ -83,6 +83,12 @@ def build_parser() -> argparse.ArgumentParser:
     logs_parser.add_argument("--tail", type=int, default=120, help="Number of lines to show per service.")
     logs_parser.set_defaults(func=command_logs)
 
+    compose_config_parser = subparsers.add_parser(
+        "compose-config",
+        help="Print the managed Docker Compose configuration, including runtime overrides when present.",
+    )
+    compose_config_parser.set_defaults(func=command_compose_config)
+
     health_parser = subparsers.add_parser("health", help="Run a quick local stack health check.")
     health_parser.set_defaults(func=command_health)
 
@@ -169,6 +175,19 @@ def command_logs(args: argparse.Namespace) -> int:
     if args.follow:
         command.append("--follow")
     return run_compose(args, command)
+
+
+def command_compose_config(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    ensure_local_storage_mounts(project_root)
+    ensure_runtime_compose_override(project_root)
+    result = subprocess.run(
+        compose_command(project_root, "config"),
+        cwd=project_root,
+        env=compose_env(project_root),
+        check=False,
+    )
+    return int(result.returncode)
 
 
 def command_health(args: argparse.Namespace) -> int:
