@@ -49,7 +49,7 @@ class RemoteExecutionService:
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
     ) -> ExecutionResult:
         plan = ProcessingPlan.model_validate(plan_payload)
-        media_file = MediaFile.model_validate(media_payload)
+        media_file, source_path = self._media_file_from_payload(media_payload)
         verifier = OutputVerifier(probe_client=FFprobeClient(binary_path=self.settings.ffprobe_path))
 
         if job_kind == "dry_run":
@@ -65,7 +65,7 @@ class RemoteExecutionService:
         try:
             result = self.runner.execute_plan(
                 plan,
-                input_path=media_file.file_path,
+                input_path=source_path,
                 scratch_dir=scratch_dir,
                 ffmpeg_path=self.settings.ffmpeg_path,
                 job_id=job_id,
@@ -248,13 +248,13 @@ class RemoteExecutionService:
         allow_cpu_fallback: bool | None = None,
     ) -> dict[str, object]:
         plan = ProcessingPlan.model_validate(plan_payload)
-        media_file = MediaFile.model_validate(media_payload)
+        media_file, source_path = self._media_file_from_payload(media_payload)
         requested_backend = preferred_backend or self.settings.preferred_backend
         allow_fallback = self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback
         try:
             command_plan = build_execution_command_plan(
                 plan,
-                input_path=media_file.file_path,
+                input_path=source_path,
                 scratch_dir=scratch_dir_override or self.settings.scratch_dir or ".",
                 ffmpeg_path=self.settings.ffmpeg_path,
                 job_id=job_id,
@@ -276,6 +276,23 @@ class RemoteExecutionService:
             "fallback_used": command_plan.fallback_used,
             "selection_reason": command_plan.backend_selection_reason,
         }
+
+    @staticmethod
+    def _media_file_from_payload(media_payload: dict) -> tuple[MediaFile, Path]:
+        payload = dict(media_payload)
+        source_path_raw = str(payload.pop("file_path", "") or "")
+        container_payload = payload.get("container")
+        if isinstance(container_payload, dict):
+            payload["container"] = dict(container_payload)
+            if source_path_raw:
+                payload["container"]["file_path"] = source_path_raw
+                payload["container"].setdefault("file_name", Path(source_path_raw).name)
+                extension = Path(source_path_raw).suffix.lower().lstrip(".") or None
+                if extension and not payload["container"].get("extension"):
+                    payload["container"]["extension"] = extension
+        media_file = MediaFile.model_validate(payload)
+        source_path = Path(source_path_raw or media_file.file_path)
+        return media_file, source_path
 
     def _verify_and_place(
         self,

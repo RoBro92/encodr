@@ -232,6 +232,14 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
             "platform": "linux",
             "preferred_backend": "prefer_nvidia_gpu",
             "allow_cpu_fallback": False,
+            "scratch_path": "/worker-scratch",
+            "path_mappings": [
+                {
+                    "label": "Media",
+                    "server_path": "/media",
+                    "worker_path": "/worker-media",
+                }
+            ],
         },
         headers=auth.headers,
     )
@@ -277,6 +285,10 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
     assert registration_payload_json["display_name"] == "Linux worker 01"
     assert registration_payload_json["execution_preferences"]["preferred_backend"] == "prefer_nvidia_gpu"
     assert registration_payload_json["execution_preferences"]["allow_cpu_fallback"] is False
+    assert registration_payload_json["runtime_configuration"]["scratch_dir"] == "/worker-scratch"
+    assert registration_payload_json["runtime_configuration"]["path_mappings"][0]["server_path"] == "/media"
+    assert registration_payload_json["runtime_configuration"]["path_mappings"][0]["worker_path"] == "/worker-media"
+    assert registration_payload_json["runtime_configuration"]["path_mappings"][0]["validated_at"] is not None
 
     with session_factory() as session:
         worker = WorkerRepository(session).get_by_id(worker_id)
@@ -284,6 +296,15 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
         assert worker.pairing_token_hash is None
         assert worker.preferred_backend == "prefer_nvidia_gpu"
         assert worker.allow_cpu_fallback is False
+        assert worker.scratch_path == "/worker-scratch"
+        assert worker.path_mappings == [
+            {
+                "label": "Media",
+                "server_path": "/media",
+                "worker_path": "/worker-media",
+                "marker_relative_path": ".encodr/worker-marker.txt",
+            }
+        ]
         assert worker.auth_token_hash is not None
 
 

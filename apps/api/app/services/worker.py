@@ -1693,7 +1693,7 @@ class WorkerService:
                     "marker_relative_path": mapping.get("marker_relative_path"),
                     "validation_status": runtime_validation.get("status", server_marker["status"]),
                     "validation_message": runtime_validation.get("message", server_marker["message"]),
-                    "validated_at": datetime.now(timezone.utc),
+                    "validated_at": datetime.now(timezone.utc).isoformat(),
                     "marker_server_path": server_marker.get("marker_server_path"),
                     "marker_worker_path": runtime_validation.get("marker_worker_path"),
                 }

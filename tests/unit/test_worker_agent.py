@@ -16,9 +16,11 @@ sys.modules.pop("app", None)
 
 import app.version as worker_agent_version  # type: ignore  # noqa: E402
 import app.capabilities as worker_agent_capabilities  # type: ignore  # noqa: E402
+import app.execution as worker_agent_execution  # type: ignore  # noqa: E402
 from app.capabilities import build_capability_summary, build_worker_health  # type: ignore  # noqa: E402
 from app.client import WorkerApiClient  # type: ignore  # noqa: E402
 from app.config import load_settings  # type: ignore  # noqa: E402
+from app.execution import RemoteExecutionService  # type: ignore  # noqa: E402
 from app.service import WorkerAgentService  # type: ignore  # noqa: E402
 from app.version import read_agent_version  # type: ignore  # noqa: E402
 
@@ -338,6 +340,101 @@ def test_worker_agent_process_once_claims_and_submits_result(tmp_path: Path) -> 
     assert response["final_status"] == "completed"
     assert any(call["url"].endswith("/worker/jobs/job-1/claim") for call in requester.calls)
     assert any(call["url"].endswith("/worker/jobs/job-1/result") for call in requester.calls)
+
+
+def test_remote_execution_preview_backend_accepts_transport_file_path(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_FFMPEG_PATH": str(tmp_path / "bin" / "ffmpeg"),
+            "ENCODR_WORKER_AGENT_FFPROBE_PATH": str(tmp_path / "bin" / "ffprobe"),
+            "ENCODR_WORKER_AGENT_SCRATCH_DIR": str(tmp_path / "scratch"),
+        }
+    )
+    (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
+
+    monkeypatch.setattr(
+        worker_agent_execution,
+        "build_execution_command_plan",
+        lambda *args, **kwargs: type(
+            "CommandPlan",
+            (),
+            {
+                "requested_backend": kwargs["preferred_backend"],
+                "actual_backend": "cpu",
+                "actual_accelerator": "cpu",
+                "fallback_used": False,
+                "backend_selection_reason": "cpu preview",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        worker_agent_execution.ProcessingPlan,
+        "model_validate",
+        classmethod(lambda cls, payload: object()),
+    )
+
+    service = RemoteExecutionService(settings=settings)
+    preview = service.preview_backend(
+        job_id="job-1",
+        plan_payload={
+            "action": "transcode",
+            "replace": {
+                "in_place": True,
+                "require_verification": True,
+                "keep_original_until_verified": True,
+                "delete_replaced_source": False,
+            },
+            "container": {"target_container": "mkv"},
+            "selected_streams": {
+                "video_stream_indices": [0],
+                "audio_stream_indices": [1],
+                "subtitle_stream_indices": [],
+                "attachment_stream_indices": [],
+                "data_stream_indices": [],
+            },
+            "video": {"transcode_required": True, "target_codec": "hevc"},
+            "policy_context": {"policy_version": 1, "selected_profile_name": "movies-default"},
+            "should_treat_as_protected": False,
+        },
+        media_payload={
+            "file_path": "/media/input.mkv",
+            "container": {
+                "file_path": "/old/path.mkv",
+                "file_name": "input.mkv",
+                "extension": "mkv",
+                "format_name": "matroska",
+                "format_long_name": "Matroska / WebM",
+                "duration_seconds": 120.0,
+                "bit_rate": 1200000,
+                "size_bytes": 123456789,
+                "stream_count": 2,
+                "tags": {},
+            },
+            "video_streams": [{"index": 0, "stream_order": 0, "stream_type": "video", "codec_name": "h264"}],
+            "audio_streams": [{"index": 1, "stream_order": 1, "stream_type": "audio", "codec_name": "aac"}],
+            "subtitle_streams": [],
+            "attachment_streams": [],
+            "data_streams": [],
+            "unknown_streams": [],
+            "chapters": [],
+            "raw_format": {},
+            "is_4k": False,
+            "is_hdr_candidate": False,
+            "has_english_audio": True,
+            "has_forced_english_subtitle": False,
+            "has_surround_audio": False,
+            "has_atmos_capable_audio": False,
+        },
+        preferred_backend="cpu_only",
+        allow_cpu_fallback=True,
+    )
+
+    assert preview["actual_backend"] == "cpu"
+    assert preview["selection_reason"] == "cpu preview"
 
 
 def test_worker_agent_reports_failure_when_execution_raises(tmp_path: Path) -> None:
