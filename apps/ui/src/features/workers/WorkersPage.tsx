@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
@@ -246,16 +247,16 @@ export function WorkersPage() {
             message="Add this host as a worker or pair a remote worker when you are ready to give Encodr execution capacity."
           />
         ) : (
-          <div className="record-list" role="list" aria-label="Workers list">
+          <div className="record-list worker-inventory-list" role="list" aria-label="Workers list">
             {workers.map((item) => {
               const isActive = item.id === workerId;
               return (
                 <Link
                   key={item.id}
-                  className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
+                  className={`record-list-item worker-inventory-row${isActive ? " record-list-item-active" : ""}`}
                   to={APP_ROUTES.workerDetail(item.id)}
                 >
-                  <div className="record-list-main">
+                  <div className="worker-inventory-main">
                     <div className="record-list-heading">
                       <strong>{item.display_name}</strong>
                       <span>{item.worker_key}</span>
@@ -267,12 +268,16 @@ export function WorkersPage() {
                       <StatusBadge value={item.health_status} />
                     </div>
                   </div>
-                  <div className="record-list-meta">
-                    <span className="record-list-kicker">{item.worker_type === "local" ? "This host" : "Remote worker"}</span>
-                    <span>{formatBackendLabel(item.preferred_backend)}</span>
-                    <span>{formatConcurrencyLabel(item)}</span>
-                    <span>{item.schedule_summary ?? "Any time"}</span>
-                    <span className="record-list-emphasis">{item.health_summary ?? "No health summary reported."}</span>
+                  <div className="worker-inventory-stats">
+                    <WorkerInventoryStat label="Worker" value={item.worker_type === "local" ? "This host" : "Remote"} />
+                    <WorkerInventoryStat label="Backend" value={formatBackendLabel(item.preferred_backend)} />
+                    <WorkerInventoryStat label="Concurrency" value={formatConcurrencyLabel(item)} />
+                    <WorkerInventoryStat label="Schedule" value={item.schedule_summary ?? "Any time"} />
+                    <WorkerInventoryStat
+                      label="Status message"
+                      value={item.health_summary ?? "No health summary reported."}
+                      clamp
+                    />
                   </div>
                 </Link>
               );
@@ -374,35 +379,20 @@ export function WorkersPage() {
                 </div>
               ) : null}
 
-              <section className="metric-grid metric-grid-compact">
-                <div className="metric-panel">
-                  <span className="metric-label">Health summary</span>
-                  <strong>{detail.health_summary ?? "No summary reported"}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Current activity</span>
-                  <strong>{detail.current_stage ?? detail.runtime_summary?.current_stage ?? detail.current_job_id ?? "Idle"}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Current backend</span>
-                  <strong>{formatBackendLabel(detailCurrentBackend)}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Concurrency</span>
-                  <strong>{formatConcurrencyLabel(detail)}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Pending assignments</span>
-                  <strong>{detail.pending_assignment_count}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Schedule</span>
-                  <strong>{detail.schedule_summary ?? "Any time"}</strong>
-                </div>
+              <section className="worker-detail-metric-grid">
+                <WorkerDetailMetric label="Health summary" value={detail.health_summary ?? "No summary reported"} />
+                <WorkerDetailMetric
+                  label="Current activity"
+                  value={detail.current_stage ?? detail.runtime_summary?.current_stage ?? detail.current_job_id ?? "Idle"}
+                />
+                <WorkerDetailMetric label="Current backend" value={formatBackendLabel(detailCurrentBackend)} />
+                <WorkerDetailMetric label="Concurrency" value={formatConcurrencyLabel(detail)} />
+                <WorkerDetailMetric label="Pending assignments" value={String(detail.pending_assignment_count)} />
+                <WorkerDetailMetric label="Schedule" value={detail.schedule_summary ?? "Any time"} />
               </section>
 
               <SectionCard title="Health and execution">
-                <KeyValueList
+                <WorkerDetailInfoGrid
                   items={[
                     { label: "Worker key", value: detail.worker_key },
                     { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
@@ -619,7 +609,7 @@ export function WorkersPage() {
 
             {addWorkerMode === "local" ? (
               <div className="card-stack">
-                <div className="info-strip" role="note">
+                <div className="worker-local-callout" role="note">
                   <strong>Same host runtime</strong>
                   <span>The local worker runs inside the same Encodr stack and uses the current runtime mounts and scratch path.</span>
                 </div>
@@ -838,88 +828,90 @@ function WorkerPreferenceFields({
   const mappings = draft.path_mappings ?? [];
 
   return (
-    <div className="settings-rules-fields settings-rules-fields-compact">
-      <label className="field">
-        <span>Worker label</span>
-        <input
-          aria-label="Worker label"
-          value={draft.display_name ?? ""}
-          onChange={(event) => onChange({ ...draft, display_name: event.target.value })}
-        />
-      </label>
-
-      {showPlatform && "platform" in draft ? (
+    <div className="worker-preference-form">
+      <div className="worker-preference-column">
         <label className="field">
-          <span>Platform</span>
+          <span>Worker label</span>
+          <input
+            aria-label="Worker label"
+            value={draft.display_name ?? ""}
+            onChange={(event) => onChange({ ...draft, display_name: event.target.value })}
+          />
+        </label>
+
+        {showPlatform && "platform" in draft ? (
+          <label className="field">
+            <span>Platform</span>
+            <select
+              aria-label="Worker platform"
+              value={draft.platform}
+              onChange={(event) => onChange({ ...draft, platform: event.target.value as "windows" | "linux" | "macos" })}
+            >
+              {PLATFORM_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+
+        <label className="field">
+          <span>Preferred backend</span>
           <select
-            aria-label="Worker platform"
-            value={draft.platform}
-            onChange={(event) => onChange({ ...draft, platform: event.target.value as "windows" | "linux" | "macos" })}
+            aria-label="Worker preferred backend"
+            value={draft.preferred_backend}
+            onChange={(event) => onChange({ ...draft, preferred_backend: event.target.value })}
           >
-            {PLATFORM_OPTIONS.map((option) => (
+            {BACKEND_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
         </label>
-      ) : null}
 
-      <label className="field">
-        <span>Preferred backend</span>
-        <select
-          aria-label="Worker preferred backend"
-          value={draft.preferred_backend}
-          onChange={(event) => onChange({ ...draft, preferred_backend: event.target.value })}
-        >
-          {BACKEND_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
-      </label>
-
-      <label className="field field-checkbox">
-        <span>Allow CPU fallback</span>
-        <input
-          aria-label="Worker CPU fallback"
-          type="checkbox"
-          checked={draft.allow_cpu_fallback}
-          onChange={(event) => onChange({ ...draft, allow_cpu_fallback: event.target.checked })}
-        />
-      </label>
-
-      <label className="field">
-        <span>Concurrency</span>
-        <input
-          aria-label="Worker concurrency"
-          type="number"
-          min={1}
-          max={8}
-          value={draft.max_concurrent_jobs ?? recommendedConcurrency}
-          onChange={(event) => onChange({ ...draft, max_concurrent_jobs: Number(event.target.value) || 1 })}
-        />
-      </label>
-
-      <div className="info-strip" role="note">
-        <strong>Recommendation</strong>
-        <span>{recommendedConcurrency} concurrent job{recommendedConcurrency === 1 ? "" : "s"} • {recommendationReason}</span>
+        <label className="field">
+          <span>Scratch path</span>
+          <input
+            aria-label="Worker scratch path"
+            value={draft.scratch_path ?? ""}
+            onChange={(event) => onChange({ ...draft, scratch_path: event.target.value })}
+          />
+        </label>
       </div>
 
-      <label className="field">
-        <span>Scratch path</span>
-        <input
-          aria-label="Worker scratch path"
-          value={draft.scratch_path ?? ""}
-          onChange={(event) => onChange({ ...draft, scratch_path: event.target.value })}
-        />
-      </label>
+      <div className="worker-preference-column">
+        <label className="field">
+          <span>Concurrency</span>
+          <input
+            aria-label="Worker concurrency"
+            type="number"
+            min={1}
+            max={8}
+            value={draft.max_concurrent_jobs ?? recommendedConcurrency}
+            onChange={(event) => onChange({ ...draft, max_concurrent_jobs: Number(event.target.value) || 1 })}
+          />
+          <span className="worker-field-helper">
+            Recommendation: {recommendedConcurrency} concurrent job{recommendedConcurrency === 1 ? "" : "s"} • {recommendationReason}
+          </span>
+        </label>
 
-      <ScheduleWindowsEditor
-        label="Schedule windows"
-        value={draft.schedule_windows ?? []}
-        onChange={(value) => onChange({ ...draft, schedule_windows: value })}
-      />
+        <label className="worker-checkbox-row">
+          <input
+            aria-label="Worker CPU fallback"
+            type="checkbox"
+            checked={draft.allow_cpu_fallback}
+            onChange={(event) => onChange({ ...draft, allow_cpu_fallback: event.target.checked })}
+          />
+          <span>Allow CPU fallback</span>
+        </label>
+
+        <ScheduleWindowsEditor
+          label="Schedule windows"
+          value={draft.schedule_windows ?? []}
+          onChange={(value) => onChange({ ...draft, schedule_windows: value })}
+        />
+      </div>
 
       {showPathMappings ? (
-        <div className="field">
+        <div className="field worker-preference-full">
           <span>Path mappings</span>
           <PathMappingsEditor
             mappings={mappings}
@@ -927,6 +919,55 @@ function WorkerPreferenceFields({
           />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function WorkerInventoryStat({
+  label,
+  value,
+  clamp = false,
+}: {
+  label: string;
+  value: string;
+  clamp?: boolean;
+}) {
+  return (
+    <div className="worker-stat">
+      <span>{label}</span>
+      <strong className={clamp ? "worker-stat-clamped" : undefined}>{value}</strong>
+    </div>
+  );
+}
+
+function WorkerDetailMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: string;
+}) {
+  return (
+    <div className="worker-detail-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function WorkerDetailInfoGrid({
+  items,
+}: {
+  items: Array<{ label: string; value: ReactNode }>;
+}) {
+  return (
+    <div className="worker-detail-info-grid">
+      {items.map((item) => (
+        <div key={item.label} className="worker-detail-info-item">
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
     </div>
   );
 }
