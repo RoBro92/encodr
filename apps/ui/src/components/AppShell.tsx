@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { NavLink, Outlet, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/AuthProvider";
 import { useCheckUpdateStatusMutation, useRuntimeStatusQuery, useUpdateStatusQuery } from "../lib/api/hooks";
@@ -24,6 +24,7 @@ type HiddenUpdateState = {
 };
 
 export function AppShell() {
+  const location = useLocation();
   const navigate = useNavigate();
   const { logout, user } = useSession();
   const runtimeQuery = useRuntimeStatusQuery();
@@ -35,6 +36,10 @@ export function AppShell() {
   const updateStatus = updateQuery.data;
   const latestVersion = updateStatus?.latest_version ?? null;
   const updateAvailable = updateStatus?.update_available === true && Boolean(latestVersion);
+  const hideStorageSetupBanner =
+    location.pathname === APP_ROUTES.system ||
+    location.pathname === APP_ROUTES.config ||
+    location.pathname === "/settings";
 
   useEffect(() => {
     if (!updateAvailable || !latestVersion) {
@@ -141,7 +146,7 @@ export function AppShell() {
             </span>
           </div>
         </header>
-        {runtimeQuery.data?.storage_setup_incomplete ? (
+        {runtimeQuery.data?.storage_setup_incomplete && !hideStorageSetupBanner ? (
           <div className="info-strip" role="note">
             <strong>Storage needs attention.</strong>
             <span>

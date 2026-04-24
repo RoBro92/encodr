@@ -2044,12 +2044,14 @@ pre {
 .system-config-source-chip {
   max-width: 100%;
   overflow-wrap: anywhere;
-  padding: 6px 9px;
+  padding: 4px 10px;
   border-radius: var(--radius-md);
-  background: color-mix(in srgb, var(--bg-subtle) 64%, var(--bg-panel-strong));
-  color: var(--text-muted);
-  font-size: 0.76rem;
+  border: 1px solid #e2e8f0;
+  background: #f1f5f9;
+  color: #334155;
+  font-size: 0.75rem;
   font-weight: 700;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
 }
 
 .system-storage-grid {
@@ -2089,6 +2091,29 @@ pre {
   display: grid;
   gap: 12px;
   grid-template-columns: repeat(2, minmax(0, 1fr));
+  margin-top: auto;
+}
+
+.system-storage-node-metrics .metric-panel {
+  gap: 5px;
+  padding: 0;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+}
+
+.system-storage-node-metrics .metric-label {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+}
+
+.system-storage-node-metrics .metric-panel strong {
+  color: var(--text);
+  font-size: 1rem;
+  font-weight: 700;
+  letter-spacing: 0;
 }
 
 .system-storage-node-footer {

@@ -415,7 +415,14 @@ describe("Encodr UI shell", () => {
 
   it("shows the simplified settings structure and update status", async () => {
     mockFetchRoutes([
-      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      {
+        method: "GET",
+        path: "/api/system/runtime",
+        body: {
+          ...runtimeStatus(),
+          storage_setup_incomplete: true,
+        },
+      },
       {
         method: "GET",
         path: "/api/system/storage",
@@ -448,6 +455,7 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("heading", { name: /^storage$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /^updates$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /processing rules/i })).toBeInTheDocument();
+    expect(screen.queryByText(/storage needs attention/i)).not.toBeInTheDocument();
     const settingsWarning = screen.getByRole("alert");
     expect(settingsWarning).toHaveTextContent(/media path is empty/i);
     const storageCard = screen.getByRole("heading", { name: /^storage$/i }).closest(".section-card");
@@ -1306,7 +1314,14 @@ describe("Encodr UI shell", () => {
   it("keeps worker-specific backend diagnostics off the system page", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
-      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      {
+        method: "GET",
+        path: "/api/system/runtime",
+        body: {
+          ...runtimeStatus(),
+          storage_setup_incomplete: true,
+        },
+      },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
     ]);
 
@@ -1314,6 +1329,7 @@ describe("Encodr UI shell", () => {
 
     expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
     const main = screen.getByRole("main");
+    expect(screen.queryByText(/storage needs attention/i)).not.toBeInTheDocument();
     expect(within(main).queryByRole("heading", { name: /^worker$/i })).not.toBeInTheDocument();
     expect(within(main).queryByText(/^pending jobs$/i)).not.toBeInTheDocument();
     expect(within(main).queryByText(/^queue$/i)).not.toBeInTheDocument();
