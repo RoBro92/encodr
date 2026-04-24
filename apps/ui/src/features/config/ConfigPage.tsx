@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 
 import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { ErrorPanel } from "../../components/ErrorPanel";
@@ -77,6 +77,7 @@ export function ConfigPage() {
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null);
   const [rulesDraft, setRulesDraft] = useState<ProcessingRules | null>(null);
   const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
+  const [isChangelogModalOpen, setIsChangelogModalOpen] = useState(false);
   const rootsQuery = useLibraryRootsQuery();
   const rulesQuery = useProcessingRulesQuery();
   const runtimeQuery = useRuntimeStatusQuery();
@@ -222,22 +223,24 @@ export function ConfigPage() {
                 <SettingsDataItem label="Check status" value={updateStatus.status} />
                 <SettingsDataItem label="Command" value={<code className="settings-command-code">encodr update --apply</code>} />
               </div>
-              {updateStatus.release_summary ? (
-                <div className="info-strip settings-summary-callout" role="note">
-                  <strong>Summary</strong>
-                  <span>{updateStatus.release_summary}</span>
-                </div>
-              ) : null}
-              {updateStatus.breaking_changes_summary ? (
-                <div className="info-strip info-strip-warning settings-warning-callout" role="note">
-                  <strong>Breaking changes</strong>
-                  <span>{updateStatus.breaking_changes_summary}</span>
-                </div>
-              ) : null}
+              <div className="settings-updates-actions">
+                <button className="button button-secondary button-small" type="button" onClick={() => setIsChangelogModalOpen(true)}>
+                  View changelog
+                </button>
+              </div>
             </div>
           </SectionCard>
         </div>
       </section>
+
+      {isChangelogModalOpen ? (
+        <ChangelogModal
+          releaseName={updateStatus.release_name}
+          releaseSummary={updateStatus.release_summary}
+          breakingChangesSummary={updateStatus.breaking_changes_summary}
+          onClose={() => setIsChangelogModalOpen(false)}
+        />
+      ) : null}
 
       <ProcessingRulesSection
         rules={rules}
@@ -293,6 +296,103 @@ export function ConfigPage() {
   );
 }
 
+function ChangelogModal({
+  releaseName,
+  releaseSummary,
+  breakingChangesSummary,
+  onClose,
+}: {
+  releaseName: string | null;
+  releaseSummary: string | null;
+  breakingChangesSummary: string | null;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const markdown = [
+    releaseSummary ?? "No release notes were reported for this update.",
+    breakingChangesSummary ? `\n\n## Breaking changes\n\n${breakingChangesSummary}` : "",
+  ].join("");
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    return () => {
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key !== "Tab" || !dialogRef.current) {
+      return;
+    }
+
+    const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeElement = document.activeElement;
+    if (event.shiftKey && activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div
+      className="modal-backdrop changelog-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+      onKeyDown={handleKeyDown}
+    >
+      <section
+        ref={dialogRef}
+        className="modal-panel changelog-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="changelog-modal-title"
+      >
+        <div className="changelog-modal-header">
+          <div>
+            <p className="section-eyebrow">{releaseName ?? "Encodr changelog"}</p>
+            <h2 id="changelog-modal-title">Release Notes</h2>
+          </div>
+          <button ref={closeButtonRef} className="button button-secondary button-small" type="button" onClick={onClose} aria-label="Close release notes">
+            X
+          </button>
+        </div>
+        <div className="changelog-markdown">
+          <MarkdownContent source={markdown} />
+        </div>
+        <div className="changelog-modal-footer">
+          <button className="button button-primary button-small" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SettingsDataItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="settings-data-item">
@@ -300,6 +400,128 @@ function SettingsDataItem({ label, value }: { label: string; value: ReactNode })
       <strong>{value}</strong>
     </div>
   );
+}
+
+function MarkdownContent({ source }: { source: string }) {
+  const blocks = parseMarkdownBlocks(source);
+  return (
+    <>
+      {blocks.map((block, index) => {
+        const key = `${block.type}-${index}`;
+        switch (block.type) {
+          case "heading":
+            return block.level === 2 ? (
+              <h2 key={key}>{renderInlineMarkdown(block.text)}</h2>
+            ) : block.level === 3 ? (
+              <h3 key={key}>{renderInlineMarkdown(block.text)}</h3>
+            ) : (
+              <h4 key={key}>{renderInlineMarkdown(block.text)}</h4>
+            );
+          case "list":
+            return block.ordered ? (
+              <ol key={key}>
+                {block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInlineMarkdown(item)}</li>)}
+              </ol>
+            ) : (
+              <ul key={key}>
+                {block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInlineMarkdown(item)}</li>)}
+              </ul>
+            );
+          default:
+            return <p key={key}>{renderInlineMarkdown(block.text)}</p>;
+        }
+      })}
+    </>
+  );
+}
+
+type MarkdownBlock =
+  | { type: "heading"; level: number; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "paragraph"; text: string };
+
+function parseMarkdownBlocks(source: string): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  let paragraph: string[] = [];
+  let listItems: string[] = [];
+  let listOrdered = false;
+
+  const flushParagraph = () => {
+    if (paragraph.length > 0) {
+      blocks.push({ type: "paragraph", text: paragraph.join(" ") });
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (listItems.length > 0) {
+      blocks.push({ type: "list", ordered: listOrdered, items: listItems });
+      listItems = [];
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      blocks.push({ type: "heading", level: Math.max(2, heading[1].length), text: heading[2] });
+      continue;
+    }
+
+    const unorderedList = trimmed.match(/^[-*]\s+(.+)$/);
+    const orderedList = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (unorderedList || orderedList) {
+      flushParagraph();
+      const ordered = Boolean(orderedList);
+      if (listItems.length > 0 && ordered !== listOrdered) {
+        flushList();
+      }
+      listOrdered = ordered;
+      listItems.push((orderedList ?? unorderedList)![1]);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(trimmed);
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks.length > 0 ? blocks : [{ type: "paragraph", text: "No release notes were reported for this update." }];
+}
+
+function renderInlineMarkdown(source: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g;
+  let lastIndex = 0;
+  for (const match of source.matchAll(pattern)) {
+    const matchIndex = match.index ?? 0;
+    if (matchIndex > lastIndex) {
+      nodes.push(source.slice(lastIndex, matchIndex));
+    }
+    const token = match[0];
+    if (token.startsWith("`")) {
+      nodes.push(<code key={matchIndex}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith("**")) {
+      nodes.push(<strong key={matchIndex}>{token.slice(2, -2)}</strong>);
+    } else {
+      const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+      nodes.push(link ? <a key={matchIndex} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a> : token);
+    }
+    lastIndex = matchIndex + token.length;
+  }
+  if (lastIndex < source.length) {
+    nodes.push(source.slice(lastIndex));
+  }
+  return nodes;
 }
 
 function ProcessingRulesSection({

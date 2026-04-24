@@ -1077,6 +1077,7 @@ pre {
   align-items: center;
   width: fit-content;
   max-width: 100%;
+  overflow-x: auto;
   padding: 6px 10px;
   border-radius: var(--radius-md);
   background: #111827;
@@ -1085,24 +1086,94 @@ pre {
   font-size: 0.82rem;
   font-weight: 600;
   white-space: normal;
+  word-break: break-all;
 }
 
-.settings-summary-callout,
 .settings-warning-callout {
   align-items: flex-start;
   line-height: 1.45;
-}
-
-.settings-summary-callout span {
-  display: -webkit-box;
-  -webkit-line-clamp: 3;
-  -webkit-box-orient: vertical;
-  overflow: hidden;
-}
-
-.settings-warning-callout {
   background: color-mix(in srgb, var(--color-warning) 14%, var(--bg-panel-strong));
   border-color: color-mix(in srgb, var(--color-warning) 28%, transparent);
+}
+
+.settings-updates-actions {
+  display: flex;
+  justify-content: flex-end;
+  padding-top: 4px;
+}
+
+.changelog-modal-backdrop {
+  background: rgba(0, 0, 0, 0.52);
+}
+
+.changelog-modal {
+  width: min(720px, 100%);
+  display: grid;
+  gap: 18px;
+  background: var(--bg-panel-strong);
+}
+
+.changelog-modal-header,
+.changelog-modal-footer {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.changelog-modal-header h2 {
+  margin: 4px 0 0;
+}
+
+.changelog-modal-footer {
+  align-items: center;
+  justify-content: flex-end;
+  padding-top: 12px;
+  border-top: 1px solid var(--border);
+}
+
+.changelog-markdown {
+  display: grid;
+  gap: 12px;
+  line-height: 1.6;
+  color: var(--text);
+}
+
+.changelog-markdown h2,
+.changelog-markdown h3,
+.changelog-markdown h4,
+.changelog-markdown p,
+.changelog-markdown ul,
+.changelog-markdown ol {
+  margin: 0;
+}
+
+.changelog-markdown h2 {
+  font-size: 1.2rem;
+}
+
+.changelog-markdown h3,
+.changelog-markdown h4 {
+  font-size: 1rem;
+}
+
+.changelog-markdown ul,
+.changelog-markdown ol {
+  display: grid;
+  gap: 6px;
+  padding-left: 22px;
+}
+
+.changelog-markdown code {
+  padding: 2px 5px;
+  border-radius: 6px;
+  background: color-mix(in srgb, var(--bg-subtle) 52%, var(--bg-panel-strong));
+  font-size: 0.86em;
+}
+
+.changelog-markdown a {
+  color: var(--color-primary);
+  font-weight: 700;
 }
 
 @media (max-width: 640px) {
@@ -1117,6 +1188,10 @@ pre {
   }
 
   .settings-folder-row .button {
+    width: 100%;
+  }
+
+  .settings-updates-actions .button {
     width: 100%;
   }
 }

@@ -423,8 +423,8 @@ describe("Encodr UI shell", () => {
         body: {
           ...updateStatus(),
           latest_version: nextPatchVersion(CURRENT_VERSION),
-          update_available: true,
-          release_summary: "Runtime detection and update guidance improvements.",
+          update_available: false,
+          release_summary: "## Runtime detection\n\n- Update guidance improvements.\n- Safer `encodr update --apply` output.",
           breaking_changes_summary: "Restart after update if newly passed-through devices are not visible.",
         },
       },
@@ -444,7 +444,21 @@ describe("Encodr UI shell", () => {
     expect(screen.getAllByText(/runtime health/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/scratch path/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/encodr update --apply/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/update guidance improvements/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view changelog/i }));
+    expect(screen.getByRole("dialog", { name: /release notes/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /release notes/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /runtime detection/i })).toBeInTheDocument();
+    expect(screen.getByText(/update guidance improvements/i)).toBeInTheDocument();
     expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view changelog/i }));
+    await userEvent.click(screen.getByRole("presentation"));
+    expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
   });
 
   it("renders the redesigned library workspace and lets tabs switch cleanly", async () => {
