@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 
 import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { ErrorPanel } from "../../components/ErrorPanel";
-import { KeyValueList } from "../../components/KeyValueList";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
@@ -148,100 +148,101 @@ export function ConfigPage() {
       {updateRulesMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to save processing rules" message={updateRulesMutation.error.message} />
       ) : null}
-      <section className="dashboard-grid">
-        <SectionCard title="Library folders" subtitle="Choose the main folders you want Encodr to use.">
-          <div className="list-stack">
-            <div className="list-row">
-              <div>
-                <strong>Movies root</strong>
-                <p>{roots.movies_root ?? "Not selected yet"}</p>
+      <section className="settings-overview-grid">
+        <div className="settings-overview-item">
+          <SectionCard title="Library folders" subtitle="Choose the main folders you want Encodr to use.">
+            <div className="settings-folder-list">
+              <div className="settings-folder-row">
+                <div>
+                  <strong>Movies root</strong>
+                  <p>{roots.movies_root ?? "Not selected yet"}</p>
+                </div>
+                <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("movies")}>
+                  Choose folder
+                </button>
               </div>
-              <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("movies")}>
-                Choose folder
-              </button>
-            </div>
-            <div className="list-row">
-              <div>
-                <strong>TV root</strong>
-                <p>{roots.tv_root ?? "Not selected yet"}</p>
+              <div className="settings-folder-row">
+                <div>
+                  <strong>TV root</strong>
+                  <p>{roots.tv_root ?? "Not selected yet"}</p>
+                </div>
+                <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("tv")}>
+                  Choose folder
+                </button>
               </div>
-              <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("tv")}>
-                Choose folder
-              </button>
+              <div className="settings-folder-row settings-folder-row-readonly">
+                <div>
+                  <strong>Media root</strong>
+                  <p>{roots.media_root}</p>
+                </div>
+              </div>
             </div>
-            <div className="info-strip">
-              <strong>Media root</strong>
-              <span>{roots.media_root}</span>
-            </div>
-          </div>
-        </SectionCard>
+          </SectionCard>
+        </div>
 
-        <SectionCard title="Storage" subtitle="Check your media and scratch paths before you run jobs.">
-          <div className="card-stack">
-            <div className="info-strip">
-              <strong>Host runtime</strong>
-              <span>
-                Runtime health here only reflects the Encodr host itself: storage, scratch, and core runtime reachability. Worker backends are configured per worker on the Workers page.
-              </span>
+        <div className="settings-overview-item settings-overview-item-storage">
+          <SectionCard title="Storage" subtitle="Check your media and scratch paths before you run jobs.">
+            <div className="settings-storage-stack">
+              <div className="info-strip settings-storage-callout">
+                <strong>Host runtime</strong>
+                <span>
+                  Runtime health here only reflects the Encodr host itself: storage, scratch, and core runtime reachability. Worker backends are configured per worker on the Workers page.
+                </span>
+              </div>
+              <div className="settings-data-grid settings-data-grid-storage">
+                <SettingsDataItem label="Runtime health" value={<StatusBadge value={runtime.status} />} />
+                <SettingsDataItem label="Environment" value={runtime.environment} />
+                <SettingsDataItem label="Version" value={runtime.version} />
+                <SettingsDataItem label="Media root" value={storage.standard_media_root} />
+                <SettingsDataItem label="Media status" value={<StatusBadge value={storage.media_mounts[0]?.status ?? "unknown"} />} />
+                <SettingsDataItem label="Scratch path" value={runtime.scratch_dir} />
+                <SettingsDataItem label="Scratch status" value={<StatusBadge value={storage.scratch.status} />} />
+                <SettingsDataItem label="Data path" value={runtime.data_dir} />
+              </div>
+              {storage.warnings.length > 0 ? (
+                <div className="settings-warning-stack">
+                  {storage.warnings.map((warning) => (
+                    <div key={warning} className="info-strip info-strip-warning settings-warning-callout" role="note">
+                      <span>{warning}</span>
+                    </div>
+                  ))}
+                </div>
+              ) : null}
             </div>
-            <KeyValueList
-              items={[
-                { label: "Runtime health", value: <StatusBadge value={runtime.status} /> },
-                { label: "Environment", value: runtime.environment },
-                { label: "Version", value: runtime.version },
-                { label: "Media root", value: storage.standard_media_root },
-                { label: "Media status", value: <StatusBadge value={storage.media_mounts[0]?.status ?? "unknown"} /> },
-                { label: "Scratch status", value: <StatusBadge value={storage.scratch.status} /> },
-                { label: "Scratch path", value: runtime.scratch_dir },
-                { label: "Data path", value: runtime.data_dir },
-              ]}
-            />
-            {storage.warnings.length > 0 ? (
-              <div className="card-stack">
-                {storage.warnings.map((warning) => (
-                  <div key={warning} className="info-strip" role="note">
-                    <span>{warning}</span>
-                  </div>
-                ))}
+          </SectionCard>
+        </div>
+
+        <div className="settings-overview-item">
+          <SectionCard title="Updates" subtitle="Check what is installed and what to run from the root console.">
+            <div className="settings-updates-stack">
+              <div className="info-strip">
+                <StatusBadge value={updateStatus.update_available ? "degraded" : "healthy"} />
+                <span>
+                  Current {updateStatus.current_version}
+                  {updateStatus.latest_version ? ` • Latest ${updateStatus.latest_version}` : ""}
+                </span>
               </div>
-            ) : null}
-          </div>
-        </SectionCard>
-
-      </section>
-
-      <section className="dashboard-grid">
-        <SectionCard title="Updates" subtitle="Check what is installed and what to run from the root console.">
-          <div className="card-stack">
-            <div className="info-strip">
-              <StatusBadge value={updateStatus.update_available ? "degraded" : "healthy"} />
-              <span>
-                Current {updateStatus.current_version}
-                {updateStatus.latest_version ? ` • Latest ${updateStatus.latest_version}` : ""}
-              </span>
+              <div className="settings-data-grid settings-data-grid-updates">
+                <SettingsDataItem label="Update available" value={updateStatus.update_available ? "Yes" : "No"} />
+                <SettingsDataItem label="Release" value={updateStatus.release_name ?? "Not reported"} />
+                <SettingsDataItem label="Check status" value={updateStatus.status} />
+                <SettingsDataItem label="Command" value={<code className="settings-command-code">encodr update --apply</code>} />
+              </div>
+              {updateStatus.release_summary ? (
+                <div className="info-strip settings-summary-callout" role="note">
+                  <strong>Summary</strong>
+                  <span>{updateStatus.release_summary}</span>
+                </div>
+              ) : null}
+              {updateStatus.breaking_changes_summary ? (
+                <div className="info-strip info-strip-warning settings-warning-callout" role="note">
+                  <strong>Breaking changes</strong>
+                  <span>{updateStatus.breaking_changes_summary}</span>
+                </div>
+              ) : null}
             </div>
-            <KeyValueList
-              items={[
-                { label: "Update available", value: updateStatus.update_available ? "Yes" : "No" },
-                { label: "Release", value: updateStatus.release_name ?? "Not reported" },
-                { label: "Check status", value: updateStatus.status },
-                { label: "Command", value: <code>encodr update --apply</code> },
-              ]}
-            />
-            {updateStatus.release_summary ? (
-              <div className="info-strip" role="note">
-                <strong>Summary</strong>
-                <span>{updateStatus.release_summary}</span>
-              </div>
-            ) : null}
-            {updateStatus.breaking_changes_summary ? (
-              <div className="info-strip info-strip-warning" role="note">
-                <strong>Breaking changes</strong>
-                <span>{updateStatus.breaking_changes_summary}</span>
-              </div>
-            ) : null}
-          </div>
-        </SectionCard>
+          </SectionCard>
+        </div>
       </section>
 
       <ProcessingRulesSection
@@ -294,6 +295,15 @@ export function ConfigPage() {
           });
         }}
       />
+    </div>
+  );
+}
+
+function SettingsDataItem({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="settings-data-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }

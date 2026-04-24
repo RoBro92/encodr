@@ -946,6 +946,27 @@ pre {
   grid-template-columns: repeat(2, minmax(0, 1fr));
 }
 
+.settings-overview-grid {
+  display: grid;
+  align-items: start;
+  gap: var(--space-4);
+  grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+}
+
+.settings-overview-item {
+  align-self: start;
+}
+
+.settings-overview-item > .section-card {
+  align-content: start;
+}
+
+@media (min-width: 1120px) {
+  .settings-overview-grid {
+    grid-template-columns: minmax(260px, 0.95fr) minmax(420px, 1.35fr) minmax(280px, 1fr);
+  }
+}
+
 .section-card {
   border-radius: var(--radius-xl);
   padding: var(--space-4);
@@ -980,12 +1001,128 @@ pre {
 
 .card-stack,
 .list-stack,
+.settings-folder-list,
+.settings-storage-stack,
+.settings-updates-stack,
+.settings-warning-stack,
 .filter-grid,
 .form-grid,
 .badge-list,
 .metric-grid {
   display: grid;
   gap: var(--space-2);
+}
+
+.settings-folder-list,
+.settings-storage-stack,
+.settings-updates-stack {
+  gap: 12px;
+}
+
+.settings-folder-row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 14px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+}
+
+.settings-folder-row-readonly {
+  background: color-mix(in srgb, var(--bg-subtle) 46%, var(--bg-panel-strong));
+}
+
+.settings-folder-row p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-storage-callout {
+  align-items: flex-start;
+}
+
+.settings-data-grid {
+  display: grid;
+  gap: 16px 24px;
+}
+
+.settings-data-grid-storage,
+.settings-data-grid-updates {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.settings-data-item {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 5px;
+}
+
+.settings-data-item > span {
+  color: var(--text-subtle);
+  font-size: 0.82rem;
+}
+
+.settings-data-item > strong {
+  min-width: 0;
+  color: var(--text);
+  font-size: 0.96rem;
+  font-weight: 700;
+  line-height: 1.35;
+  overflow-wrap: anywhere;
+}
+
+.settings-command-code {
+  display: inline-flex;
+  align-items: center;
+  width: fit-content;
+  max-width: 100%;
+  padding: 6px 10px;
+  border-radius: var(--radius-md);
+  background: #111827;
+  color: #f9fafb;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.82rem;
+  font-weight: 600;
+  white-space: normal;
+}
+
+.settings-summary-callout,
+.settings-warning-callout {
+  align-items: flex-start;
+  line-height: 1.45;
+}
+
+.settings-summary-callout span {
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+.settings-warning-callout {
+  background: color-mix(in srgb, var(--color-warning) 14%, var(--bg-panel-strong));
+  border-color: color-mix(in srgb, var(--color-warning) 28%, transparent);
+}
+
+@media (max-width: 640px) {
+  .settings-data-grid-storage,
+  .settings-data-grid-updates {
+    grid-template-columns: 1fr;
+  }
+
+  .settings-folder-row {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .settings-folder-row .button {
+    width: 100%;
+  }
 }
 
 .badge-list,
