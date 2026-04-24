@@ -448,33 +448,35 @@ export function WorkersPage() {
                   <SectionCard title="Local backend diagnostics" subtitle="Runtime truth for the current host worker.">
                     <div className="card-stack">
                       <WorkerDetailDenseGrid
+                        compact
                         items={[
-                          { label: "FFmpeg", value: localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffmpeg.status} /> : "Unknown" },
-                          { label: "FFprobe", value: localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffprobe.status} /> : "Unknown" },
+                          {
+                            label: "Dependencies",
+                            value: (
+                              <span className="worker-inline-badges">
+                                {localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffmpeg.status} /> : <span>FFmpeg unknown</span>}
+                                {localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffprobe.status} /> : <span>FFprobe unknown</span>}
+                              </span>
+                            ),
+                            span: "full",
+                          },
                           { label: "Eligibility", value: localWorkerStatus?.eligibility_summary ?? "Not reported" },
                           {
                             label: "Configured backend health",
                             value: configuredBackendProbe ? <StatusBadge value={configuredBackendProbe.status} /> : "No probe available",
-                          },
-                          {
-                            label: "Configured backend reason",
-                            value: configuredBackendProbe?.reason_unavailable ?? configuredBackendProbe?.message ?? "No specific issue reported",
-                            span: "full",
                           },
                         ]}
                       />
                       {selectedHardwareBackendProbe ? (
                         <CapabilityStrip
                           title="Selected backend diagnostic"
-                          description={`${formatBackendLabel(detail.preferred_backend)} is selected as this worker's primary backend.`}
+                          description={formatSelectedBackendDiagnosticMessage(
+                            formatBackendLabel(detail.preferred_backend),
+                            selectedHardwareBackendProbe.status,
+                            selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
+                          )}
                           tone={selectedHardwareBackendProbe.status === "failed" ? "danger" : "default"}
-                          items={[
-                            {
-                              label: formatBackendLabel(selectedHardwareBackendProbe.backend),
-                              status: selectedHardwareBackendProbe.status,
-                              message: selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
-                            },
-                          ]}
+                          status={selectedHardwareBackendProbe.status}
                         />
                       ) : null}
                       {selectedRuntimeDevices.length > 0 ? (
@@ -521,7 +523,7 @@ export function WorkersPage() {
                   </SectionCard>
                 )}
 
-                <SectionCard title="Storage and path access">
+                <SectionCard title="Storage and path access" className="worker-storage-card">
                   <WorkerDetailDenseGrid
                     items={[
                       {
@@ -552,7 +554,7 @@ export function WorkersPage() {
                         ))}
                       </div>
                     ) : (
-                      <div className="info-strip worker-detail-grid-span" role="note">
+                      <div className="info-strip worker-detail-grid-span worker-storage-banner" role="note">
                         <strong>Direct shared path mode</strong>
                         <span>No explicit mappings are configured. This worker will rely on the same visible media paths unless you add mappings.</span>
                       </div>
@@ -1002,12 +1004,14 @@ function WorkerDetailInfoGrid({
 function WorkerDetailDenseGrid({
   items,
   children,
+  compact = false,
 }: {
   items: Array<{ label: string; value: ReactNode; span?: "full" }>;
   children?: ReactNode;
+  compact?: boolean;
 }) {
   return (
-    <div className="worker-detail-dense-grid">
+    <div className={`worker-detail-dense-grid${compact ? " worker-detail-dense-grid-compact" : ""}`}>
       {items.map((item) => (
         <div
           key={item.label}
@@ -1102,17 +1106,19 @@ function PathMappingsEditor({
 function CapabilityStrip({
   title,
   description = "Backend diagnostics are scoped to the worker's selected primary backend.",
-  items,
   tone = "default",
+  status,
+  items = [],
 }: {
   title: string;
   description?: string;
-  items: Array<{ label: string; status: string; message: string }>;
   tone?: "default" | "danger";
+  status?: string;
+  items?: Array<{ label: string; status: string; message: string }>;
 }) {
   if (items.length === 0) {
     return (
-      <div className="info-strip" role="note">
+      <div className={`capability-strip capability-strip-${tone}`} role="note">
         <strong>{title}</strong>
         <span>No diagnostic payload is available for the selected backend yet.</span>
       </div>
@@ -1122,19 +1128,11 @@ function CapabilityStrip({
   return (
     <div className={`capability-strip capability-strip-${tone}`}>
       <div className="capability-strip-copy">
-        <strong>{title}</strong>
-        <span>{description}</span>
-      </div>
-      <div className="capability-strip-list">
-        {items.map((item) => (
-          <div key={item.label} className="capability-strip-row">
-            <div>
-              <strong>{item.label}</strong>
-              <p>{item.message}</p>
-            </div>
-            <StatusBadge value={item.status} />
-          </div>
-        ))}
+        <div className="capability-strip-heading">
+          <strong>{title}</strong>
+          {status ? <StatusBadge value={status} /> : null}
+        </div>
+        <p>{description}</p>
       </div>
     </div>
   );
@@ -1278,6 +1276,14 @@ function formatGpuMetric(gpu: Record<string, unknown> | null | undefined) {
     return `${vendor} ${temperature.toFixed(1)}°C`;
   }
   return typeof gpu.message === "string" ? gpu.message : vendor;
+}
+
+function formatSelectedBackendDiagnosticMessage(backendLabel: string, status: string, reason: string | null | undefined) {
+  const reasonText = reason ? trimSentencePunctuation(reason) : "No specific issue reported";
+  if (status === "failed") {
+    return `${backendLabel} is selected as the primary backend, but failed to initialize. Reason: ${reasonText}.`;
+  }
+  return `${backendLabel} is selected as the primary backend. Reason: ${reasonText}.`;
 }
 
 function isUnavailableMetric(value: string) {

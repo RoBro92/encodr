@@ -1691,50 +1691,43 @@ pre {
 }
 
 .capability-strip-danger {
-  padding: 16px;
+  padding: 10px 12px;
   border: 0;
   border-left: 4px solid #ef4444;
   border-radius: 0 var(--radius-md) var(--radius-md) 0;
   background: #fef2f2;
 }
 
-.capability-strip-copy,
-.capability-strip-row {
+.capability-strip-copy {
   display: grid;
   gap: 5px;
 }
 
-.capability-strip-copy strong,
-.capability-strip-row strong {
+.capability-strip-heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.capability-strip-copy strong {
   color: var(--text);
 }
 
 .capability-strip-copy span,
-.capability-strip-row p {
+.capability-strip-copy p {
   margin: 0;
   color: var(--text-muted);
   line-height: 1.45;
 }
 
-.capability-strip-danger .capability-strip-copy strong,
-.capability-strip-danger .capability-strip-row strong {
+.capability-strip-danger .capability-strip-copy strong {
   color: #7f1d1d;
 }
 
 .capability-strip-danger .capability-strip-copy span,
-.capability-strip-danger .capability-strip-row p {
+.capability-strip-danger .capability-strip-copy p {
   color: #4b5563;
-}
-
-.capability-strip-list {
-  display: grid;
-  gap: 10px;
-}
-
-.capability-strip-row {
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: start;
-  gap: 12px;
 }
 
 .system-alert-banner {
@@ -2659,6 +2652,20 @@ pre {
   align-content: start;
 }
 
+.worker-storage-card {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+}
+
+.worker-storage-card .worker-detail-dense-grid {
+  flex: 1;
+}
+
+.worker-storage-banner {
+  margin-top: auto;
+}
+
 @media (min-width: 920px) {
   .worker-detail-mid-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2673,6 +2680,10 @@ pre {
 
 .worker-detail-dense-grid {
   grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.worker-detail-dense-grid-compact {
+  gap: 12px 20px;
 }
 
 .worker-detail-dense-item,
@@ -2708,6 +2719,13 @@ pre {
 
 .worker-detail-dense-value .badge-row {
   gap: 6px;
+}
+
+.worker-inline-badges {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 
 .worker-telemetry-grid {
