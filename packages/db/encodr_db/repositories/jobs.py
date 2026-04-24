@@ -443,6 +443,7 @@ class JobRepository:
                     [
                         JobStatus.COMPLETED,
                         JobStatus.FAILED,
+                        JobStatus.INTERRUPTED,
                         JobStatus.MANUAL_REVIEW,
                         JobStatus.SKIPPED,
                     ]
