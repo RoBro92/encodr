@@ -1270,6 +1270,7 @@ describe("Encodr UI shell", () => {
   });
 
   it("moves system warnings to the top when runtime or storage is degraded", async () => {
+    const mediaPathWarning = "Media path is empty. If you expected a mounted library, check the host or LXC bind mount.";
     mockFetchRoutes([
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
       {
@@ -1277,7 +1278,7 @@ describe("Encodr UI shell", () => {
         path: "/api/system/runtime",
         body: {
           ...runtimeStatus(),
-          warnings: ["Database lag detected"],
+          warnings: ["Database lag detected", mediaPathWarning],
         },
       },
       {
@@ -1285,7 +1286,7 @@ describe("Encodr UI shell", () => {
         path: "/api/system/storage",
         body: {
           ...storageStatus(),
-          warnings: ["Scratch workspace is nearly full"],
+          warnings: ["Scratch workspace is nearly full", mediaPathWarning],
         },
       },
     ]);
@@ -1293,11 +1294,13 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/system", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
-    const warningsHeading = screen.getByRole("heading", { name: /^warnings$/i });
-    expect(warningsHeading).toBeInTheDocument();
-    const warningCard = warningsHeading.closest(".section-card");
-    expect(warningCard).toHaveTextContent(/database lag detected/i);
-    expect(warningCard).toHaveTextContent(/scratch workspace is nearly full/i);
+    const alerts = screen.getAllByRole("alert");
+    expect(alerts.map((alert) => alert.textContent)).toEqual([
+      expect.stringMatching(/database lag detected/i),
+      expect.stringMatching(/media path is empty/i),
+      expect.stringMatching(/scratch workspace is nearly full/i),
+    ]);
+    expect(screen.getAllByText(/media path is empty/i)).toHaveLength(1);
   });
 
   it("keeps worker-specific backend diagnostics off the system page", async () => {
@@ -1310,6 +1313,18 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/system", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
+    const main = screen.getByRole("main");
+    expect(within(main).queryByRole("heading", { name: /^worker$/i })).not.toBeInTheDocument();
+    expect(within(main).queryByText(/^pending jobs$/i)).not.toBeInTheDocument();
+    expect(within(main).queryByText(/^queue$/i)).not.toBeInTheDocument();
+    expect(within(main).queryByRole("button", { name: /run worker once/i })).not.toBeInTheDocument();
+    expect(within(main).queryByRole("button", { name: /run self-test/i })).not.toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /^runtime$/i })).toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /^storage$/i })).toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /service health/i })).toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /compute health/i })).toBeInTheDocument();
+    expect(within(main).queryByText(/scratch path/i)).not.toBeInTheDocument();
+    expect(within(main).queryByText(/data path/i)).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /execution backends/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /runtime devices/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/current execution path/i)).not.toBeInTheDocument();
