@@ -1270,6 +1270,21 @@ describe("Encodr UI shell", () => {
     expect(warningCard).toHaveTextContent(/scratch workspace is nearly full/i);
   });
 
+  it("keeps worker-specific backend diagnostics off the system page", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/system", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /execution backends/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /runtime devices/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/current execution path/i)).not.toBeInTheDocument();
+  });
+
   it("marks a remote worker without a heartbeat as not configured", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/worker/status", body: workerStatus({ configuration_state: "local_not_configured" }) },
@@ -1371,6 +1386,35 @@ describe("Encodr UI shell", () => {
     expect(screen.getAllByText(/nvidia/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("heading", { name: /recent jobs/i })).toBeInTheDocument();
     expect(screen.getByText(/previous film \(2024\)\.mkv/i)).toBeInTheDocument();
+  });
+
+  it("shows only the selected primary backend diagnostics on worker detail", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: {
+          ...workerInventory(),
+          preferred_backend: "prefer_nvidia_gpu",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [{ ...workerInventory(), preferred_backend: "prefer_nvidia_gpu" }],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByText(/selected backend diagnostic/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/no nvidia runtime device is visible/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/intel driver missing/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/amd render device is not visible/i)).not.toBeInTheDocument();
   });
 });
 

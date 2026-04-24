@@ -150,11 +150,6 @@ export function SystemPage() {
                 <HealthMetric label="User count" value={runtime.user_count == null ? "Not available" : String(runtime.user_count)} />
                 <HealthMetric label="Scratch path" value={runtime.scratch_dir} />
                 <HealthMetric label="Data path" value={runtime.data_dir} />
-                <HealthMetric
-                  label="Current execution path"
-                  value={worker.current_backend ? formatBackendLabel(worker.current_backend) : "Idle"}
-                />
-                <HealthMetric label="Preferred backend" value={formatBackendLabel(runtime.execution_preferences.preferred_backend)} />
               </div>
               {worker.current_job_id || worker.telemetry ? (
                 <div className="card-stack">
@@ -183,60 +178,6 @@ export function SystemPage() {
               </div>
             </div>
           ) : null}
-        </SectionCard>
-      </section>
-
-      <section className="dashboard-grid">
-        <SectionCard title="Execution backends" subtitle="Detected CPU and hardware execution paths.">
-          <div className="status-grid">
-            {runtime.execution_backends.map((backend) => (
-              <article
-                key={backend.backend}
-                className={`status-card ${
-                  backend.status === "degraded" || backend.status === "failed" ? "status-card-alert" : ""
-                }`}
-              >
-                <div className="badge-row">
-                  <StatusBadge value={backend.usable_by_ffmpeg ? "healthy" : backend.detected ? "degraded" : "failed"} />
-                  <strong>{formatBackendLabel(backend.backend)}</strong>
-                </div>
-                <p className="muted-copy">{backend.message}</p>
-                <div className="metric-grid metric-grid-compact">
-                  <HealthMetric label="Detected" value={formatRelativeBoolean(backend.detected)} />
-                  <HealthMetric label="Usable by FFmpeg" value={formatRelativeBoolean(backend.usable_by_ffmpeg)} />
-                  <HealthMetric label="Verified path" value={formatRelativeBoolean(backend.ffmpeg_path_verified)} />
-                </div>
-                {backend.recommended_usage ? (
-                  <div className="info-strip" role="note">
-                    <span>{backend.recommended_usage}</span>
-                  </div>
-                ) : null}
-              </article>
-            ))}
-          </div>
-        </SectionCard>
-
-        <SectionCard title="Runtime devices" subtitle="Visible device nodes and passthrough state inside this runtime.">
-          <div className="list-stack">
-            {runtime.runtime_device_paths.length > 0 ? (
-              runtime.runtime_device_paths.map((device) => (
-                <div key={device.path} className="list-row">
-                  <div>
-                    <strong>{device.path}</strong>
-                    <p>
-                      {device.vendor_name ?? "Unknown vendor"}{device.vendor_id ? ` • ${device.vendor_id}` : ""}
-                    </p>
-                    <p>{device.message}</p>
-                  </div>
-                  <StatusBadge value={device.status} />
-                </div>
-              ))
-            ) : (
-              <div className="info-strip" role="note">
-                <span>No GPU device nodes are visible in this runtime.</span>
-              </div>
-            )}
-          </div>
         </SectionCard>
       </section>
 
@@ -307,29 +248,6 @@ export function SystemPage() {
       ) : null}
     </div>
   );
-}
-
-function formatBackendLabel(value: string): string {
-  switch (value) {
-    case "cpu_only":
-      return "CPU only";
-    case "prefer_intel_igpu":
-      return "Prefer Intel iGPU";
-    case "prefer_nvidia_gpu":
-      return "Prefer NVIDIA";
-    case "prefer_amd_gpu":
-      return "Prefer AMD";
-    case "cpu":
-      return "CPU";
-    case "intel_igpu":
-      return "Intel iGPU";
-    case "nvidia_gpu":
-      return "NVIDIA GPU";
-    case "amd_gpu":
-      return "AMD GPU";
-    default:
-      return value.replace(/_/g, " ");
-  }
 }
 
 function TelemetryRow({ telemetry }: { telemetry: Record<string, unknown> }) {

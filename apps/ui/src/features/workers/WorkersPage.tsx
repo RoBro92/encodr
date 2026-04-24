@@ -134,12 +134,13 @@ export function WorkersPage() {
     () =>
       (workerStatus?.hardware_probes ?? [])
         .filter((item) => item.backend !== "cpu")
+        .filter((item) => item.preference_key === localDraft.preferred_backend)
         .map((item) => ({
           backend: item.backend,
           usable: item.usable_by_ffmpeg,
           message: item.message,
         })),
-    [workerStatus?.hardware_probes],
+    [localDraft.preferred_backend, workerStatus?.hardware_probes],
   );
 
   useEffect(() => {
@@ -187,10 +188,13 @@ export function WorkersPage() {
     detailCurrentBackend === "cpu",
   );
   const localBackendProbes = localWorkerStatus?.hardware_probes ?? [];
-  const localRuntimeDevices = localWorkerStatus?.runtime_device_paths ?? [];
   const configuredBackendProbe = detail?.worker_type === "local"
     ? localBackendProbes.find((item) => item.preference_key === detail.preferred_backend)
     : null;
+  const selectedHardwareBackendProbe = configuredBackendProbe && configuredBackendProbe.backend !== "cpu"
+    ? configuredBackendProbe
+    : null;
+  const selectedRuntimeDevices = selectedHardwareBackendProbe?.device_paths ?? [];
 
   return (
     <div className="page-stack">
@@ -435,25 +439,35 @@ export function WorkersPage() {
                         },
                       ]}
                     />
-                    <CapabilityStrip
-                      title="Validated execution backends"
-                      items={localBackendProbes.map((item) => ({
-                        label: formatBackendLabel(item.backend),
-                        status: item.status,
-                        message: item.reason_unavailable ?? item.message,
-                      }))}
-                    />
-                    <div className="list-stack">
-                      {localRuntimeDevices.map((device) => (
-                        <div key={device.path} className="list-row">
-                          <div>
-                            <strong>{device.path}</strong>
-                            <p>{device.message}</p>
+                    {selectedHardwareBackendProbe ? (
+                      <CapabilityStrip
+                        title="Selected backend diagnostic"
+                        description={`${formatBackendLabel(detail.preferred_backend)} is selected as this worker's primary backend.`}
+                        items={[
+                          {
+                            label: formatBackendLabel(selectedHardwareBackendProbe.backend),
+                            status: selectedHardwareBackendProbe.status,
+                            message: selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
+                          },
+                        ]}
+                      />
+                    ) : null}
+                    {selectedRuntimeDevices.length > 0 ? (
+                      <div className="list-stack">
+                        {selectedRuntimeDevices.map((device) => (
+                          <div key={device.path} className="list-row">
+                            <div>
+                              <strong>{device.path}</strong>
+                              <p>
+                                {device.vendor_name ?? "Unknown vendor"}{device.vendor_id ? ` • ${device.vendor_id}` : ""}
+                              </p>
+                              <p>{device.message}</p>
+                            </div>
+                            <StatusBadge value={device.status} />
                           </div>
-                          <StatusBadge value={device.status} />
-                        </div>
-                      ))}
-                    </div>
+                        ))}
+                      </div>
+                    ) : null}
                   </div>
                 </SectionCard>
               ) : (
@@ -467,10 +481,8 @@ export function WorkersPage() {
                           : "Not reported",
                       },
                       {
-                        label: "Hardware hints",
-                        value: detail.capability_summary.hardware_hints.length > 0
-                          ? detail.capability_summary.hardware_hints.join(" • ")
-                          : "Not reported",
+                        label: "Selected hardware",
+                        value: formatSelectedHardwareHint(detail.capability_summary.hardware_hints, detail.preferred_backend),
                       },
                       {
                         label: "Recommended concurrency",
@@ -618,14 +630,17 @@ export function WorkersPage() {
                   recommendationReason="Recommended from the detected local runtime capabilities."
                   showPathMappings={false}
                 />
-                <CapabilityStrip
-                  title="Detected local backends"
-                  items={localCapabilities.map((item) => ({
-                    label: formatBackendLabel(item.backend),
-                    status: item.usable ? "healthy" : "degraded",
-                    message: item.message,
-                  }))}
-                />
+                {localDraft.preferred_backend !== "cpu_only" ? (
+                  <CapabilityStrip
+                    title="Selected local backend"
+                    description={`${formatBackendLabel(localDraft.preferred_backend)} is selected as the primary backend for this worker.`}
+                    items={localCapabilities.map((item) => ({
+                      label: formatBackendLabel(item.backend),
+                      status: item.usable ? "healthy" : "degraded",
+                      message: item.message,
+                    }))}
+                  />
+                ) : null}
                 <div className="section-card-actions">
                   <button className="button button-secondary button-small" type="button" onClick={() => setAddWorkerMode("choose")}>
                     Back
@@ -995,16 +1010,18 @@ function PathMappingsEditor({
 
 function CapabilityStrip({
   title,
+  description = "Backend diagnostics are scoped to the worker's selected primary backend.",
   items,
 }: {
   title: string;
+  description?: string;
   items: Array<{ label: string; status: string; message: string }>;
 }) {
   if (items.length === 0) {
     return (
       <div className="info-strip" role="note">
         <strong>{title}</strong>
-        <span>CPU execution is available. No hardware backend is currently usable.</span>
+        <span>No diagnostic payload is available for the selected backend yet.</span>
       </div>
     );
   }
@@ -1013,7 +1030,7 @@ function CapabilityStrip({
     <div className="card-stack">
       <div className="info-strip">
         <strong>{title}</strong>
-        <span>Encodr only offers the backends that the current runtime can actually validate.</span>
+        <span>{description}</span>
       </div>
       <div className="list-stack">
         {items.map((item) => (
@@ -1197,12 +1214,6 @@ function buildWorkerPrimaryIssues(detail: WorkerInventoryDetail, localWorkerStat
     if (preferredProbe && !preferredProbe.usable_by_ffmpeg) {
       issues.add(preferredProbe.reason_unavailable ?? preferredProbe.message);
     }
-    const missingRenderNode = localWorkerStatus.runtime_device_paths.find(
-      (item) => item.path.includes("/dev/dri/render") && item.status !== "healthy",
-    );
-    if (missingRenderNode) {
-      issues.add(missingRenderNode.message);
-    }
   }
   return [...issues];
 }
@@ -1231,4 +1242,30 @@ function formatBackendLabel(value: string | null | undefined) {
     amd_gpu: "AMD",
     prefer_amd_gpu: "AMD",
   }[value] ?? titleCase(value.replace(/_/g, " "));
+}
+
+function formatSelectedHardwareHint(hardwareHints: string[], preferredBackend: string | null | undefined) {
+  if (!preferredBackend || preferredBackend === "cpu_only" || preferredBackend === "cpu") {
+    return "CPU selected";
+  }
+  const selectedBackend = backendKeyForPreference(preferredBackend);
+  if (!selectedBackend) {
+    return formatBackendLabel(preferredBackend);
+  }
+  return hardwareHints.includes(selectedBackend)
+    ? formatBackendLabel(selectedBackend)
+    : `${formatBackendLabel(preferredBackend)} not reported`;
+}
+
+function backendKeyForPreference(value: string) {
+  switch (value) {
+    case "prefer_intel_igpu":
+      return "intel_igpu";
+    case "prefer_nvidia_gpu":
+      return "nvidia_gpu";
+    case "prefer_amd_gpu":
+      return "amd_gpu";
+    default:
+      return undefined;
+  }
 }
