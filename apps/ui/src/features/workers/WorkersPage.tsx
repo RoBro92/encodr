@@ -427,18 +427,18 @@ export function WorkersPage() {
                 <WorkerDetailInfoGrid
                   items={[
                     { label: "Worker key", value: detail.worker_key },
+                    { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
                     { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
                     { label: "Actual backend", value: formatBackendLabel(detailCurrentBackend) },
                     { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
+                    { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
                     { label: "Current job", value: detail.current_job_id ?? detail.runtime_summary?.current_job_id ?? "Idle" },
                     {
                       label: "Progress",
                       value: formatWorkerProgress(detail.current_progress_percent ?? detail.runtime_summary?.current_progress_percent, detail.current_stage ?? detail.runtime_summary?.current_stage),
                     },
-                    { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
-                    { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
-                    { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
                     { label: "Last seen", value: formatDateTime(detail.last_seen_at) },
+                    { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
                   ]}
                 />
               </SectionCard>

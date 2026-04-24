@@ -2618,6 +2618,9 @@ pre {
 .worker-detail-metric-grid,
 .worker-detail-info-grid {
   display: grid;
+}
+
+.worker-detail-metric-grid {
   gap: 18px 24px;
 }
 
@@ -2632,12 +2635,13 @@ pre {
 }
 
 .worker-detail-info-grid {
+  gap: 14px 20px;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
 }
 
 @media (min-width: 920px) {
   .worker-detail-info-grid {
-    grid-template-columns: repeat(3, minmax(0, 1fr));
+    grid-template-columns: repeat(5, minmax(0, 1fr));
   }
 }
 
