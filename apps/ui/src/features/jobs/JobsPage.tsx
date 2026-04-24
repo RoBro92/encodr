@@ -160,60 +160,61 @@ export function JobsPage() {
         <ErrorPanel title="Worker run failed" message={runOnceMutation.error.message} />
       ) : null}
 
-      <section className="metric-grid metric-grid-compact">
-        <div className="metric-panel">
+      <section className="jobs-metrics-grid" aria-label="Jobs metrics">
+        <div className="jobs-metric">
           <span className="metric-label">Visible jobs</span>
           <strong>{metrics.total}</strong>
         </div>
-        <div className="metric-panel">
+        <div className="jobs-metric">
           <span className="metric-label">Running now</span>
           <strong>{metrics.running}</strong>
         </div>
-        <div className="metric-panel">
+        <div className="jobs-metric">
           <span className="metric-label">Needs attention</span>
           <strong>{metrics.attention}</strong>
         </div>
-        <div className="metric-panel">
+        <div className="jobs-metric">
           <span className="metric-label">Completed</span>
           <strong>{metrics.completed}</strong>
         </div>
       </section>
 
       <SectionCard title="Queue controls" subtitle="Filter the queue or create a job from a tracked file.">
-        <div className="jobs-toolbar">
-          <label className="field">
-            <span>Status</span>
-            <select aria-label="Status" value={status} onChange={(event) => setStatus(event.target.value)}>
-              {JOB_STATUS_OPTIONS.map((option) => (
-                <option key={option.value || "any"} value={option.value}>
-                  {option.label}
-                </option>
-              ))}
-            </select>
-          </label>
+        <div className="jobs-controls-stack">
+          <div className="jobs-filter-grid">
+            <label className="field">
+              <span>Status</span>
+              <select aria-label="Status" value={status} onChange={(event) => setStatus(event.target.value)}>
+                {JOB_STATUS_OPTIONS.map((option) => (
+                  <option key={option.value || "any"} value={option.value}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
 
-          <TrackedFilePicker
-            label="Tracked file"
-            items={files}
-            selectedId={fileId}
-            query={fileSearch}
-            placeholder="Filter by tracked file"
-            onQueryChange={(value) => {
-              setFileSearch(value);
-              if (!value) {
+            <TrackedFilePicker
+              label="Tracked file"
+              items={files}
+              selectedId={fileId}
+              query={fileSearch}
+              placeholder="Filter by tracked file"
+              onQueryChange={(value) => {
+                setFileSearch(value);
+                if (!value) {
+                  setFileId("");
+                }
+              }}
+              onSelectedIdChange={(value, label) => {
+                setFileId(value);
+                setFileSearch(label);
+              }}
+              onClear={() => {
                 setFileId("");
-              }
-            }}
-            onSelectedIdChange={(value, label) => {
-              setFileId(value);
-              setFileSearch(label);
-            }}
-            onClear={() => {
-              setFileId("");
-              setFileSearch("");
-            }}
-          />
-
+                setFileSearch("");
+              }}
+            />
+          </div>
           <form
             className="jobs-create-inline"
             onSubmit={(event) => {
@@ -276,13 +277,9 @@ export function JobsPage() {
                       <span>{group.kindSummary}</span>
                     </div>
                     <div className="job-worker-group-metrics">
-                      <span>{group.jobs.length} file{group.jobs.length === 1 ? "" : "s"}</span>
-                      <span>{formatDurationTotal(group.totalDurationSeconds)}</span>
-                      <span>Start {formatBytes(group.totalInputSizeBytes)}</span>
-                      <span>Output {formatBytes(group.totalOutputSizeBytes)}</span>
-                      <span>Saved {formatBytes(group.totalSavedBytes)}</span>
-                      <span>{group.totalAudioTracksRemoved} audio removed</span>
-                      <span>{group.totalSubtitleTracksRemoved} subtitles removed</span>
+                      {workerGroupStatsLabels(group).map((label) => (
+                        <span key={label}>{label}</span>
+                      ))}
                     </div>
                   </button>
                   {expandedGroups[group.key] ?? group.initiallyOpen ? (
@@ -294,44 +291,47 @@ export function JobsPage() {
                             key={item.id}
                             className={`record-list-item queue-job-card${isActive ? " record-list-item-active" : ""}`}
                           >
-                            <div className="record-list-item-body">
+                            <div className="queue-job-card-body">
                               <JobArtwork jobId={item.id} title={jobPrimaryLabel(item, files)} />
-                              <div className="record-list-main">
-                                <div className="record-list-heading">
-                                  <Link className="text-link" to={APP_ROUTES.jobDetail(item.id)}>
-                                    <strong>{jobPrimaryLabel(item, files)}</strong>
-                                  </Link>
-                                  <span>{jobSecondaryLabel(item)}</span>
+                              <div className="queue-job-card-content">
+                                <div className="queue-job-card-header">
+                                  <div className="queue-job-card-title-block">
+                                    <div className="queue-job-card-title-row">
+                                      <Link className="queue-job-card-title text-link" to={APP_ROUTES.jobDetail(item.id)}>
+                                        <strong>{jobPrimaryLabel(item, files)}</strong>
+                                      </Link>
+                                      <div className="badge-row queue-job-card-badges">
+                                        <StatusBadge value={displayJobStatus(item)} />
+                                        {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
+                                        {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
+                                        {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
+                                        {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
+                                          <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
+                                        ) : null}
+                                        {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
+                                      </div>
+                                    </div>
+                                    <div className="queue-job-card-context" title={jobSecondaryLabel(item)}>
+                                      <span className="queue-job-card-path">{jobContextPathLabel(item)}</span>
+                                      <span className="queue-job-card-id">Job {shortId(item.id)}</span>
+                                    </div>
+                                  </div>
+                                  <div className="queue-job-card-state">
+                                    <span className={`queue-job-card-status queue-job-card-status-${jobStatusTone(item)}`}>
+                                      {formatStatusLabel(displayJobStatus(item))}
+                                    </span>
+                                    <span>{formatDateTime(item.updated_at)}</span>
+                                  </div>
                                 </div>
-                                <div className="badge-row">
-                                  <StatusBadge value={displayJobStatus(item)} />
-                                  {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
-                                  {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
-                                  {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
-                                  {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                                    <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
-                                  ) : null}
-                                  {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
-                                </div>
+                                <p className="queue-job-card-metadata">{jobMediaInfoLabel(item)}</p>
                                 <JobProgressBar job={item} compact />
                                 {item.job_kind === "dry_run" && item.analysis_payload?.summary ? (
-                                  <p className="muted-copy">{item.analysis_payload.summary}</p>
+                                  <p className="queue-job-card-message">{item.analysis_payload.summary}</p>
+                                ) : null}
+                                {item.status === "completed" ? (
+                                  <p className="queue-job-card-message">{replacementSummary(item)}</p>
                                 ) : null}
                               </div>
-                            </div>
-                            <div className="record-list-meta">
-                              <span className="record-list-kicker">{jobOutcomeLabel(item)}</span>
-                              <span>{item.worker_name ?? group.label}</span>
-                              <span>{jobMediaInfoLabel(item)}</span>
-                              {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                                <span>{formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)}</span>
-                              ) : null}
-                              <span>{formatDateTime(item.updated_at)}</span>
-                              {item.failure_message ? (
-                                <span className="record-list-emphasis">{truncate(item.failure_message, 84)}</span>
-                              ) : item.status === "completed" ? (
-                                <span className="record-list-emphasis">{replacementSummary(item)}</span>
-                              ) : null}
                             </div>
                             <div className="section-card-actions queue-job-card-actions">
                               <Link className="button button-secondary button-small" to={APP_ROUTES.jobDetail(item.id)}>
@@ -751,13 +751,23 @@ function JobProgressBar({
     | "worker_name"
     | "status"
     | "failure_category"
+    | "failure_message"
     | "job_kind"
   >;
   compact?: boolean;
 }) {
   const progress = describeJobProgress(job);
+  const tone = jobProgressTone(job, progress.stalled);
+  const metaLabel = compact && progress.metaLabel === job.worker_name
+    ? null
+    : progress.metaLabel ?? job.worker_name ?? "Waiting for worker";
+  const statItems = [
+    job.progress_out_time_seconds != null ? formatDurationSeconds(job.progress_out_time_seconds) : null,
+    job.progress_fps != null ? `${job.progress_fps.toFixed(1)} fps` : null,
+    job.progress_speed != null ? `${job.progress_speed.toFixed(2)}x` : null,
+  ].filter((item): item is string => item != null);
   return (
-    <div className={`job-progress-card${compact ? " job-progress-card-compact" : ""}${job.job_kind === "dry_run" ? " job-progress-card-analysis" : ""}${progress.stalled ? " job-progress-card-warning" : ""}`}>
+    <div className={`job-progress-card job-progress-card-${tone}${compact ? " job-progress-card-compact" : ""}`}>
       <div className="job-progress-header">
         <strong>{progress.stageLabel}</strong>
         <span>{progress.percentLabel}</span>
@@ -765,13 +775,22 @@ function JobProgressBar({
       <div className="job-progress-track" aria-label="Job progress">
         <span className="job-progress-fill" style={{ width: `${progress.barPercent}%` }} />
       </div>
-      <div className="job-progress-meta">
-        <span>{progress.metaLabel ?? job.worker_name ?? "Waiting for worker"}</span>
-        {job.progress_out_time_seconds != null ? <span>{formatDurationSeconds(job.progress_out_time_seconds)}</span> : null}
-        {job.progress_fps != null ? <span>{job.progress_fps.toFixed(1)} fps</span> : null}
-        {job.progress_speed != null ? <span>{job.progress_speed.toFixed(2)}x</span> : null}
-        {progress.detail ? <span>{progress.detail}</span> : null}
-      </div>
+      {statItems.length > 0 ? (
+        <div className="job-progress-stats">
+          {statItems.map((item) => (
+            <span key={item}>{item}</span>
+          ))}
+        </div>
+      ) : null}
+      {metaLabel || progress.detail ? (
+        <div className="job-progress-meta">
+          {metaLabel ? <span>{metaLabel}</span> : null}
+          {progress.detail ? <span>{progress.detail}</span> : null}
+        </div>
+      ) : null}
+      {compact && job.failure_message ? (
+        <p className="job-progress-error">{job.failure_message}</p>
+      ) : null}
     </div>
   );
 }
@@ -807,6 +826,10 @@ function jobSecondaryLabel(job: Pick<JobSummary, "source_path" | "tracked_file_i
     return `${job.source_path} • Job ${shortId(job.id)}`;
   }
   return `Tracked file ${shortId(job.tracked_file_id)} • Job ${shortId(job.id)}`;
+}
+
+function jobContextPathLabel(job: Pick<JobSummary, "source_path" | "tracked_file_id">) {
+  return job.source_path ?? `Tracked file ${shortId(job.tracked_file_id)}`;
 }
 
 function replacementSummary(job: {
@@ -852,44 +875,6 @@ function summariseJobs(
     ).length,
     completed: jobs.filter((job) => job.status === "completed").length,
   };
-}
-
-function jobOutcomeLabel(job: {
-  status: string;
-  failure_message: string | null;
-  requires_review: boolean;
-  tracked_file_is_protected: boolean | null;
-  job_kind?: string;
-  failure_category?: string | null;
-}) {
-  if (isOperatorCancelled(job)) {
-    return "Cancelled";
-  }
-  if (job.failure_message) {
-    return "Failed";
-  }
-  if (job.job_kind === "dry_run" && job.status === "completed") {
-    return "Analysis complete";
-  }
-  if (job.tracked_file_is_protected) {
-    return "Protected file";
-  }
-  if (job.requires_review || job.status === "manual_review") {
-    return "Needs review";
-  }
-  if (job.status === "completed") {
-    return "Completed";
-  }
-  if (job.status === "scheduled") {
-    return "Scheduled";
-  }
-  if (job.status === "interrupted") {
-    return "Interrupted";
-  }
-  if (job.status === "running") {
-    return "Running";
-  }
-  return "In queue";
 }
 
 function sortJobsForDisplay(jobs: JobSummary[]) {
@@ -941,8 +926,46 @@ function displayJobStatus(job: JobStatusWithFailureCategory) {
   return normalisedJobStatus(job);
 }
 
+function formatStatusLabel(value: string) {
+  return value.replace(/_/g, " ").toUpperCase();
+}
+
+function jobStatusTone(job: JobStatusWithFailureCategory) {
+  const status = normalisedJobStatus(job);
+  if (["failed", "interrupted", "cancelled", "manual_review"].includes(status)) {
+    return "danger";
+  }
+  if (["pending", "scheduled", "skipped"].includes(status)) {
+    return "warning";
+  }
+  if (status === "completed") {
+    return "success";
+  }
+  if (status === "running") {
+    return "active";
+  }
+  return "neutral";
+}
+
 function isOperatorCancelled(job: JobStatusWithFailureCategory) {
   return job.status === "interrupted" && job.failure_category === "cancelled_by_operator";
+}
+
+function jobProgressTone(job: JobStatusWithFailureCategory, stalled: boolean) {
+  const status = normalisedJobStatus(job);
+  if (["failed", "interrupted", "cancelled", "manual_review"].includes(status)) {
+    return "danger";
+  }
+  if (["pending", "scheduled"].includes(status)) {
+    return "waiting";
+  }
+  if (stalled || status === "running") {
+    return "running";
+  }
+  if (["completed", "skipped"].includes(status)) {
+    return "complete";
+  }
+  return "neutral";
 }
 
 function describeJobProgress(
@@ -1091,6 +1114,18 @@ function formatDurationTotal(value: number | null) {
   return formatDurationSeconds(value);
 }
 
+function workerGroupStatsLabels(group: JobWorkerGroup) {
+  return [
+    `${group.jobs.length} file${group.jobs.length === 1 ? "" : "s"}`,
+    formatDurationTotal(group.totalDurationSeconds),
+    `Start ${formatBytes(group.totalInputSizeBytes)}`,
+    `Output ${formatBytes(group.totalOutputSizeBytes)}`,
+    `Saved ${formatBytes(group.totalSavedBytes)}`,
+    `${group.totalAudioTracksRemoved} audio removed`,
+    `${group.totalSubtitleTracksRemoved} subtitles removed`,
+  ];
+}
+
 function workerGroupLabel(job: JobSummary) {
   if (job.worker_name) {
     return job.worker_name;
@@ -1106,17 +1141,26 @@ function workerGroupLabel(job: JobSummary) {
 
 function jobMediaInfoLabel(job: JobSummary) {
   const parts = [];
-  if (job.job_kind === "dry_run" && job.analysis_payload?.output_filename) {
-    parts.push(`Output ${job.analysis_payload.output_filename}`);
-  }
-  if (job.input_size_bytes != null) {
-    parts.push(`Start ${formatBytes(job.input_size_bytes)}`);
-  }
-  if (job.output_size_bytes != null) {
-    parts.push(`${job.job_kind === "dry_run" ? "Estimated" : "Output"} ${formatBytes(job.output_size_bytes)}`);
-  }
-  if (job.space_saved_bytes != null) {
-    parts.push(`${job.job_kind === "dry_run" ? "Estimated saved" : "Saved"} ${formatBytes(job.space_saved_bytes)}`);
+  if (job.job_kind === "dry_run") {
+    if (job.output_size_bytes != null) {
+      parts.push(`Estimated Output ${formatBytes(job.output_size_bytes)}`);
+    }
+    if (job.input_size_bytes != null) {
+      parts.push(`Start ${formatBytes(job.input_size_bytes)}`);
+    }
+    if (job.space_saved_bytes != null) {
+      parts.push(`Saved ${formatBytes(job.space_saved_bytes)}`);
+    }
+  } else {
+    if (job.input_size_bytes != null) {
+      parts.push(`Start ${formatBytes(job.input_size_bytes)}`);
+    }
+    if (job.output_size_bytes != null) {
+      parts.push(`Output ${formatBytes(job.output_size_bytes)}`);
+    }
+    if (job.space_saved_bytes != null) {
+      parts.push(`Saved ${formatBytes(job.space_saved_bytes)}`);
+    }
   }
   if (job.audio_tracks_removed_count > 0) {
     parts.push(`${job.audio_tracks_removed_count} audio removed`);
