@@ -1294,12 +1294,12 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/system", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
-    const alerts = screen.getAllByRole("alert");
-    expect(alerts.map((alert) => alert.textContent)).toEqual([
-      expect.stringMatching(/database lag detected/i),
-      expect.stringMatching(/media path is empty/i),
-      expect.stringMatching(/scratch workspace is nearly full/i),
-    ]);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/database lag detected/i);
+    expect(alert).toHaveTextContent(/media path is empty/i);
+    expect(alert).toHaveTextContent(/encodr mount-setup --validate-only/i);
+    expect(alert).toHaveTextContent(/host or lxc bind mount/i);
+    expect(alert).toHaveTextContent(/scratch workspace is nearly full/i);
     expect(screen.getAllByText(/media path is empty/i)).toHaveLength(1);
   });
 
@@ -1325,6 +1325,10 @@ describe("Encodr UI shell", () => {
     expect(within(main).getByRole("heading", { name: /compute health/i })).toBeInTheDocument();
     expect(within(main).queryByText(/scratch path/i)).not.toBeInTheDocument();
     expect(within(main).queryByText(/data path/i)).not.toBeInTheDocument();
+    expect(within(main).queryByText(/^unavailable$/i)).not.toBeInTheDocument();
+    expect(within(main).getByRole("progressbar", { name: /scratch workspace storage usage/i })).toHaveAttribute("aria-valuenow", "50");
+    expect(within(main).getByRole("progressbar", { name: /application data storage usage/i })).toHaveAttribute("aria-valuenow", "50");
+    expect(within(main).getByRole("progressbar", { name: /media library storage usage/i })).toHaveAttribute("aria-valuenow", "50");
     expect(screen.queryByRole("heading", { name: /execution backends/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /runtime devices/i })).not.toBeInTheDocument();
     expect(screen.queryByText(/current execution path/i)).not.toBeInTheDocument();

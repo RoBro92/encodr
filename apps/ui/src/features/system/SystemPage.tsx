@@ -34,6 +34,8 @@ export function SystemPage() {
       .map((pathStatus) => `${pathStatus.display_name}: ${pathStatus.message}`)),
   ]);
   const runtimeTelemetry = readRuntimeTelemetry(runtime as unknown as Record<string, unknown>);
+  const mediaPathEmptyWarning = combinedWarnings.find(isMediaPathEmptyWarning);
+  const remainingWarnings = combinedWarnings.filter((warning) => !isMediaPathEmptyWarning(warning));
 
   async function refreshHealth() {
     await Promise.all([workerQuery.refetch(), runtimeQuery.refetch(), storageQuery.refetch()]);
@@ -59,19 +61,31 @@ export function SystemPage() {
       />
 
       {combinedWarnings.length > 0 ? (
-        <div className="system-alert-list">
-          {combinedWarnings.map((warning) => (
-            <div key={warning} className="system-alert-banner" role="alert">
-              <span className="system-alert-icon" aria-hidden="true">
-                <svg viewBox="0 0 24 24" focusable="false">
-                  <path d="M12 3 2.5 20.5h19L12 3Z" />
-                  <path d="M12 9v5" />
-                  <path d="M12 17.5h.01" />
-                </svg>
-              </span>
-              <span>{warning}</span>
-            </div>
-          ))}
+        <div className="system-alert-banner" role="alert">
+          <span className="system-alert-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M12 3 2.5 20.5h19L12 3Z" />
+              <path d="M12 9v5" />
+              <path d="M12 17.5h.01" />
+            </svg>
+          </span>
+          <div className="system-alert-content">
+            <strong>System needs attention</strong>
+            {mediaPathEmptyWarning ? (
+              <p>
+                <strong>Media path is empty.</strong> Confirm your library is mounted into{" "}
+                <code>{storage.standard_media_root}</code>, check the host or LXC bind mount, then run{" "}
+                <code>encodr mount-setup --validate-only</code>.
+              </p>
+            ) : null}
+            {remainingWarnings.length > 0 ? (
+              <ul className="system-alert-items">
+                {remainingWarnings.map((warning) => (
+                  <li key={warning}>{warning}</li>
+                ))}
+              </ul>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -142,11 +156,17 @@ export function SystemPage() {
                   <span>{pathStatus.recommended_action}</span>
                 </div>
               ) : null}
-              <div className="system-storage-node-metrics">
-                <HealthMetric label="Readable" value={formatRelativeBoolean(pathStatus.readable)} />
-                <HealthMetric label="Writable" value={formatRelativeBoolean(pathStatus.writable)} />
-                <HealthMetric label="Free space" value={formatBytes(pathStatus.free_space_bytes)} />
-                <HealthMetric label="Total space" value={formatBytes(pathStatus.total_space_bytes)} />
+              <div className="system-storage-node-footer">
+                <StorageCapacityBar
+                  label={pathStatus.display_name}
+                  usagePercent={calculateStorageUsagePercent(pathStatus.free_space_bytes, pathStatus.total_space_bytes)}
+                />
+                <div className="system-storage-node-metrics">
+                  <HealthMetric label="Readable" value={formatRelativeBoolean(pathStatus.readable)} />
+                  <HealthMetric label="Writable" value={formatRelativeBoolean(pathStatus.writable)} />
+                  <HealthMetric label="Free space" value={formatBytes(pathStatus.free_space_bytes)} />
+                  <HealthMetric label="Total space" value={formatBytes(pathStatus.total_space_bytes)} />
+                </div>
               </div>
             </article>
           ))}
@@ -171,6 +191,10 @@ function dedupeWarnings(warnings: string[]): string[] {
   });
 }
 
+function isMediaPathEmptyWarning(warning: string): boolean {
+  return warning.toLowerCase().includes("media path is empty");
+}
+
 function readRuntimeTelemetry(runtime: Record<string, unknown>): Record<string, unknown> {
   const telemetry = runtime.telemetry;
   if (telemetry && typeof telemetry === "object" && !Array.isArray(telemetry)) {
@@ -191,6 +215,53 @@ function RuntimeTelemetryGrid({ telemetry }: { telemetry: Record<string, unknown
       <HealthMetric label="GPU" value={formatGpuMetric(gpu)} />
     </div>
   );
+}
+
+function StorageCapacityBar({
+  label,
+  usagePercent,
+}: {
+  label: string;
+  usagePercent: number | null;
+}) {
+  const roundedUsage = usagePercent == null ? null : Math.round(usagePercent);
+  return (
+    <div className="system-storage-capacity">
+      <div
+        className="system-storage-capacity-track"
+        role="progressbar"
+        aria-label={`${label} storage usage`}
+        aria-valuemin={0}
+        aria-valuemax={100}
+        aria-valuenow={roundedUsage ?? undefined}
+      >
+        {usagePercent == null ? null : (
+          <span
+            className={`system-storage-capacity-fill ${storageUsageToneClass(usagePercent)}`}
+            style={{ width: `${Math.min(100, Math.max(0, usagePercent))}%` }}
+          />
+        )}
+      </div>
+      <span>{roundedUsage == null ? "Usage unavailable" : `${roundedUsage}% used`}</span>
+    </div>
+  );
+}
+
+function calculateStorageUsagePercent(freeSpaceBytes: number | null, totalSpaceBytes: number | null): number | null {
+  if (freeSpaceBytes == null || totalSpaceBytes == null || totalSpaceBytes <= 0) {
+    return null;
+  }
+  return ((totalSpaceBytes - freeSpaceBytes) / totalSpaceBytes) * 100;
+}
+
+function storageUsageToneClass(usagePercent: number): string {
+  if (usagePercent > 90) {
+    return "system-storage-capacity-fill-danger";
+  }
+  if (usagePercent >= 80) {
+    return "system-storage-capacity-fill-warning";
+  }
+  return "system-storage-capacity-fill-healthy";
 }
 
 function formatPercentMetric(value: unknown): string {
@@ -230,12 +301,18 @@ function HealthMetric({
   label: string;
   value: string;
 }) {
+  const unavailable = isUnavailableMetricValue(value);
   return (
     <div className="metric-panel">
       <span className="metric-label">{label}</span>
-      <strong>{value}</strong>
+      <strong className={unavailable ? "metric-value-unavailable" : undefined}>{unavailable ? "—" : value}</strong>
     </div>
   );
+}
+
+function isUnavailableMetricValue(value: string): boolean {
+  const normalised = value.trim().toLowerCase();
+  return normalised === "unavailable" || normalised === "not available";
 }
 
 function HealthStatCard({
