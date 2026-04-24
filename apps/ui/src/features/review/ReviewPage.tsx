@@ -359,7 +359,7 @@ function ReviewDetailDrawer({
               </section>
 
               <section className="review-metadata-grid" aria-label="Review metadata">
-                <ReviewMetadataItem label="Source path" value={detail.source_path} />
+                <ReviewMetadataItem label="Source path" value={detail.source_path} className="review-metadata-item-wide review-source-path" />
                 <ReviewMetadataItem label="Protected" value={formatRelativeBoolean(detail.protected_state.is_protected)} />
                 <ReviewMetadataItem label="Protected source" value={formatProtectedSource(detail.protected_state.source)} />
                 <ReviewMetadataItem
@@ -375,6 +375,16 @@ function ReviewDetailDrawer({
                   value={formatDateTime(detail.latest_job_at ?? detail.latest_plan_at ?? detail.latest_probe_at)}
                 />
               </section>
+
+              <label className="field review-operator-note">
+                <span>Operator note</span>
+                <textarea
+                  rows={2}
+                  value={decisionNote}
+                  onChange={(event) => onDecisionNoteChange(event.target.value)}
+                  placeholder="Add context for the next operator or audit trail"
+                />
+              </label>
 
               <CollapsibleSection
                 title="Show protection details"
@@ -434,76 +444,63 @@ function ReviewDetailDrawer({
 
         {detail ? (
           <footer className="review-drawer-footer">
-            <label className="field">
-              <span>Operator note</span>
-              <textarea
-                rows={2}
-                value={decisionNote}
-                onChange={(event) => onDecisionNoteChange(event.target.value)}
-                placeholder="Add context for the next operator or audit trail"
-              />
-            </label>
             <div className="review-action-bar">
-              <div className="review-action-group review-action-group-secondary" aria-label="Secondary review actions">
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => onDecision("hold")}
-                  disabled={isActionPending}
-                >
-                  Hold
-                </button>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => onDecision("reject")}
-                  disabled={isActionPending}
-                >
-                  Reject
-                </button>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => onDecision("mark_protected")}
-                  disabled={isActionPending || detail.protected_state.operator_protected}
-                >
-                  Mark protected
-                </button>
-                <button
-                  className="button button-secondary"
-                  type="button"
-                  onClick={() => onDecision("clear_protected")}
-                  disabled={isActionPending || !detail.protected_state.operator_protected}
-                >
-                  Clear protected
-                </button>
-              </div>
-              <div className="review-action-group review-action-group-primary" aria-label="Primary review actions">
-                <button
-                  className="button button-primary"
-                  type="button"
-                  onClick={() => onDecision("approve")}
-                  disabled={isActionPending || !detail.requires_review}
-                >
-                  Approve
-                </button>
-                <button
-                  className="button button-primary"
-                  type="button"
-                  onClick={() => onDecision("replan")}
-                  disabled={isActionPending}
-                >
-                  Replan
-                </button>
-                <button
-                  className="button button-primary"
-                  type="button"
-                  onClick={() => onDecision("create_job")}
-                  disabled={isActionPending || detail.review_status !== "approved"}
-                >
-                  Create job
-                </button>
-              </div>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("hold")}
+                disabled={isActionPending}
+              >
+                Hold
+              </button>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("reject")}
+                disabled={isActionPending}
+              >
+                Reject
+              </button>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("mark_protected")}
+                disabled={isActionPending || detail.protected_state.operator_protected}
+              >
+                Mark protected
+              </button>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("clear_protected")}
+                disabled={isActionPending || !detail.protected_state.operator_protected}
+              >
+                Clear protected
+              </button>
+              <button
+                className="button button-primary review-primary-action"
+                type="button"
+                onClick={() => onDecision("approve")}
+                disabled={isActionPending || !detail.requires_review}
+              >
+                Approve
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => onDecision("replan")}
+                disabled={isActionPending}
+              >
+                Replan
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => onDecision("create_job")}
+                disabled={isActionPending || detail.review_status !== "approved"}
+              >
+                Create job
+              </button>
             </div>
           </footer>
         ) : null}
@@ -530,7 +527,7 @@ function ReviewAlert({
         <ul className="plain-list">
           {items.map((item) => (
             <li key={`${tone}-${item.code}`}>
-              <strong>{item.message}</strong>
+              <span>{item.message}</span>
             </li>
           ))}
         </ul>
@@ -541,9 +538,9 @@ function ReviewAlert({
   );
 }
 
-function ReviewMetadataItem({ label, value }: { label: string; value: ReactNode }) {
+function ReviewMetadataItem({ label, value, className }: { label: string; value: ReactNode; className?: string }) {
   return (
-    <div className="review-metadata-item">
+    <div className={`review-metadata-item${className ? ` ${className}` : ""}`}>
       <span>{label}</span>
       <strong>{value}</strong>
     </div>
