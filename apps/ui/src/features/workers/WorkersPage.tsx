@@ -62,6 +62,7 @@ type PathMappingDraft = {
 type WorkerStatusRollupResult = {
   badge: "healthy" | "degraded" | "failed" | string;
   message: string;
+  compactMessage: string;
   attentionMessage: string | null;
 };
 
@@ -200,6 +201,11 @@ export function WorkersPage() {
     ? localBackendProbes.find((item) => item.preference_key === detail.preferred_backend)
     : null;
   const detailStatusRollup = detail ? buildWorkerStatusRollup(detail, localWorkerStatus) : null;
+  const detailAttentionTitle = detailStatusRollup?.badge === "degraded"
+    ? "Backend Degraded"
+    : detailStatusRollup?.badge === "failed"
+      ? "Backend Failed"
+      : "Attention";
   const detailAttentionMessage = detailStatusRollup?.attentionMessage
     ?? (detailPrimaryIssues.length > 0 ? detailPrimaryIssues.join(" • ") : null);
   const selectedHardwareBackendProbe = configuredBackendProbe && configuredBackendProbe.backend !== "cpu"
@@ -380,7 +386,7 @@ export function WorkersPage() {
                     </svg>
                   </span>
                   <div>
-                    <strong>Attention</strong>
+                    <strong>{detailAttentionTitle}</strong>
                     <span>{detailAttentionMessage}</span>
                   </div>
                 </div>
@@ -405,7 +411,7 @@ export function WorkersPage() {
               <section className="worker-detail-metric-grid">
                 <WorkerDetailMetric
                   label="Health summary"
-                  value={<WorkerStatusRollupView rollup={detailStatusRollup ?? buildWorkerStatusRollup(detail, localWorkerStatus)} />}
+                  value={<WorkerStatusRollupView rollup={detailStatusRollup ?? buildWorkerStatusRollup(detail, localWorkerStatus)} compact />}
                 />
                 <WorkerDetailMetric
                   label="Current activity"
@@ -461,6 +467,7 @@ export function WorkersPage() {
                         <CapabilityStrip
                           title="Selected backend diagnostic"
                           description={`${formatBackendLabel(detail.preferred_backend)} is selected as this worker's primary backend.`}
+                          tone={selectedHardwareBackendProbe.status === "failed" ? "danger" : "default"}
                           items={[
                             {
                               label: formatBackendLabel(selectedHardwareBackendProbe.backend),
@@ -966,11 +973,11 @@ function WorkerDetailMetric({
   );
 }
 
-function WorkerStatusRollupView({ rollup }: { rollup: WorkerStatusRollupResult }) {
+function WorkerStatusRollupView({ rollup, compact = false }: { rollup: WorkerStatusRollupResult; compact?: boolean }) {
   return (
     <div className="worker-status-rollup">
       <StatusBadge value={rollup.badge} />
-      <span className="worker-status-rollup-message">{rollup.message}</span>
+      <span className="worker-status-rollup-message">{compact ? rollup.compactMessage : rollup.message}</span>
     </div>
   );
 }
@@ -1096,10 +1103,12 @@ function CapabilityStrip({
   title,
   description = "Backend diagnostics are scoped to the worker's selected primary backend.",
   items,
+  tone = "default",
 }: {
   title: string;
   description?: string;
   items: Array<{ label: string; status: string; message: string }>;
+  tone?: "default" | "danger";
 }) {
   if (items.length === 0) {
     return (
@@ -1111,14 +1120,14 @@ function CapabilityStrip({
   }
 
   return (
-    <div className="card-stack">
-      <div className="info-strip">
+    <div className={`capability-strip capability-strip-${tone}`}>
+      <div className="capability-strip-copy">
         <strong>{title}</strong>
         <span>{description}</span>
       </div>
-      <div className="list-stack">
+      <div className="capability-strip-list">
         {items.map((item) => (
-          <div key={item.label} className="list-row">
+          <div key={item.label} className="capability-strip-row">
             <div>
               <strong>{item.label}</strong>
               <p>{item.message}</p>
@@ -1297,6 +1306,7 @@ function buildWorkerStatusRollup(
       return {
         badge: "healthy",
         message: "The local worker is healthy and available.",
+        compactMessage: "Available",
         attentionMessage: null,
       };
     }
@@ -1306,18 +1316,20 @@ function buildWorkerStatusRollup(
         return {
           badge: "degraded",
           message: `Primary backend failed. Falling back to CPU execution.${backendReason ? ` Reason: ${backendReason}` : ""}`,
+          compactMessage: "CPU fallback active",
           attentionMessage: attentionReason
-            ? `Attention: Primary backend failed (${attentionReason}). Worker is falling back to CPU execution.`
-            : "Attention: Primary backend failed. Worker is falling back to CPU execution.",
+            ? `Primary backend failed (Reason: ${attentionReason}). Worker is safely falling back to CPU execution.`
+            : "Primary backend failed. Worker is safely falling back to CPU execution.",
         };
       }
 
       return {
         badge: "failed",
         message: "Primary backend failed and CPU fallback is disabled. Worker cannot execute jobs.",
+        compactMessage: "Cannot execute jobs",
         attentionMessage: attentionReason
-          ? `Attention: Primary backend failed (${attentionReason}). CPU fallback is disabled. Worker cannot execute jobs.`
-          : "Attention: Primary backend failed. CPU fallback is disabled. Worker cannot execute jobs.",
+          ? `Primary backend failed (Reason: ${attentionReason}). CPU fallback is disabled. Worker cannot execute jobs.`
+          : "Primary backend failed. CPU fallback is disabled. Worker cannot execute jobs.",
       };
     }
   }
@@ -1325,6 +1337,7 @@ function buildWorkerStatusRollup(
   return {
     badge: worker.health_status ?? "unknown",
     message: worker.health_summary ?? "No health summary reported.",
+    compactMessage: worker.health_summary ?? "No summary reported",
     attentionMessage: null,
   };
 }

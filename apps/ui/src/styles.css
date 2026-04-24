@@ -1681,6 +1681,62 @@ pre {
   stroke-width: 1.8;
 }
 
+.capability-strip {
+  display: grid;
+  gap: 12px;
+  padding: 12px 14px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 12%, transparent);
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-primary) 6%, var(--bg-panel-strong));
+}
+
+.capability-strip-danger {
+  padding: 16px;
+  border: 0;
+  border-left: 4px solid #ef4444;
+  border-radius: 0 var(--radius-md) var(--radius-md) 0;
+  background: #fef2f2;
+}
+
+.capability-strip-copy,
+.capability-strip-row {
+  display: grid;
+  gap: 5px;
+}
+
+.capability-strip-copy strong,
+.capability-strip-row strong {
+  color: var(--text);
+}
+
+.capability-strip-copy span,
+.capability-strip-row p {
+  margin: 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.capability-strip-danger .capability-strip-copy strong,
+.capability-strip-danger .capability-strip-row strong {
+  color: #7f1d1d;
+}
+
+.capability-strip-danger .capability-strip-copy span,
+.capability-strip-danger .capability-strip-row p {
+  color: #4b5563;
+}
+
+.capability-strip-list {
+  display: grid;
+  gap: 10px;
+}
+
+.capability-strip-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 12px;
+}
+
 .system-alert-banner {
   display: flex;
   align-items: flex-start;

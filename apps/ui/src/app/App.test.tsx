@@ -1479,7 +1479,9 @@ describe("Encodr UI shell", () => {
     expect(screen.getByText(/selected backend diagnostic/i)).toBeInTheDocument();
     expect(screen.getAllByText(/no nvidia runtime device is visible/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/primary backend failed\. falling back to cpu execution/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/attention: primary backend failed \(no nvidia runtime device is visible to the runtime\)\. worker is falling back to cpu execution\./i)).toBeInTheDocument();
+    expect(screen.getAllByText(/cpu fallback active/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/backend degraded/i)).toBeInTheDocument();
+    expect(screen.getByText(/primary backend failed \(reason: no nvidia runtime device is visible to the runtime\)\. worker is safely falling back to cpu execution\./i)).toBeInTheDocument();
     expect(screen.queryByText(/intel driver missing/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/amd render device is not visible/i)).not.toBeInTheDocument();
   });
@@ -1509,7 +1511,8 @@ describe("Encodr UI shell", () => {
 
     expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
     expect(screen.getAllByText(/primary backend failed and cpu fallback is disabled/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/attention: primary backend failed \(no nvidia runtime device is visible to the runtime\)\. cpu fallback is disabled\. worker cannot execute jobs\./i)).toBeInTheDocument();
+    expect(screen.getByText(/^backend failed$/i)).toBeInTheDocument();
+    expect(screen.getByText(/primary backend failed \(reason: no nvidia runtime device is visible to the runtime\)\. cpu fallback is disabled\. worker cannot execute jobs\./i)).toBeInTheDocument();
   });
 });
 
