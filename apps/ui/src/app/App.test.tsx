@@ -440,7 +440,9 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("heading", { name: /^storage$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /^updates$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /processing rules/i })).toBeInTheDocument();
-    expect(screen.getByText(/worker backends are configured per worker on the workers page/i)).toBeInTheDocument();
+    expect(screen.queryByText(/worker backends are configured per worker on the workers page/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/runtime health/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/scratch path/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/encodr update --apply/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
   });

@@ -1041,10 +1041,6 @@ pre {
   overflow-wrap: anywhere;
 }
 
-.settings-storage-callout {
-  align-items: flex-start;
-}
-
 .settings-data-grid {
   display: grid;
   gap: 16px 24px;

@@ -183,12 +183,6 @@ export function ConfigPage() {
         <div className="settings-overview-item settings-overview-item-storage">
           <SectionCard title="Storage" subtitle="Check your media and scratch paths before you run jobs.">
             <div className="settings-storage-stack">
-              <div className="info-strip settings-storage-callout">
-                <strong>Host runtime</strong>
-                <span>
-                  Runtime health here only reflects the Encodr host itself: storage, scratch, and core runtime reachability. Worker backends are configured per worker on the Workers page.
-                </span>
-              </div>
               <div className="settings-data-grid settings-data-grid-storage">
                 <SettingsDataItem label="Runtime health" value={<StatusBadge value={runtime.status} />} />
                 <SettingsDataItem label="Environment" value={runtime.environment} />
