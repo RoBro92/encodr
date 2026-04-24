@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
 
-import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { KeyValueList } from "../../components/KeyValueList";
@@ -245,52 +244,40 @@ export function ConfigPage() {
         </SectionCard>
       </section>
 
-      <SectionCard
-        title="Processing rules"
-        subtitle="Set separate defaults for Movies, TV, and 4K handling without editing raw config files."
-      >
-        <div className="settings-rules-grid settings-rules-grid-four">
-          {RULESET_ORDER.map((rulesetKey) => (
-            <RulesetEditor
-              key={rulesetKey}
-              rulesetKey={rulesetKey}
-              label={RULESET_META[rulesetKey].title}
-              description={RULESET_META[rulesetKey].summary}
-              ruleset={rules[rulesetKey]}
-              onChange={(nextValues) => {
-                setRulesDraft((current) =>
-                  current
-                    ? {
-                        ...current,
-                        [rulesetKey]: { ...current[rulesetKey], current: nextValues, uses_defaults: false },
-                      }
-                    : current,
-                );
-              }}
-              onSave={() => {
-                if (!rulesDraft) {
-                  return;
+      <ProcessingRulesSection
+        rules={rules}
+        persistedRules={persistedRules ?? rules}
+        onRulesetChange={(rulesetKey, nextValues) => {
+          setRulesDraft((current) =>
+            current
+              ? {
+                  ...current,
+                  [rulesetKey]: { ...current[rulesetKey], current: nextValues, uses_defaults: false },
                 }
-                updateRulesMutation.mutate(buildRulesPayload(rulesetKey, rulesDraft[rulesetKey].current), {
-                  onSuccess: (data) => {
-                    setPersistedRules(data);
-                    setRulesDraft(data);
-                  },
-                });
-              }}
-              onUseDefaults={() => {
-                updateRulesMutation.mutate(buildRulesPayload(rulesetKey, null), {
-                  onSuccess: (data) => {
-                    setPersistedRules(data);
-                    setRulesDraft(data);
-                  },
-                });
-              }}
-              saving={updateRulesMutation.isPending}
-            />
-          ))}
-        </div>
-      </SectionCard>
+              : current,
+          );
+        }}
+        onRulesetSave={(rulesetKey) => {
+          if (!rulesDraft) {
+            return;
+          }
+          updateRulesMutation.mutate(buildRulesPayload(rulesetKey, rulesDraft[rulesetKey].current), {
+            onSuccess: (data) => {
+              setPersistedRules(data);
+              setRulesDraft(data);
+            },
+          });
+        }}
+        onRulesetUseDefaults={(rulesetKey) => {
+          updateRulesMutation.mutate(buildRulesPayload(rulesetKey, null), {
+            onSuccess: (data) => {
+              setPersistedRules(data);
+              setRulesDraft(data);
+            },
+          });
+        }}
+        saving={updateRulesMutation.isPending}
+      />
 
       <FolderPickerModal
         open={pickerTarget !== null}
@@ -308,6 +295,87 @@ export function ConfigPage() {
         }}
       />
     </div>
+  );
+}
+
+function ProcessingRulesSection({
+  rules,
+  persistedRules,
+  onRulesetChange,
+  onRulesetSave,
+  onRulesetUseDefaults,
+  saving,
+}: {
+  rules: ProcessingRules;
+  persistedRules: ProcessingRules;
+  onRulesetChange: (rulesetKey: RulesetKey, values: ProcessingRuleValues) => void;
+  onRulesetSave: (rulesetKey: RulesetKey) => void;
+  onRulesetUseDefaults: (rulesetKey: RulesetKey) => void;
+  saving: boolean;
+}) {
+  const [activeTab, setActiveTab] = useState<RulesetKey>("movies");
+  const activeRuleset = rules[activeTab];
+  const activePersistedRuleset = persistedRules[activeTab];
+
+  return (
+    <SectionCard
+      title="Processing rules"
+      subtitle="Set separate defaults for Movies, TV, and 4K handling without editing raw config files."
+    >
+      <div className="settings-rules-shell" data-testid="processing-rules-section">
+        <div className="settings-rules-tabs" role="tablist" aria-label="Processing rulesets">
+          {RULESET_ORDER.map((rulesetKey) => {
+            const selected = activeTab === rulesetKey;
+            const persistedRuleset = persistedRules[rulesetKey];
+            const badgeLabel = persistedRuleset.uses_defaults ? "Default" : "Custom";
+            return (
+              <button
+                key={rulesetKey}
+                id={`processing-rules-tab-${rulesetKey}`}
+                className={`settings-rules-tab ${selected ? "settings-rules-tab-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={`processing-rules-panel-${rulesetKey}`}
+                data-testid={`processing-rules-tab-${rulesetKey}`}
+                onClick={() => setActiveTab(rulesetKey)}
+              >
+                <span>
+                  <strong>{RULESET_META[rulesetKey].title}</strong>
+                  <small>{isFourKRuleset(rulesetKey) ? "4K policy" : "Standard policy"}</small>
+                </span>
+                <span
+                  className={`settings-rules-tab-badge ${
+                    persistedRuleset.uses_defaults ? "settings-rules-tab-badge-default" : "settings-rules-tab-badge-custom"
+                  }`}
+                >
+                  {badgeLabel}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div
+          id={`processing-rules-panel-${activeTab}`}
+          role="tabpanel"
+          aria-labelledby={`processing-rules-tab-${activeTab}`}
+          data-testid={`processing-rules-editor-${activeTab}`}
+        >
+          <RulesetEditor
+            rulesetKey={activeTab}
+            label={RULESET_META[activeTab].title}
+            description={RULESET_META[activeTab].summary}
+            ruleset={activeRuleset}
+            persistedRuleset={activePersistedRuleset}
+            onChange={(nextValues) => onRulesetChange(activeTab, nextValues)}
+            onSave={() => onRulesetSave(activeTab)}
+            onUseDefaults={() => onRulesetUseDefaults(activeTab)}
+            saving={saving}
+          />
+        </div>
+      </div>
+    </SectionCard>
   );
 }
 
@@ -331,6 +399,7 @@ function RulesetEditor({
   description,
   rulesetKey,
   ruleset,
+  persistedRuleset,
   onChange,
   onSave,
   onUseDefaults,
@@ -340,21 +409,24 @@ function RulesetEditor({
   description: string;
   rulesetKey: RulesetKey;
   ruleset: ProcessingRuleset;
+  persistedRuleset: ProcessingRuleset;
   onChange: (values: ProcessingRuleValues) => void;
   onSave: () => void;
   onUseDefaults: () => void;
   saving: boolean;
 }) {
   const isDirty = useMemo(
-    () => JSON.stringify(ruleset.current) !== JSON.stringify(ruleset.defaults) || !ruleset.uses_defaults,
-    [ruleset],
+    () =>
+      JSON.stringify(ruleset.current) !== JSON.stringify(persistedRuleset.current) ||
+      ruleset.uses_defaults !== persistedRuleset.uses_defaults,
+    [persistedRuleset, ruleset],
   );
   const summary = summariseRuleset(ruleset.current);
   const transcodeEnabled = ruleset.current.handling_mode === "transcode";
 
   return (
-    <div className="settings-rules-card">
-      <div className="settings-rules-header">
+    <div className="settings-rules-editor">
+      <div className="settings-rules-editor-header">
         <div className="settings-rules-heading">
           <span className="metric-label">{label}</span>
           <strong>{ruleset.profile_name ?? "Built-in defaults"}</strong>
@@ -366,128 +438,169 @@ function RulesetEditor({
         </div>
       </div>
 
-      <div className="info-strip settings-rule-summary">
-        <strong>{summary.title}</strong>
-        <span>{summary.body}</span>
+      <div className="settings-rules-summary-banner">
+        <span className="settings-rules-summary-icon" aria-hidden="true">
+          i
+        </span>
+        <div>
+          <strong>{summary.title}</strong>
+          <span>{summary.body}</span>
+        </div>
       </div>
 
-      <div className="settings-rules-fields settings-rules-fields-compact">
-        <label className="field">
-          <span>Handling mode</span>
-          <select
-            aria-label={`${label} handling mode`}
-            value={ruleset.current.handling_mode}
-            onChange={(event) => onChange({ ...ruleset.current, handling_mode: event.target.value })}
-          >
-            {HANDLING_MODE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="settings-rules-form-card">
+        <div className="settings-rules-form-card-header">
+          <h3>Video pipeline</h3>
+          <p>Choose the primary handling path and output format.</p>
+        </div>
+        <div className="settings-rules-fields settings-rules-fields-three">
+          <label className="field">
+            <span>Handling mode</span>
+            <select
+              aria-label={`${label} handling mode`}
+              value={ruleset.current.handling_mode}
+              onChange={(event) => onChange({ ...ruleset.current, handling_mode: event.target.value })}
+            >
+              {HANDLING_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <label className="field">
-          <span>Target video codec</span>
-          <select
-            aria-label={`${label} target video codec`}
-            value={ruleset.current.target_video_codec}
-            onChange={(event) => onChange({ ...ruleset.current, target_video_codec: event.target.value })}
-          >
-            {VIDEO_CODEC_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+          <label className="field">
+            <span>Target video codec</span>
+            <select
+              aria-label={`${label} target video codec`}
+              value={ruleset.current.target_video_codec}
+              onChange={(event) => onChange({ ...ruleset.current, target_video_codec: event.target.value })}
+            >
+              {VIDEO_CODEC_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <label className="field">
-          <span>Output container</span>
-          <select
-            aria-label={`${label} output container`}
-            value={ruleset.current.output_container}
-            onChange={(event) => onChange({ ...ruleset.current, output_container: event.target.value })}
-          >
-            {CONTAINER_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span>Quality mode</span>
-          <select
-            aria-label={`${label} quality mode`}
-            value={ruleset.current.target_quality_mode}
-            onChange={(event) => onChange({ ...ruleset.current, target_quality_mode: event.target.value })}
-            disabled={!transcodeEnabled}
-          >
-            {QUALITY_MODE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span>Max video reduction (%)</span>
-          <input
-            aria-label={`${label} max video reduction`}
-            type="number"
-            min={0}
-            max={100}
-            value={ruleset.current.max_allowed_video_reduction_percent}
-            onChange={(event) =>
-              onChange({
-                ...ruleset.current,
-                max_allowed_video_reduction_percent: clampPercentage(event.target.value, ruleset.current.max_allowed_video_reduction_percent),
-              })}
-            disabled={!transcodeEnabled}
-          />
-        </label>
+          <label className="field">
+            <span>Output container</span>
+            <select
+              aria-label={`${label} output container`}
+              value={ruleset.current.output_container}
+              onChange={(event) => onChange({ ...ruleset.current, output_container: event.target.value })}
+            >
+              {CONTAINER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
-      <div className="settings-rules-fields">
-        <LanguageListField
-          label="Preferred audio languages"
-          value={ruleset.current.preferred_audio_languages}
-          onChange={(languages) => onChange({ ...ruleset.current, preferred_audio_languages: languages })}
-        />
-        <LanguageListField
-          label="Preferred subtitle languages"
-          value={ruleset.current.preferred_subtitle_languages}
-          onChange={(languages) => onChange({ ...ruleset.current, preferred_subtitle_languages: languages })}
-        />
+      <div className={`settings-rules-form-card settings-rules-quality-card ${transcodeEnabled ? "" : "settings-rules-card-disabled"}`}>
+        <div className="settings-rules-form-card-header">
+          <h3>Quality limits</h3>
+          <p>{transcodeEnabled ? "Tune transcode quality and safety boundaries." : "Only available when handling mode is set to transcode."}</p>
+        </div>
+        <div className="settings-rules-fields settings-rules-fields-two">
+          <label className="field">
+            <span>Quality mode</span>
+            <select
+              aria-label={`${label} quality mode`}
+              value={ruleset.current.target_quality_mode}
+              onChange={(event) => onChange({ ...ruleset.current, target_quality_mode: event.target.value })}
+              disabled={!transcodeEnabled}
+            >
+              {QUALITY_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Max video reduction (%)</span>
+            <input
+              aria-label={`${label} max video reduction`}
+              type="number"
+              min={0}
+              max={100}
+              value={ruleset.current.max_allowed_video_reduction_percent}
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  max_allowed_video_reduction_percent: clampPercentage(event.target.value, ruleset.current.max_allowed_video_reduction_percent),
+                })}
+              disabled={!transcodeEnabled}
+            />
+          </label>
+        </div>
       </div>
 
-      <div className="settings-rules-toggles">
-        <ToggleField
-          label="Keep only preferred audio languages"
-          checked={ruleset.current.keep_only_preferred_audio_languages}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_only_preferred_audio_languages: checked })}
-        />
-        <ToggleField
-          label="Keep forced subtitles"
-          checked={ruleset.current.keep_forced_subtitles}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_forced_subtitles: checked })}
-        />
-        <ToggleField
-          label="Keep one full preferred subtitle"
-          checked={ruleset.current.keep_one_full_preferred_subtitle}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_one_full_preferred_subtitle: checked })}
-        />
-        <ToggleField
-          label="Drop other subtitles"
-          checked={ruleset.current.drop_other_subtitles}
-          onChange={(checked) => onChange({ ...ruleset.current, drop_other_subtitles: checked })}
-        />
+      <div className="settings-rules-form-card">
+        <div className="settings-rules-form-card-header">
+          <h3>Language and subtitle matrix</h3>
+          <p>Set the audio and subtitle language policy for this ruleset.</p>
+        </div>
+        <div className="settings-rules-language-matrix">
+          <div className="settings-rules-language-column">
+            <div className="settings-rules-column-heading">
+              <h4>Audio</h4>
+              <p>Preferred audio tracks and cleanup rules.</p>
+            </div>
+            <LanguageListField
+              label="Preferred audio languages"
+              value={ruleset.current.preferred_audio_languages}
+              onChange={(languages) => onChange({ ...ruleset.current, preferred_audio_languages: languages })}
+            />
+            <ToggleField
+              label="Keep only preferred audio languages"
+              checked={ruleset.current.keep_only_preferred_audio_languages}
+              onChange={(checked) => onChange({ ...ruleset.current, keep_only_preferred_audio_languages: checked })}
+            />
+          </div>
+
+          <div className="settings-rules-language-column settings-rules-language-column-divided">
+            <div className="settings-rules-column-heading">
+              <h4>Subtitles</h4>
+              <p>Forced, full, and non-preferred subtitle behavior.</p>
+            </div>
+            <LanguageListField
+              label="Preferred subtitle languages"
+              value={ruleset.current.preferred_subtitle_languages}
+              onChange={(languages) => onChange({ ...ruleset.current, preferred_subtitle_languages: languages })}
+            />
+            <div className="settings-rules-toggles">
+              <ToggleField
+                label="Keep forced subtitles"
+                checked={ruleset.current.keep_forced_subtitles}
+                onChange={(checked) => onChange({ ...ruleset.current, keep_forced_subtitles: checked })}
+              />
+              <ToggleField
+                label="Keep one full preferred subtitle"
+                checked={ruleset.current.keep_one_full_preferred_subtitle}
+                onChange={(checked) => onChange({ ...ruleset.current, keep_one_full_preferred_subtitle: checked })}
+              />
+              <ToggleField
+                label="Drop other subtitles"
+                checked={ruleset.current.drop_other_subtitles}
+                onChange={(checked) => onChange({ ...ruleset.current, drop_other_subtitles: checked })}
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
-      <CollapsibleSection title="Advanced options" subtitle="Preservation controls for higher-end audio and stricter subtitle handling.">
+      <details className="settings-rules-advanced">
+        <summary>
+          <span>Advanced audio preservation</span>
+          <small>Surround, 7.1, and Atmos-capable tracks</small>
+        </summary>
         <div className="settings-rules-toggles">
           <ToggleField
             label="Preserve surround audio"
@@ -505,9 +618,9 @@ function RulesetEditor({
             onChange={(checked) => onChange({ ...ruleset.current, preserve_atmos: checked })}
           />
         </div>
-      </CollapsibleSection>
+      </details>
 
-      <div className="section-card-actions">
+      <div className="settings-rules-action-footer">
         <button className="button button-secondary button-small" type="button" onClick={onUseDefaults} disabled={saving}>
           Use defaults
         </button>
@@ -552,13 +665,8 @@ function LanguageListField({
               key={language}
               className={`button button-small ${active ? "button-primary" : "button-secondary"}`}
               type="button"
-              onClick={() => {
-                if (active) {
-                  onChange(value.filter((item) => item !== language));
-                  return;
-                }
-                onChange([...value, language]);
-              }}
+              aria-pressed={active}
+              onClick={() => onChange(appendLanguage(value, language))}
             >
               {language}
             </button>
@@ -595,6 +703,11 @@ function parseLanguageList(raw: string) {
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function appendLanguage(value: string[], language: string) {
+  const normalised = parseLanguageList([...value, language].join(", "));
+  return Array.from(new Set(normalised));
 }
 
 function clampPercentage(raw: string, fallback: number) {

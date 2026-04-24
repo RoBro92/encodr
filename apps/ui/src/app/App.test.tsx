@@ -328,10 +328,10 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/config", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
-    expect(screen.getByText(/^movies$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^movies 4k$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^tv$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^tv 4k$/i)).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-movies")).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-movies_4k")).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-tv")).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-tv_4k")).toBeInTheDocument();
     expect(screen.getByLabelText(/^Movies max video reduction$/i)).toBeInTheDocument();
 
     await userEvent.selectOptions(screen.getByLabelText(/^Movies target video codec$/i), "h264");
@@ -387,7 +387,9 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/config", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("processing-rules-tab-tv"));
     await userEvent.selectOptions(screen.getByLabelText(/^TV target video codec$/i), "av1");
+    await userEvent.click(screen.getByTestId("processing-rules-tab-movies"));
     await userEvent.selectOptions(screen.getByLabelText(/^Movies target video codec$/i), "h264");
     await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
 
