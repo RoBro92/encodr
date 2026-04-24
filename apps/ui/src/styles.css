@@ -2266,6 +2266,12 @@ pre {
   line-height: 1.45;
 }
 
+.worker-modal-actions {
+  justify-content: flex-end;
+  padding-top: 16px;
+  border-top: 1px solid var(--border);
+}
+
 .worker-preference-form {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -2282,6 +2288,14 @@ pre {
 
 .worker-preference-full {
   grid-column: 1 / -1;
+}
+
+.worker-preference-form .field > span:first-child {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 
 .worker-field-helper {
@@ -2305,6 +2319,167 @@ pre {
   width: 18px;
   height: 18px;
   margin: 0;
+}
+
+.schedule-editor {
+  min-width: 0;
+  display: grid;
+  gap: 16px;
+}
+
+.settings-rules-fields > .schedule-editor {
+  grid-column: 1 / -1;
+}
+
+.schedule-editor-header {
+  display: grid;
+  gap: 12px;
+}
+
+.schedule-editor-header strong {
+  color: var(--text);
+  font-size: 1rem;
+}
+
+.schedule-editor-header p {
+  margin: 4px 0 0;
+  color: var(--text-muted);
+  line-height: 1.45;
+}
+
+.schedule-add-button {
+  width: 100%;
+  justify-content: center;
+}
+
+.schedule-window-list {
+  max-height: 24rem;
+  overflow-y: auto;
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+  padding-right: 2px;
+}
+
+.schedule-window-row {
+  display: grid;
+  grid-template-columns: minmax(220px, 1.35fr) minmax(116px, 0.7fr) minmax(116px, 0.7fr) auto;
+  align-items: end;
+  gap: 16px;
+  padding: 12px;
+  border: 1px solid #f3f4f6;
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--bg-panel) 94%, transparent);
+}
+
+.schedule-window-row-with-concurrency {
+  grid-template-columns: minmax(220px, 1.35fr) minmax(116px, 0.7fr) minmax(116px, 0.7fr) minmax(96px, 0.55fr) auto;
+}
+
+.schedule-window-days,
+.schedule-window-field {
+  min-width: 0;
+  display: grid;
+  gap: 7px;
+}
+
+.schedule-window-label {
+  color: var(--text-subtle);
+  font-size: 0.72rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.schedule-day-grid {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.schedule-day-pill {
+  min-width: 32px;
+  min-height: 30px;
+  padding: 0 8px;
+  border: 1px solid var(--border-strong);
+  border-radius: 999px;
+  background: var(--bg-panel-strong);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 0.8rem;
+  font-weight: 700;
+}
+
+.schedule-day-pill:hover:not(:disabled),
+.schedule-day-pill:focus-visible {
+  border-color: color-mix(in srgb, var(--color-primary) 42%, var(--border-strong));
+  color: var(--color-primary);
+}
+
+.schedule-day-pill-active,
+.schedule-day-pill-active:hover:not(:disabled),
+.schedule-day-pill-active:focus-visible {
+  border-color: var(--color-primary);
+  background: var(--color-primary);
+  color: #ffffff;
+}
+
+.schedule-day-pill:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.schedule-window-field input {
+  width: 100%;
+  min-width: 0;
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px 12px;
+  background: var(--bg-panel-strong);
+  color: var(--text);
+}
+
+.schedule-window-concurrency input {
+  max-width: 88px;
+}
+
+.schedule-window-field input:focus {
+  outline: 2px solid rgba(31, 93, 72, 0.18);
+  outline-offset: 2px;
+}
+
+.schedule-window-remove {
+  width: 38px;
+  height: 38px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  justify-self: end;
+  border: 1px solid color-mix(in srgb, var(--color-danger) 24%, transparent);
+  border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--bg-panel-strong));
+  color: var(--color-danger);
+  cursor: pointer;
+}
+
+.schedule-window-remove:hover:not(:disabled),
+.schedule-window-remove:focus-visible {
+  background: color-mix(in srgb, var(--color-danger) 14%, var(--bg-panel-strong));
+}
+
+.schedule-window-remove:disabled {
+  cursor: not-allowed;
+  opacity: 0.58;
+}
+
+.schedule-window-remove svg {
+  width: 18px;
+  height: 18px;
+  fill: none;
+  stroke: currentColor;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 1.8;
 }
 
 .worker-detail-metric-grid,
@@ -2622,6 +2797,15 @@ pre {
     grid-template-columns: 1fr;
   }
 
+  .schedule-window-row,
+  .schedule-window-row-with-concurrency {
+    grid-template-columns: 1fr 1fr;
+  }
+
+  .schedule-window-days {
+    grid-column: 1 / -1;
+  }
+
   .record-list-item-body {
     flex-direction: column;
   }
@@ -2637,5 +2821,16 @@ pre {
     justify-items: start;
     text-align: left;
     min-width: 0;
+  }
+}
+
+@media (max-width: 640px) {
+  .schedule-window-row,
+  .schedule-window-row-with-concurrency {
+    grid-template-columns: 1fr;
+  }
+
+  .schedule-window-concurrency input {
+    max-width: none;
   }
 }

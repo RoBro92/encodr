@@ -575,7 +575,7 @@ export function WorkersPage() {
 
       {isAddWorkerOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Add worker">
-          <section className="modal-panel">
+          <section className="modal-panel modal-panel-wide">
             <div className="section-card-header">
               <div>
                 <h2>Add worker</h2>
@@ -631,7 +631,7 @@ export function WorkersPage() {
                     }))}
                   />
                 ) : null}
-                <div className="section-card-actions">
+                <div className="section-card-actions worker-modal-actions">
                   <button className="button button-secondary button-small" type="button" onClick={() => setAddWorkerMode("choose")}>
                     Back
                   </button>
@@ -664,7 +664,7 @@ export function WorkersPage() {
                   showPlatform
                   showPathMappings
                 />
-                <div className="section-card-actions">
+                <div className="section-card-actions worker-modal-actions">
                   <button className="button button-secondary button-small" type="button" onClick={() => setAddWorkerMode("choose")}>
                     Back
                   </button>
@@ -693,7 +693,7 @@ export function WorkersPage() {
 
       {editingWorker && editDraft ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Edit worker">
-          <section className="modal-panel">
+          <section className="modal-panel modal-panel-wide">
             <div className="section-card-header">
               <div>
                 <h2>Edit worker</h2>
@@ -721,7 +721,7 @@ export function WorkersPage() {
               </div>
             ) : null}
 
-            <div className="section-card-actions">
+            <div className="section-card-actions worker-modal-actions">
               <button
                 className="button button-primary button-small"
                 type="button"
@@ -838,22 +838,6 @@ function WorkerPreferenceFields({
             onChange={(event) => onChange({ ...draft, display_name: event.target.value })}
           />
         </label>
-
-        {showPlatform && "platform" in draft ? (
-          <label className="field">
-            <span>Platform</span>
-            <select
-              aria-label="Worker platform"
-              value={draft.platform}
-              onChange={(event) => onChange({ ...draft, platform: event.target.value as "windows" | "linux" | "macos" })}
-            >
-              {PLATFORM_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>{option.label}</option>
-              ))}
-            </select>
-          </label>
-        ) : null}
-
         <label className="field">
           <span>Preferred backend</span>
           <select
@@ -903,10 +887,29 @@ function WorkerPreferenceFields({
           <span>Allow CPU fallback</span>
         </label>
 
+        {showPlatform && "platform" in draft ? (
+          <label className="field">
+            <span>Platform</span>
+            <select
+              aria-label="Worker platform"
+              value={draft.platform}
+              onChange={(event) => onChange({ ...draft, platform: event.target.value as "windows" | "linux" | "macos" })}
+            >
+              {PLATFORM_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
+
+      <div className="worker-preference-full">
         <ScheduleWindowsEditor
           label="Schedule windows"
           value={draft.schedule_windows ?? []}
           onChange={(value) => onChange({ ...draft, schedule_windows: value })}
+          concurrencyValue={draft.max_concurrent_jobs ?? recommendedConcurrency}
+          onConcurrencyChange={(value) => onChange({ ...draft, max_concurrent_jobs: Math.max(1, Math.min(8, value)) })}
         />
       </div>
 
