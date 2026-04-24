@@ -25,6 +25,7 @@ import {
 import type {
   RemoteWorkerOnboardingPayload,
   RemoteWorkerOnboardingResponse,
+  WorkerInventorySummary,
   WorkerInventoryDetail,
   WorkerPreferencePayload,
   WorkerRemovalResponse,
@@ -56,6 +57,12 @@ type PathMappingDraft = {
   label?: string | null;
   server_path: string;
   worker_path: string;
+};
+
+type WorkerStatusRollupResult = {
+  badge: "healthy" | "degraded" | "failed" | string;
+  message: string;
+  attentionMessage: string | null;
 };
 
 const EMPTY_PATH_MAPPING: PathMappingDraft = {
@@ -192,6 +199,9 @@ export function WorkersPage() {
   const configuredBackendProbe = detail?.worker_type === "local"
     ? localBackendProbes.find((item) => item.preference_key === detail.preferred_backend)
     : null;
+  const detailStatusRollup = detail ? buildWorkerStatusRollup(detail, localWorkerStatus) : null;
+  const detailAttentionMessage = detailStatusRollup?.attentionMessage
+    ?? (detailPrimaryIssues.length > 0 ? detailPrimaryIssues.join(" • ") : null);
   const selectedHardwareBackendProbe = configuredBackendProbe && configuredBackendProbe.backend !== "cpu"
     ? configuredBackendProbe
     : null;
@@ -250,6 +260,10 @@ export function WorkersPage() {
           <div className="record-list worker-inventory-list" role="list" aria-label="Workers list">
             {workers.map((item) => {
               const isActive = item.id === workerId;
+              const itemLocalWorkerStatus = item.worker_type === "local" && (!workerStatus.worker_id || workerStatus.worker_id === item.id)
+                ? workerStatus
+                : null;
+              const itemStatusRollup = buildWorkerStatusRollup(item, itemLocalWorkerStatus);
               return (
                 <Link
                   key={item.id}
@@ -265,7 +279,7 @@ export function WorkersPage() {
                       <StatusBadge value={item.worker_type} />
                       <StatusBadge value={item.worker_state} />
                       <StatusBadge value={item.enabled ? "enabled" : "disabled"} />
-                      <StatusBadge value={item.health_status} />
+                      <StatusBadge value={itemStatusRollup.badge} />
                     </div>
                   </div>
                   <div className="worker-inventory-stats">
@@ -275,7 +289,7 @@ export function WorkersPage() {
                     <WorkerInventoryStat label="Schedule" value={item.schedule_summary ?? "Any time"} />
                     <WorkerInventoryStat
                       label="Status message"
-                      value={item.health_summary ?? "No health summary reported."}
+                      value={<WorkerStatusRollupView rollup={itemStatusRollup} />}
                       clamp
                     />
                   </div>
@@ -351,15 +365,24 @@ export function WorkersPage() {
                 <StatusBadge value={detail.worker_type} />
                 <StatusBadge value={detail.worker_state} />
                 <StatusBadge value={detail.enabled ? "enabled" : "disabled"} />
-                <StatusBadge value={detail.health_status} />
+                <StatusBadge value={detailStatusRollup?.badge ?? detail.health_status} />
                 <StatusBadge value={formatBackendLabel(detail.preferred_backend)} />
                 {cpuFallbackActive ? <StatusBadge value="cpu fallback active" /> : null}
               </div>
 
-              {detailPrimaryIssues.length > 0 ? (
-                <div className="info-strip info-strip-warning" role="note">
-                  <strong>{detail.health_status === "healthy" ? "Attention" : "Why this worker is degraded"}</strong>
-                  <span>{detailPrimaryIssues.join(" • ")}</span>
+              {detailAttentionMessage ? (
+                <div className="worker-attention-banner" role="note">
+                  <span className="worker-attention-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false">
+                      <path d="M10.3 4.2 2.7 17.4A2 2 0 0 0 4.4 20h15.2a2 2 0 0 0 1.7-2.6L13.7 4.2a2 2 0 0 0-3.4 0Z" />
+                      <path d="M12 9v4" />
+                      <path d="M12 17h.01" />
+                    </svg>
+                  </span>
+                  <div>
+                    <strong>Attention</strong>
+                    <span>{detailAttentionMessage}</span>
+                  </div>
                 </div>
               ) : null}
 
@@ -380,7 +403,10 @@ export function WorkersPage() {
               ) : null}
 
               <section className="worker-detail-metric-grid">
-                <WorkerDetailMetric label="Health summary" value={detail.health_summary ?? "No summary reported"} />
+                <WorkerDetailMetric
+                  label="Health summary"
+                  value={<WorkerStatusRollupView rollup={detailStatusRollup ?? buildWorkerStatusRollup(detail, localWorkerStatus)} />}
+                />
                 <WorkerDetailMetric
                   label="Current activity"
                   value={detail.current_stage ?? detail.runtime_summary?.current_stage ?? detail.current_job_id ?? "Idle"}
@@ -696,7 +722,7 @@ export function WorkersPage() {
 
       {editingWorker && editDraft ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Edit worker">
-          <section className="modal-panel modal-panel-wide">
+          <section className="modal-panel modal-panel-wide worker-edit-modal">
             <div className="section-card-header">
               <div>
                 <h2>Edit worker</h2>
@@ -914,13 +940,13 @@ function WorkerInventoryStat({
   clamp = false,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
   clamp?: boolean;
 }) {
   return (
     <div className="worker-stat">
       <span>{label}</span>
-      <strong className={clamp ? "worker-stat-clamped" : undefined}>{value}</strong>
+      <div className={`worker-stat-value${clamp ? " worker-stat-clamped" : ""}`}>{value}</div>
     </div>
   );
 }
@@ -930,12 +956,21 @@ function WorkerDetailMetric({
   value,
 }: {
   label: string;
-  value: string;
+  value: ReactNode;
 }) {
   return (
     <div className="worker-detail-metric">
       <span>{label}</span>
-      <strong>{value}</strong>
+      <div className="worker-detail-metric-value">{value}</div>
+    </div>
+  );
+}
+
+function WorkerStatusRollupView({ rollup }: { rollup: WorkerStatusRollupResult }) {
+  return (
+    <div className="worker-status-rollup">
+      <StatusBadge value={rollup.badge} />
+      <span className="worker-status-rollup-message">{rollup.message}</span>
     </div>
   );
 }
@@ -1243,6 +1278,59 @@ function isUnavailableMetric(value: string) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function buildWorkerStatusRollup(
+  worker: Pick<WorkerInventorySummary, "worker_type" | "preferred_backend" | "allow_cpu_fallback" | "health_status" | "health_summary">,
+  localWorkerStatus: WorkerStatus | null,
+): WorkerStatusRollupResult {
+  const configuredBackendProbe = worker.worker_type === "local"
+    ? localWorkerStatus?.hardware_probes.find((item) => item.preference_key === worker.preferred_backend)
+    : null;
+
+  if (configuredBackendProbe) {
+    const backendHealth = configuredBackendProbe.status.toLowerCase();
+    const backendReason = configuredBackendProbe.reason_unavailable ?? configuredBackendProbe.message;
+    const attentionReason = backendReason ? trimSentencePunctuation(backendReason) : null;
+
+    if (backendHealth === "healthy") {
+      return {
+        badge: "healthy",
+        message: "The local worker is healthy and available.",
+        attentionMessage: null,
+      };
+    }
+
+    if (backendHealth === "failed" || !configuredBackendProbe.usable_by_ffmpeg) {
+      if (worker.allow_cpu_fallback) {
+        return {
+          badge: "degraded",
+          message: `Primary backend failed. Falling back to CPU execution.${backendReason ? ` Reason: ${backendReason}` : ""}`,
+          attentionMessage: attentionReason
+            ? `Attention: Primary backend failed (${attentionReason}). Worker is falling back to CPU execution.`
+            : "Attention: Primary backend failed. Worker is falling back to CPU execution.",
+        };
+      }
+
+      return {
+        badge: "failed",
+        message: "Primary backend failed and CPU fallback is disabled. Worker cannot execute jobs.",
+        attentionMessage: attentionReason
+          ? `Attention: Primary backend failed (${attentionReason}). CPU fallback is disabled. Worker cannot execute jobs.`
+          : "Attention: Primary backend failed. CPU fallback is disabled. Worker cannot execute jobs.",
+      };
+    }
+  }
+
+  return {
+    badge: worker.health_status ?? "unknown",
+    message: worker.health_summary ?? "No health summary reported.",
+    attentionMessage: null,
+  };
+}
+
+function trimSentencePunctuation(value: string) {
+  return value.trim().replace(/[.!?]+$/, "");
 }
 
 function buildWorkerPrimaryIssues(detail: WorkerInventoryDetail, localWorkerStatus: WorkerStatus | null) {
