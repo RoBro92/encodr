@@ -740,42 +740,21 @@ export function WorkersPage() {
               >
                 {updateWorkerPreferencesMutation.isPending ? "Saving…" : "Save worker"}
               </button>
-              {editingWorker.enabled ? (
-                <button
-                  className="button button-secondary button-small"
-                  type="button"
-                  onClick={() => disableMutation.mutate(editingWorker.id)}
-                  disabled={disableMutation.isPending}
-                >
-                  {disableMutation.isPending ? "Disabling…" : "Disable"}
-                </button>
-              ) : (
-                <button
-                  className="button button-secondary button-small"
-                  type="button"
-                  onClick={() => enableMutation.mutate(editingWorker.id)}
-                  disabled={enableMutation.isPending}
-                >
-                  {enableMutation.isPending ? "Enabling…" : "Enable"}
-                </button>
-              )}
-              {editingWorker.worker_type === "remote" ? (
-                <button
-                  className="button button-danger button-small"
-                  type="button"
-                  onClick={() => {
-                    deleteWorkerMutation.mutate(editingWorker.id, {
-                      onSuccess: (result) => {
-                        setRemovalResult(result);
-                        setEditingWorker(null);
-                      },
-                    });
-                  }}
-                  disabled={deleteWorkerMutation.isPending}
-                >
-                  {deleteWorkerMutation.isPending ? "Removing…" : "Delete worker"}
-                </button>
-              ) : null}
+              <button
+                className="button button-danger button-small"
+                type="button"
+                onClick={() => {
+                  deleteWorkerMutation.mutate(editingWorker.id, {
+                    onSuccess: (result) => {
+                      setRemovalResult(result);
+                      setEditingWorker(null);
+                    },
+                  });
+                }}
+                disabled={deleteWorkerMutation.isPending}
+              >
+                {deleteWorkerMutation.isPending ? "Removing…" : "Delete worker"}
+              </button>
             </div>
           </section>
         </div>
