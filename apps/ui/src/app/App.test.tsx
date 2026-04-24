@@ -416,7 +416,14 @@ describe("Encodr UI shell", () => {
   it("shows the simplified settings structure and update status", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
-      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      {
+        method: "GET",
+        path: "/api/system/storage",
+        body: {
+          ...storageStatus(),
+          warnings: ["Media path is empty. If you expected a mounted library, check the host or LXC bind mount."],
+        },
+      },
       {
         method: "GET",
         path: "/api/system/update",
@@ -441,6 +448,10 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("heading", { name: /^storage$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /^updates$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /processing rules/i })).toBeInTheDocument();
+    const settingsWarning = screen.getByRole("alert");
+    expect(settingsWarning).toHaveTextContent(/media path is empty/i);
+    const storageCard = screen.getByRole("heading", { name: /^storage$/i }).closest(".section-card");
+    expect(storageCard).not.toHaveTextContent(/media path is empty/i);
     expect(screen.queryByText(/worker backends are configured per worker on the workers page/i)).not.toBeInTheDocument();
     expect(screen.getAllByText(/runtime health/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/scratch path/i).length).toBeGreaterThan(0);

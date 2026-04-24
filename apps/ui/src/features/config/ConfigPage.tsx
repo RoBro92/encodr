@@ -149,6 +149,22 @@ export function ConfigPage() {
       {updateRulesMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to save processing rules" message={updateRulesMutation.error.message} />
       ) : null}
+      {storage.warnings.length > 0 ? (
+        <div className="settings-page-warning" role="alert">
+          <span className="settings-page-warning-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M12 3 2.5 20.5h19L12 3Z" />
+              <path d="M12 9v5" />
+              <path d="M12 17.5h.01" />
+            </svg>
+          </span>
+          <div>
+            {storage.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
+          </div>
+        </div>
+      ) : null}
       <section className="settings-overview-grid">
         <div className="settings-overview-item">
           <SectionCard title="Library folders" subtitle="Choose the main folders you want Encodr to use.">
@@ -194,15 +210,6 @@ export function ConfigPage() {
                 <SettingsDataItem label="Scratch status" value={<StatusBadge value={storage.scratch.status} />} />
                 <SettingsDataItem label="Data path" value={runtime.data_dir} />
               </div>
-              {storage.warnings.length > 0 ? (
-                <div className="settings-warning-stack">
-                  {storage.warnings.map((warning) => (
-                    <div key={warning} className="info-strip info-strip-warning settings-warning-callout" role="note">
-                      <span>{warning}</span>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
             </div>
           </SectionCard>
         </div>
