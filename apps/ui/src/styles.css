@@ -1125,6 +1125,12 @@ pre {
   margin: 4px 0 0;
 }
 
+.changelog-modal-date {
+  margin: 6px 0 0;
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
 .changelog-modal-footer {
   align-items: center;
   justify-content: flex-end;

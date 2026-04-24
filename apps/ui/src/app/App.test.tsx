@@ -424,7 +424,8 @@ describe("Encodr UI shell", () => {
           ...updateStatus(),
           latest_version: nextPatchVersion(CURRENT_VERSION),
           update_available: false,
-          release_summary: "## Runtime detection\n\n- Update guidance improvements.\n- Safer `encodr update --apply` output.",
+          checked_at: "2026-04-21T08:00:00Z",
+          release_summary: "## Runtime detection 2026-04-20\n\n- Update guidance improvements.\n- Safer `encodr update --apply` output.",
           breaking_changes_summary: "Restart after update if newly passed-through devices are not visible.",
         },
       },
@@ -449,7 +450,9 @@ describe("Encodr UI shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /view changelog/i }));
     expect(screen.getByRole("dialog", { name: /release notes/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /release notes/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /runtime detection/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /close release notes/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/checked 21-04-2026/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /runtime detection 20-04-2026/i })).toBeInTheDocument();
     expect(screen.getByText(/update guidance improvements/i)).toBeInTheDocument();
     expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
 

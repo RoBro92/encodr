@@ -236,6 +236,7 @@ export function ConfigPage() {
       {isChangelogModalOpen ? (
         <ChangelogModal
           releaseName={updateStatus.release_name}
+          checkedAt={updateStatus.checked_at}
           releaseSummary={updateStatus.release_summary}
           breakingChangesSummary={updateStatus.breaking_changes_summary}
           onClose={() => setIsChangelogModalOpen(false)}
@@ -298,11 +299,13 @@ export function ConfigPage() {
 
 function ChangelogModal({
   releaseName,
+  checkedAt,
   releaseSummary,
   breakingChangesSummary,
   onClose,
 }: {
   releaseName: string | null;
+  checkedAt: string | null;
   releaseSummary: string | null;
   breakingChangesSummary: string | null;
   onClose: () => void;
@@ -310,6 +313,7 @@ function ChangelogModal({
   const dialogRef = useRef<HTMLElement | null>(null);
   const closeButtonRef = useRef<HTMLButtonElement | null>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
+  const checkedDate = formatDisplayDate(checkedAt);
   const markdown = [
     releaseSummary ?? "No release notes were reported for this update.",
     breakingChangesSummary ? `\n\n## Breaking changes\n\n${breakingChangesSummary}` : "",
@@ -375,16 +379,14 @@ function ChangelogModal({
           <div>
             <p className="section-eyebrow">{releaseName ?? "Encodr changelog"}</p>
             <h2 id="changelog-modal-title">Release Notes</h2>
+            {checkedDate ? <p className="changelog-modal-date">Checked {checkedDate}</p> : null}
           </div>
-          <button ref={closeButtonRef} className="button button-secondary button-small" type="button" onClick={onClose} aria-label="Close release notes">
-            X
-          </button>
         </div>
         <div className="changelog-markdown">
           <MarkdownContent source={markdown} />
         </div>
         <div className="changelog-modal-footer">
-          <button className="button button-primary button-small" type="button" onClick={onClose}>
+          <button ref={closeButtonRef} className="button button-primary button-small" type="button" onClick={onClose}>
             Close
           </button>
         </div>
@@ -501,11 +503,12 @@ function parseMarkdownBlocks(source: string): MarkdownBlock[] {
 function renderInlineMarkdown(source: string): ReactNode[] {
   const nodes: ReactNode[] = [];
   const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g;
+  const formattedSource = formatMarkdownDates(source);
   let lastIndex = 0;
-  for (const match of source.matchAll(pattern)) {
+  for (const match of formattedSource.matchAll(pattern)) {
     const matchIndex = match.index ?? 0;
     if (matchIndex > lastIndex) {
-      nodes.push(source.slice(lastIndex, matchIndex));
+      nodes.push(formattedSource.slice(lastIndex, matchIndex));
     }
     const token = match[0];
     if (token.startsWith("`")) {
@@ -518,10 +521,25 @@ function renderInlineMarkdown(source: string): ReactNode[] {
     }
     lastIndex = matchIndex + token.length;
   }
-  if (lastIndex < source.length) {
-    nodes.push(source.slice(lastIndex));
+  if (lastIndex < formattedSource.length) {
+    nodes.push(formattedSource.slice(lastIndex));
   }
   return nodes;
+}
+
+function formatMarkdownDates(value: string) {
+  return value.replace(/\b(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?\b/g, (_match, year, month, day) => `${day}-${month}-${year}`);
+}
+
+function formatDisplayDate(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) {
+    return value;
+  }
+  return `${match[3]}-${match[2]}-${match[1]}`;
 }
 
 function ProcessingRulesSection({
