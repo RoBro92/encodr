@@ -3,6 +3,7 @@ import { Navigate, useLocation, useNavigate } from "react-router-dom";
 
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { LoadingBlock } from "../../components/LoadingBlock";
+import { LogoStacked } from "../../components/Logo";
 import { useBootstrapAdminMutation, useBootstrapStatusQuery } from "../../lib/api/hooks";
 import { useSession } from "./AuthProvider";
 import { APP_ROUTES } from "../../lib/utils/routes";
@@ -43,7 +44,7 @@ export function LoginPage() {
     return (
       <main className="login-shell">
         <section className="login-panel">
-          <p className="section-eyebrow">Encodr</p>
+          <LogoStacked className="logo-stacked login-logo" />
           <h1>Unable to load sign-in state</h1>
           <p className="section-copy">
             Encodr could not confirm whether a first admin user needs to be created. Check API access and refresh the page.
@@ -106,7 +107,7 @@ export function LoginPage() {
   return (
     <main className="login-shell">
       <section className="login-panel">
-        <p className="section-eyebrow">Encodr</p>
+        <LogoStacked className="logo-stacked login-logo" />
         <h1>{bootstrapRequired ? "Set up the first admin user" : "Sign in to the operator console"}</h1>
         <p className="section-copy">
           {bootstrapRequired

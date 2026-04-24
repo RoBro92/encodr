@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from "react";
-import { Link, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { EmptyState } from "../../components/EmptyState";
@@ -17,10 +17,9 @@ import {
   useJobDetailQuery,
   useJobsQuery,
   useRetryJobMutation,
-  useRunWorkerOnceMutation,
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
-import type { FileSummary, JobSummary } from "../../lib/types/api";
+import type { FileSummary, JobDetail, JobSummary } from "../../lib/types/api";
 import { formatBytes, formatDateTime, formatDurationSeconds, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -52,6 +51,7 @@ type JobWorkerGroup = {
 
 export function JobsPage() {
   const { jobId } = useParams();
+  const navigate = useNavigate();
   const [status, setStatus] = useState("");
   const [fileId, setFileId] = useState("");
   const [fileSearch, setFileSearch] = useState("");
@@ -80,7 +80,6 @@ export function JobsPage() {
   const retryMutation = useRetryJobMutation();
   const cancelMutation = useCancelJobMutation();
   const createJobMutation = useCreateJobMutation();
-  const runOnceMutation = useRunWorkerOnceMutation();
   const workerStatusQuery = useWorkerStatusQuery();
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
@@ -96,6 +95,10 @@ export function JobsPage() {
   const metrics = summariseJobs(jobs);
   const canRetry = detail ? ["failed", "interrupted", "manual_review", "skipped"].includes(detail.status) : false;
   const selectedJobId = detail?.id;
+
+  function closeDrawer() {
+    navigate(APP_ROUTES.jobs);
+  }
 
   useEffect(() => {
     setExpandedGroups((current) => {
@@ -132,19 +135,6 @@ export function JobsPage() {
         eyebrow="Jobs"
         title="Jobs"
         description="Monitor running work, inspect outcomes, and retry jobs that need another pass."
-        actions={(
-          <div className="action-group">
-            <button
-              className="button button-primary"
-              type="button"
-              onClick={() => runOnceMutation.mutate()}
-              disabled={runOnceMutation.isPending}
-            >
-              {runOnceMutation.isPending ? "Running worker…" : "Run worker once"}
-            </button>
-            <span className="action-helper">Process the next queued job.</span>
-          </div>
-        )}
       />
 
       {retryMutation.error instanceof Error ? (
@@ -155,9 +145,6 @@ export function JobsPage() {
       ) : null}
       {createJobMutation.error instanceof Error ? (
         <ErrorPanel title="Job creation failed" message={createJobMutation.error.message} />
-      ) : null}
-      {runOnceMutation.error instanceof Error ? (
-        <ErrorPanel title="Worker run failed" message={runOnceMutation.error.message} />
       ) : null}
 
       <section className="jobs-metrics-grid" aria-label="Jobs metrics">
@@ -253,7 +240,7 @@ export function JobsPage() {
         </div>
       </SectionCard>
 
-      <section className={`jobs-review-layout${detail || (jobId && detailQuery.isLoading) ? "" : " jobs-review-layout-single"}`}>
+      <section className="jobs-review-layout jobs-review-layout-single">
         <SectionCard title="Queue" subtitle={`${jobs.length} job${jobs.length === 1 ? "" : "s"} in view`}>
           {orderedJobs.length === 0 ? (
             <EmptyState title="No jobs yet" message="Create a plan in Library, then create a job to populate the queue." />
@@ -358,45 +345,88 @@ export function JobsPage() {
             </div>
           )}
         </SectionCard>
+      </section>
 
-        {jobId && detailQuery.isLoading ? (
-          <SectionCard title="Selected job" subtitle="Loading the latest result.">
-            <LoadingBlock label="Loading job detail" />
-          </SectionCard>
-        ) : detail ? (
-          <SectionCard
-            title="Selected job"
-            subtitle={jobPrimaryLabel(detail, files)}
-            actions={(
-              <div className="section-card-actions">
-                {canRetry ? (
-                  <button
-                    className="button button-primary button-small"
-                    type="button"
-                    onClick={() => {
-                      if (selectedJobId) {
-                        retryMutation.mutate(selectedJobId);
-                      }
-                    }}
-                    disabled={retryMutation.isPending}
-                  >
-                    {retryMutation.isPending ? "Retrying…" : "Retry job"}
-                  </button>
-                ) : null}
-                {canCancelJob(detail, localWorkerId) ? (
-                  <button
-                    className="button button-secondary button-small"
-                    type="button"
-                    onClick={() => cancelMutation.mutate(detail.id)}
-                    disabled={cancelMutation.isPending}
-                  >
-                    {cancelMutation.isPending ? "Cancelling…" : "Cancel job"}
-                  </button>
-                ) : null}
-              </div>
-            )}
-          >
-            <div className="card-stack">
+      {jobId ? (
+        <JobDetailDrawer
+          detail={detail}
+          files={files}
+          isLoading={detailQuery.isLoading}
+          canRetry={canRetry}
+          canCancel={detail ? canCancelJob(detail, localWorkerId) : false}
+          isRetryPending={retryMutation.isPending}
+          isCancelPending={cancelMutation.isPending}
+          onClose={closeDrawer}
+          onRetry={() => {
+            if (selectedJobId) {
+              retryMutation.mutate(selectedJobId);
+            }
+          }}
+          onCancel={() => {
+            if (detail) {
+              cancelMutation.mutate(detail.id);
+            }
+          }}
+        />
+      ) : null}
+    </div>
+  );
+}
+
+function JobDetailDrawer({
+  detail,
+  files,
+  isLoading,
+  canRetry,
+  canCancel,
+  isRetryPending,
+  isCancelPending,
+  onClose,
+  onRetry,
+  onCancel,
+}: {
+  detail: JobDetail | undefined;
+  files: FileSummary[];
+  isLoading: boolean;
+  canRetry: boolean;
+  canCancel: boolean;
+  isRetryPending: boolean;
+  isCancelPending: boolean;
+  onClose: () => void;
+  onRetry: () => void;
+  onCancel: () => void;
+}) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const title = detail ? jobPrimaryLabel(detail, files) : "Selected job";
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+  }, [detail?.id]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  return (
+    <>
+      <button
+        className="job-drawer-backdrop"
+        type="button"
+        aria-label="Close selected job"
+        onClick={onClose}
+      />
+      <aside className="job-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="job-drawer-title">
+        <header className="job-drawer-header">
+          <div className="job-drawer-title">
+            <h2 id="job-drawer-title">{title}</h2>
+            {detail ? (
               <div className="badge-row">
                 <StatusBadge value={displayJobStatus(detail)} />
                 <StatusBadge value={detail.verification_status} />
@@ -405,210 +435,307 @@ export function JobsPage() {
                 {detail.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
                 {detail.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
               </div>
+            ) : null}
+          </div>
+          <button
+            ref={closeButtonRef}
+            className="job-drawer-close"
+            type="button"
+            aria-label="Close selected job"
+            onClick={onClose}
+          >
+            X
+          </button>
+        </header>
 
-              {isOperatorCancelled(detail) ? (
-                <div className="info-strip">
-                  <strong>Cancelled</strong>
-                  <span>{detail.failure_message ?? "This job was cancelled by the operator."}</span>
-                </div>
-              ) : null}
-
-              {detail.status === "scheduled" && detail.schedule_summary ? (
-                <div className="info-strip info-strip-warning">
-                  <strong>Scheduled</strong>
-                  <span>
-                    This job is waiting for its allowed execution window.
-                    {detail.scheduled_for_at ? ` Next opening: ${formatDateTime(detail.scheduled_for_at)}.` : ""}
-                  </span>
-                </div>
-              ) : null}
-
-              {detail.status === "interrupted" && detail.interruption_reason ? (
-                <div className="info-strip info-strip-warning">
-                  <strong>{isOperatorCancelled(detail) ? "Cancelled" : "Interrupted"}</strong>
-                  <span>{detail.interruption_reason}</span>
-                </div>
-              ) : null}
-
-              {detail.failure_message && !isOperatorCancelled(detail) ? (
-                <div className="info-strip info-strip-danger">
-                  <strong>Failure</strong>
-                  <span>{detail.failure_message}</span>
-                </div>
-              ) : null}
-
-              {detail.job_kind === "dry_run" ? (
-                <div className="info-strip">
-                  <strong>Dry run analysis</strong>
-                  <span>This job inspected the file on a worker and stored a safe plan without transcoding or replacing media.</span>
-                </div>
-              ) : null}
+        <div className="job-drawer-body">
+          {isLoading ? (
+            <LoadingBlock label="Loading job detail" />
+          ) : detail ? (
+            <div className="job-drawer-stack">
+              <JobDrawerCallouts detail={detail} />
 
               <JobProgressBar job={detail} />
 
-              <section className="metric-grid metric-grid-compact">
-                <div className="metric-pill">
-                  <span className="metric-label">Worker</span>
-                  <strong>{detail.worker_name ?? "Not assigned"}</strong>
-                </div>
-                <div className="metric-pill">
-                  <span className="metric-label">Attempts</span>
-                  <strong>{detail.attempt_count}</strong>
-                </div>
-                <div className="metric-pill">
-                  <span className="metric-label">Updated</span>
-                  <strong>{formatDateTime(detail.updated_at)}</strong>
-                </div>
-                <div className="metric-pill">
-                  <span className="metric-label">Stage</span>
-                  <strong>{describeJobProgress(detail).stageLabel}</strong>
-                </div>
-                <div className="metric-pill">
-                  <span className="metric-label">Requested backend</span>
-                  <strong>{formatBackendLabel(detail.requested_execution_backend)}</strong>
-                </div>
-                <div className="metric-pill">
-                  <span className="metric-label">Actual backend</span>
-                  <strong>{formatBackendLabel(detail.actual_execution_backend ?? detail.requested_execution_backend)}</strong>
-                </div>
+              <section className="job-drawer-metrics" aria-label="Job metrics">
+                <JobDrawerMetric label="Worker" value={detail.worker_name ?? "Not assigned"} />
+                <JobDrawerMetric label="Attempts" value={detail.attempt_count} />
+                <JobDrawerMetric label="Updated" value={formatDateTime(detail.updated_at)} />
+                <JobDrawerMetric label="Stage" value={describeJobProgress(detail).stageLabel} />
+                <JobDrawerMetric label="Requested backend" value={formatBackendLabel(detail.requested_execution_backend)} />
+                <JobDrawerMetric label="Actual backend" value={formatBackendLabel(detail.actual_execution_backend ?? detail.requested_execution_backend)} />
               </section>
 
               {detail.backend_selection_reason ? (
-                <div className={`info-strip${detail.backend_fallback_used ? " info-strip-warning" : ""}`} role="note">
-                  <strong>{detail.backend_fallback_used ? "Backend fallback" : "Backend selection"}</strong>
-                  <span>{detail.backend_selection_reason}</span>
-                </div>
+                <JobDrawerCallout
+                  tone={detail.backend_fallback_used ? "warning" : "info"}
+                  title={detail.backend_fallback_used ? "Backend fallback" : "Backend selection"}
+                >
+                  {detail.backend_selection_reason}
+                </JobDrawerCallout>
               ) : null}
 
-              <KeyValueList
-                items={[
-                  { label: "Source file", value: detail.source_filename ?? "Not recorded" },
-                  { label: "Source path", value: detail.source_path ?? "Not recorded" },
-                  { label: "Tracked file", value: detail.tracked_file_id },
-                  {
-                    label: "Review state",
-                    value: detail.requires_review ? (
+              <section className="job-drawer-metadata" aria-label="Job metadata">
+                <JobMetadataItem label="Source file" value={detail.source_filename} />
+                <JobMetadataItem
+                  label="Review state"
+                  value={
+                    detail.requires_review ? (
                       <Link className="text-link" to={APP_ROUTES.reviewDetail(detail.tracked_file_id)}>
                         {detail.review_status ?? "open"}
                       </Link>
                     ) : (
                       "No review required"
-                    ),
-                  },
-                  {
-                    label: "Protected file",
-                    value: detail.tracked_file_is_protected ? (
-                      <Link className="text-link" to={APP_ROUTES.reviewDetail(detail.tracked_file_id)}>
-                        View review item
-                      </Link>
-                    ) : (
-                      "No"
-                    ),
-                  },
-                  { label: "Started", value: formatDateTime(detail.started_at) },
-                  { label: "Completed", value: formatDateTime(detail.completed_at) },
-                  { label: "Preferred worker", value: detail.preferred_worker_id ?? "Automatic" },
-                  { label: "Pinned worker", value: detail.pinned_worker_id ?? "No pin" },
-                  { label: "Preferred backend override", value: detail.preferred_backend_override ? formatBackendLabel(detail.preferred_backend_override) : "None" },
-                  { label: "Schedule", value: detail.schedule_summary ?? "Any time" },
-                  { label: "Scheduled for", value: formatDateTime(detail.scheduled_for_at) },
-                  { label: "Interrupted at", value: formatDateTime(detail.interrupted_at) },
-                  { label: "Output path", value: detail.final_output_path ?? detail.output_path ?? "Not written yet" },
-                ]}
-              />
+                    )
+                  }
+                />
+                <JobMetadataItem label="Started" value={detail.started_at ? formatDateTime(detail.started_at) : null} />
+                <JobMetadataItem label="Completed" value={detail.completed_at ? formatDateTime(detail.completed_at) : null} />
+                <JobMetadataItem label="Interrupted at" value={detail.interrupted_at ? formatDateTime(detail.interrupted_at) : null} />
+                <JobMetadataItem label="Source path" value={detail.source_path} wide breakAll />
+                <JobMetadataItem label="Output path" value={detail.final_output_path ?? detail.output_path} wide breakAll emptyLabel="Not written yet" />
+              </section>
 
-              {detail.job_kind === "dry_run" && detail.analysis_payload ? (
+              <div className="job-drawer-accordions">
                 <CollapsibleSection
-                  title="Dry run output"
-                  subtitle="Planned action, estimated size, and what would change."
+                  title="Advanced scheduling details"
+                  subtitle="Worker targeting, tracking UUIDs, and schedule windows"
+                >
+                  <section className="job-drawer-scheduling-grid" aria-label="Advanced scheduling details">
+                    <JobMetadataItem label="Tracked file" value={detail.tracked_file_id} mono breakAll />
+                    <JobMetadataItem
+                      label="Protected file"
+                      value={
+                        detail.tracked_file_is_protected ? (
+                          <Link className="text-link" to={APP_ROUTES.reviewDetail(detail.tracked_file_id)}>
+                            View review item
+                          </Link>
+                        ) : (
+                          "No"
+                        )
+                      }
+                    />
+                    <JobMetadataItem label="Preferred worker" value={detail.preferred_worker_id ?? <MutedValue>Automatic</MutedValue>} mono breakAll />
+                    <JobMetadataItem label="Pinned worker" value={detail.pinned_worker_id} mono breakAll />
+                    <JobMetadataItem label="Preferred backend override" value={detail.preferred_backend_override ? formatBackendLabel(detail.preferred_backend_override) : null} />
+                    <JobMetadataItem label="Schedule" value={detail.schedule_summary ?? "Any time"} />
+                    <JobMetadataItem label="Scheduled for" value={detail.scheduled_for_at ? formatDateTime(detail.scheduled_for_at) : null} />
+                  </section>
+                </CollapsibleSection>
+
+                {detail.job_kind === "dry_run" && detail.analysis_payload ? (
+                  <CollapsibleSection
+                    title="Dry run output"
+                    subtitle="Planned action, estimated size, and what would change."
+                  >
+                    <KeyValueList
+                      items={[
+                        { label: "Planned action", value: titleCase(detail.analysis_payload.planned_action) },
+                        { label: "Output filename", value: detail.analysis_payload.output_filename },
+                        { label: "Current size", value: formatBytes(detail.analysis_payload.current_size_bytes) },
+                        { label: "Estimated output size", value: formatBytes(detail.analysis_payload.estimated_output_size_bytes) },
+                        { label: "Estimated saved", value: formatBytes(detail.analysis_payload.estimated_space_saved_bytes) },
+                        { label: "Video handling", value: titleCase(detail.analysis_payload.video_handling) },
+                        { label: "Audio tracks removed", value: detail.analysis_payload.audio_tracks_removed_count },
+                        { label: "Subtitle tracks removed", value: detail.analysis_payload.subtitle_tracks_removed_count },
+                        { label: "Would trigger manual review", value: detail.analysis_payload.requires_review ? "Yes" : "No" },
+                        {
+                          label: "Manual review reasons",
+                          value: detail.analysis_payload.manual_review_reasons.length > 0
+                            ? detail.analysis_payload.manual_review_reasons.join(" • ")
+                            : <MutedValue>Not available</MutedValue>,
+                        },
+                        { label: "Summary", value: detail.analysis_payload.summary },
+                      ]}
+                    />
+                  </CollapsibleSection>
+                ) : null}
+
+                {(detail.input_size_bytes != null || detail.video_space_saved_bytes != null) ? (
+                  <CollapsibleSection
+                    title="Storage and compression"
+                    subtitle="Total file savings and video-only compression reduction."
+                  >
+                    <KeyValueList
+                      items={[
+                        { label: "Original size", value: formatBytes(detail.input_size_bytes) },
+                        { label: "Output size", value: formatBytes(detail.output_size_bytes) },
+                        { label: "Total saved", value: formatBytes(detail.space_saved_bytes) },
+                        { label: "Video saved", value: formatBytes(detail.video_space_saved_bytes) },
+                        { label: "Audio and subtitle saved", value: formatBytes(detail.non_video_space_saved_bytes) },
+                        { label: "Video reduction", value: formatPercent(detail.compression_reduction_percent) },
+                      ]}
+                    />
+                  </CollapsibleSection>
+                ) : null}
+
+                <CollapsibleSection
+                  title="Advanced execution details"
+                  subtitle="Command, output streams, and worker stderr/stdout."
+                >
+                  <div className="job-drawer-execution-details">
+                    <KeyValueList
+                      items={[
+                        { label: "Command", value: detail.execution_command ? <pre>{detail.execution_command.join(" ")}</pre> : <MutedValue>Not available</MutedValue> },
+                        { label: "Stdout", value: detail.execution_stdout ? <pre>{detail.execution_stdout}</pre> : <MutedValue>Not available</MutedValue> },
+                        { label: "Stderr", value: detail.execution_stderr ? <pre>{detail.execution_stderr}</pre> : <MutedValue>Not available</MutedValue> },
+                      ]}
+                    />
+                  </div>
+                </CollapsibleSection>
+
+                <CollapsibleSection
+                  title="Advanced verification details"
+                  subtitle="Verification rules and recorded verification payload."
                 >
                   <KeyValueList
                     items={[
-                      { label: "Planned action", value: titleCase(detail.analysis_payload.planned_action) },
-                      { label: "Output filename", value: detail.analysis_payload.output_filename },
-                      { label: "Current size", value: formatBytes(detail.analysis_payload.current_size_bytes) },
-                      { label: "Estimated output size", value: formatBytes(detail.analysis_payload.estimated_output_size_bytes) },
-                      { label: "Estimated saved", value: formatBytes(detail.analysis_payload.estimated_space_saved_bytes) },
-                      { label: "Video handling", value: titleCase(detail.analysis_payload.video_handling) },
-                      { label: "Audio tracks removed", value: detail.analysis_payload.audio_tracks_removed_count },
-                      { label: "Subtitle tracks removed", value: detail.analysis_payload.subtitle_tracks_removed_count },
-                      { label: "Would trigger manual review", value: detail.analysis_payload.requires_review ? "Yes" : "No" },
-                      {
-                        label: "Manual review reasons",
-                        value: detail.analysis_payload.manual_review_reasons.length > 0
-                          ? detail.analysis_payload.manual_review_reasons.join(" • ")
-                          : "None",
-                      },
-                      { label: "Summary", value: detail.analysis_payload.summary },
+                      { label: "Require verification", value: detail.require_verification ? "Yes" : "No" },
+                      { label: "Keep original until verified", value: detail.keep_original_until_verified ? "Yes" : "No" },
+                      { label: "Verification payload", value: detail.verification_payload ? <pre>{JSON.stringify(detail.verification_payload, null, 2)}</pre> : <MutedValue>Not available</MutedValue> },
                     ]}
                   />
                 </CollapsibleSection>
-              ) : null}
 
-              {(detail.input_size_bytes != null || detail.video_space_saved_bytes != null) ? (
                 <CollapsibleSection
-                  title="Storage and compression"
-                  subtitle="Total file savings and video-only compression reduction."
+                  title="Advanced replacement details"
+                  subtitle="Final placement, backup handling, and replacement payload."
                 >
                   <KeyValueList
                     items={[
-                      { label: "Original size", value: formatBytes(detail.input_size_bytes) },
-                      { label: "Output size", value: formatBytes(detail.output_size_bytes) },
-                      { label: "Total saved", value: formatBytes(detail.space_saved_bytes) },
-                      { label: "Video saved", value: formatBytes(detail.video_space_saved_bytes) },
-                      { label: "Audio and subtitle saved", value: formatBytes(detail.non_video_space_saved_bytes) },
-                      { label: "Video reduction", value: formatPercent(detail.compression_reduction_percent) },
+                      { label: "Replace in place", value: detail.replace_in_place ? "Yes" : "No" },
+                      { label: "Delete replaced source", value: detail.delete_replaced_source ? "Yes" : "No" },
+                      { label: "Backup path", value: detail.original_backup_path ?? <MutedValue>Not available</MutedValue> },
+                      { label: "Replacement failure", value: detail.replacement_failure_message ?? <MutedValue>None</MutedValue> },
+                      { label: "Replacement payload", value: detail.replacement_payload ? <pre>{JSON.stringify(detail.replacement_payload, null, 2)}</pre> : <MutedValue>Not available</MutedValue> },
                     ]}
                   />
                 </CollapsibleSection>
-              ) : null}
-
-              <CollapsibleSection
-                title="Advanced execution details"
-                subtitle="Command, output streams, and worker stderr/stdout."
-              >
-                <KeyValueList
-                  items={[
-                    { label: "Command", value: detail.execution_command ? <pre>{detail.execution_command.join(" ")}</pre> : "Not recorded" },
-                    { label: "Stdout", value: detail.execution_stdout ? <pre>{detail.execution_stdout}</pre> : "Not recorded" },
-                    { label: "Stderr", value: detail.execution_stderr ? <pre>{detail.execution_stderr}</pre> : "Not recorded" },
-                  ]}
-                />
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Advanced verification details"
-                subtitle="Verification rules and recorded verification payload."
-              >
-                <KeyValueList
-                  items={[
-                    { label: "Require verification", value: detail.require_verification ? "Yes" : "No" },
-                    { label: "Keep original until verified", value: detail.keep_original_until_verified ? "Yes" : "No" },
-                    { label: "Verification payload", value: detail.verification_payload ? <pre>{JSON.stringify(detail.verification_payload, null, 2)}</pre> : "Not recorded" },
-                  ]}
-                />
-              </CollapsibleSection>
-
-              <CollapsibleSection
-                title="Advanced replacement details"
-                subtitle="Final placement, backup handling, and replacement payload."
-              >
-                <KeyValueList
-                  items={[
-                    { label: "Replace in place", value: detail.replace_in_place ? "Yes" : "No" },
-                    { label: "Delete replaced source", value: detail.delete_replaced_source ? "Yes" : "No" },
-                    { label: "Backup path", value: detail.original_backup_path ?? "Not created" },
-                    { label: "Replacement failure", value: detail.replacement_failure_message ?? "None" },
-                    { label: "Replacement payload", value: detail.replacement_payload ? <pre>{JSON.stringify(detail.replacement_payload, null, 2)}</pre> : "Not recorded" },
-                  ]}
-                />
-              </CollapsibleSection>
+              </div>
             </div>
-          </SectionCard>
+          ) : (
+            <EmptyState title="No job selected" message="Choose a job to inspect its latest result." />
+          )}
+        </div>
+
+        {detail && (canRetry || canCancel) ? (
+          <footer className="job-drawer-footer">
+            {canRetry ? (
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={onRetry}
+                disabled={isRetryPending}
+              >
+                {isRetryPending ? "Retrying…" : "Retry job"}
+              </button>
+            ) : null}
+            {canCancel ? (
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={onCancel}
+                disabled={isCancelPending}
+              >
+                {isCancelPending ? "Cancelling…" : "Cancel job"}
+              </button>
+            ) : null}
+          </footer>
         ) : null}
-      </section>
+      </aside>
+    </>
+  );
+}
+
+function JobDrawerCallouts({ detail }: { detail: JobDetail }) {
+  return (
+    <section className="job-drawer-callout-stack" aria-label="Job status notices">
+      {isOperatorCancelled(detail) ? (
+        <JobDrawerCallout tone="danger" title="Cancelled">
+          {detail.failure_message ?? "This job was cancelled by the operator."}
+        </JobDrawerCallout>
+      ) : null}
+
+      {detail.status === "scheduled" && detail.schedule_summary ? (
+        <JobDrawerCallout tone="warning" title="Scheduled">
+          This job is waiting for its allowed execution window.
+          {detail.scheduled_for_at ? ` Next opening: ${formatDateTime(detail.scheduled_for_at)}.` : ""}
+        </JobDrawerCallout>
+      ) : null}
+
+      {detail.status === "interrupted" && detail.interruption_reason ? (
+        <JobDrawerCallout tone="warning" title={isOperatorCancelled(detail) ? "Cancelled" : "Interrupted"}>
+          {detail.interruption_reason}
+        </JobDrawerCallout>
+      ) : null}
+
+      {detail.failure_message && !isOperatorCancelled(detail) ? (
+        <JobDrawerCallout tone="danger" title="Failure">
+          {detail.failure_message}
+        </JobDrawerCallout>
+      ) : null}
+
+      {detail.job_kind === "dry_run" ? (
+        <JobDrawerCallout tone="info" title="Dry run analysis">
+          This job inspected the file on a worker and stored a safe plan without transcoding or replacing media.
+        </JobDrawerCallout>
+      ) : null}
+    </section>
+  );
+}
+
+function JobDrawerCallout({
+  tone,
+  title,
+  children,
+}: {
+  tone: "info" | "warning" | "danger";
+  title: string;
+  children: ReactNode;
+}) {
+  return (
+    <div className={`job-drawer-callout job-drawer-callout-${tone}`}>
+      <strong>{title}</strong>
+      <p>{children}</p>
     </div>
   );
+}
+
+function JobDrawerMetric({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="job-drawer-metric">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function JobMetadataItem({
+  label,
+  value,
+  wide = false,
+  breakAll = false,
+  mono = false,
+  emptyLabel = "Not available",
+}: {
+  label: string;
+  value: ReactNode | null | undefined;
+  wide?: boolean;
+  breakAll?: boolean;
+  mono?: boolean;
+  emptyLabel?: string;
+}) {
+  const isEmpty = value == null || value === "";
+  return (
+    <div className={`job-drawer-metadata-item${wide ? " job-drawer-metadata-item-wide" : ""}${breakAll ? " job-drawer-metadata-item-break" : ""}${mono ? " job-drawer-metadata-item-mono" : ""}`}>
+      <span>{label}</span>
+      <strong>{isEmpty ? <MutedValue>{emptyLabel}</MutedValue> : value}</strong>
+    </div>
+  );
+}
+
+function MutedValue({ children }: { children: ReactNode }) {
+  return <span className="job-drawer-muted-value">{children}</span>;
 }
 
 function JobArtwork({ jobId, title }: { jobId: string; title: string }) {
