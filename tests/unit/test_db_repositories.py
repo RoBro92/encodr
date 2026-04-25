@@ -7,6 +7,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
 from encodr_core.config import load_config_bundle
+from encodr_core.execution import ExecutionResult
 from encodr_core.planning import PlanAction, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
 from encodr_shared.scheduling import schedule_windows_allow_now
@@ -347,6 +348,63 @@ def test_interrupted_jobs_clear_assignment_and_stop_counting_as_active() -> None
         assert interrupted.interruption_retryable is True
         assert interrupted.interruption_reason == "Worker stopped responding."
         assert jobs.has_active_job_for_tracked_file(tracked_file.id) is False
+
+
+def test_failed_execution_gets_one_automatic_retry_then_manual_review() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        first_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        failed_at = datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc)
+
+        first_result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            failure_message="ffmpeg failed.",
+            failure_category="execution_failed",
+            started_at=failed_at,
+            completed_at=failed_at,
+        )
+        jobs.mark_result(first_job, first_result)
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, first_result)
+        retry_job = jobs.apply_automatic_retry_policy(first_job, first_result)
+
+        assert retry_job is not None
+        assert first_job.status == JobStatus.FAILED
+        assert retry_job.status == JobStatus.PENDING
+        assert retry_job.attempt_count == 2
+        assert tracked_file.lifecycle_state == FileLifecycleState.QUEUED
+        assert tracked_file.id not in {item.id for item in tracked_files.list_review_candidates()}
+
+        second_result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            failure_message="Retry failed.",
+            failure_category="execution_failed",
+            started_at=failed_at,
+            completed_at=failed_at,
+        )
+        jobs.mark_result(retry_job, second_result)
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, second_result)
+        final_retry = jobs.apply_automatic_retry_policy(retry_job, second_result)
+
+        assert final_retry is None
+        assert retry_job.status == JobStatus.MANUAL_REVIEW
+        assert tracked_file.lifecycle_state == FileLifecycleState.MANUAL_REVIEW
+        assert tracked_file.id in {item.id for item in tracked_files.list_review_candidates()}
 
 
 def database_session() -> Session:

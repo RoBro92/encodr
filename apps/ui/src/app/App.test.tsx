@@ -522,14 +522,21 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    expect(screen.getByText(/movies root/i)).toBeInTheDocument();
-    expect(screen.getByText(/tv root/i)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /current folder/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /library automation/i })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^movies$/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /^tv$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /\+ add watcher/i })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /movies root directory/i })).toHaveValue("/media/Movies");
+    expect(screen.getByRole("heading", { name: /active watchers/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /processing dashboard/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /current folder/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /dry run/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/choose another folder/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /advanced options/i })).toBeInTheDocument();
 
-    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
 
+    expect(await screen.findByRole("button", { name: /choose another folder/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^movies/i }));
     expect(await screen.findByRole("tab", { name: /^browse$/i })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: /^dry run$/i }));
     expect(screen.getByText(/no dry run yet/i)).toBeInTheDocument();
@@ -657,13 +664,10 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^movies/i }));
 
-    const selectedFolderCard = screen.getByRole("heading", { name: /current folder/i }).closest(".section-card") as HTMLElement | null;
-    expect(selectedFolderCard).not.toBeNull();
-    if (selectedFolderCard) {
-      expect((await within(selectedFolderCard).findAllByText("/media/Movies")).length).toBeGreaterThan(0);
-    }
+    expect((await screen.findAllByText("/media/Movies")).length).toBeGreaterThan(0);
     await userEvent.click(await screen.findByRole("checkbox", { name: /film one/i }));
     expect(screen.getAllByText(/1 file selected/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^dry run$/i })).toBeInTheDocument();
@@ -772,7 +776,7 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
     expect(screen.getAllByText("/ssd/downloads").length).toBeGreaterThan(0);
     expect(screen.getByText(/saved result may be stale/i)).toBeInTheDocument();
-    expect(screen.getByText(/ssd ingest/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/ssd ingest/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/mon,tue 23:00-07:30/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reopen/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /edit/i })).toBeInTheDocument();
@@ -846,7 +850,8 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^movies/i }));
     await userEvent.click(await screen.findByRole("button", { name: /create jobs/i }));
 
     await waitFor(() => {

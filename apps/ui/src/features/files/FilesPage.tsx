@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
+import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { FolderPickerModal } from "../../components/FolderPickerModal";
@@ -18,6 +19,7 @@ import {
   useLibraryRootsQuery,
   useScanFolderMutation,
   useScansQuery,
+  useUpdateLibraryRootsMutation,
   useUpdateWatchedJobMutation,
   useWatchedJobsQuery,
   useWorkersQuery,
@@ -28,10 +30,48 @@ import { formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
 type LibraryTab = "browse" | "scan" | "dry-run" | "batch-plan";
+type RootKind = "movies" | "tv";
+type PollingSchedule = "continuous" | "daily" | "overnight" | "weekend";
 
 type WatcherDraft = WatchedJobPayload & {
   id?: string;
 };
+
+type DraftWatcherProfile = {
+  profileId: string;
+  draft: WatcherDraft;
+};
+
+type RootLibraryProfile = {
+  id: `root:${RootKind}`;
+  kind: "root";
+  rootKind: RootKind;
+  label: string;
+  path: string;
+  savedPath: string | null;
+  watcher: WatchedJob | null;
+};
+
+type WatcherLibraryProfile = {
+  id: `watcher:${string}`;
+  kind: "watcher";
+  watcher: WatchedJob;
+  draft: WatcherDraft;
+  label: string;
+  path: string;
+  savedPath: string;
+};
+
+type DraftLibraryProfile = {
+  id: `draft:${string}`;
+  kind: "draft";
+  draft: WatcherDraft;
+  label: string;
+  path: string;
+  savedPath: null;
+};
+
+type LibraryProfile = RootLibraryProfile | WatcherLibraryProfile | DraftLibraryProfile;
 
 const MEDIA_CLASS_OPTIONS = [
   { value: "movie", label: "Movies" },
@@ -59,6 +99,18 @@ const BACKEND_OPTIONS = [
 
 const DRY_RUN_WARNING_THRESHOLD = 15;
 const LIBRARY_PAGE_SIZE = 25;
+
+const ROOT_TABS: Array<{ key: RootKind; label: string }> = [
+  { key: "movies", label: "Movies" },
+  { key: "tv", label: "TV" },
+];
+
+const POLLING_SCHEDULE_OPTIONS: Array<{ value: PollingSchedule; label: string }> = [
+  { value: "continuous", label: "Continuous" },
+  { value: "daily", label: "Daily" },
+  { value: "overnight", label: "Overnight" },
+  { value: "weekend", label: "Weekends" },
+];
 
 type ScanKind = "movies" | "tv";
 type ScanFileEntry = FolderScanSummary["files"][number] & {
@@ -131,6 +183,12 @@ export function FilesPage() {
   const [selectedFolder, setSelectedFolder] = useState<string | null>(null);
   const [selectedPaths, setSelectedPaths] = useState<string[]>([]);
   const [activeTab, setActiveTab] = useState<LibraryTab>("browse");
+  const [activeLibraryKey, setActiveLibraryKey] = useState<LibraryProfile["id"]>("root:movies");
+  const [rootDrafts, setRootDrafts] = useState<Record<RootKind, string>>({ movies: "", tv: "" });
+  const [rootMonitoringEnabled, setRootMonitoringEnabled] = useState(true);
+  const [rootPollingSchedule, setRootPollingSchedule] = useState<PollingSchedule>("daily");
+  const [watcherConfigDrafts, setWatcherConfigDrafts] = useState<Record<string, WatcherDraft>>({});
+  const [draftWatcherProfiles, setDraftWatcherProfiles] = useState<DraftWatcherProfile[]>([]);
   const [activeScanDraft, setActiveScanDraft] = useState<FolderScanSummary | null>(null);
   const [watcherDraft, setWatcherDraft] = useState<WatcherDraft | null>(null);
   const [dryRunModalOpen, setDryRunModalOpen] = useState(false);
@@ -150,12 +208,14 @@ export function FilesPage() {
   const scansQuery = useScansQuery();
   const watchedJobsQuery = useWatchedJobsQuery();
   const workersQuery = useWorkersQuery();
+  const allJobsQuery = useJobsQuery({ limit: 100 });
   const dryRunJobsQuery = useJobsQuery({ job_kind: "dry_run", limit: 100 });
   const scanMutation = useScanFolderMutation();
   const createDryRunJobsMutation = useCreateDryRunJobsMutation();
   const batchPlanMutation = useBatchPlanMutation();
   const batchJobsMutation = useCreateBatchJobsMutation();
   const createWatchedJobMutation = useCreateWatchedJobMutation();
+  const updateLibraryRootsMutation = useUpdateLibraryRootsMutation();
   const updateWatchedJobMutation = useUpdateWatchedJobMutation();
 
   const loading =
@@ -163,20 +223,96 @@ export function FilesPage() {
     scansQuery.isLoading ||
     watchedJobsQuery.isLoading ||
     workersQuery.isLoading ||
+    allJobsQuery.isLoading ||
     dryRunJobsQuery.isLoading;
   const error =
     rootsQuery.error ??
     scansQuery.error ??
     watchedJobsQuery.error ??
     workersQuery.error ??
+    allJobsQuery.error ??
     dryRunJobsQuery.error;
   const roots = rootsQuery.data;
   const recentScans = scansQuery.data?.items ?? [];
   const watchedJobs = watchedJobsQuery.data?.items ?? [];
   const workers = workersQuery.data?.items ?? [];
+  const allJobs = allJobsQuery.data?.items ?? [];
   const dryRunJobs = (dryRunJobsQuery.data?.items ?? []).filter((job) => latestDryRunJobIds.includes(job.id));
   const moviesRoot = roots?.movies_root ?? null;
   const tvRoot = roots?.tv_root ?? null;
+  const rootWatcherByKind = useMemo(() => {
+    const findRootWatcher = (kind: RootKind) => {
+      const draftPath = rootDrafts[kind];
+      const savedPath = kind === "movies" ? moviesRoot : tvRoot;
+      return watchedJobs.find((item) => pathsMatch(item.source_path, draftPath) || pathsMatch(item.source_path, savedPath)) ?? null;
+    };
+
+    return {
+      movies: findRootWatcher("movies"),
+      tv: findRootWatcher("tv"),
+    };
+  }, [moviesRoot, rootDrafts, tvRoot, watchedJobs]);
+  const nonRootWatchedJobs = useMemo(
+    () =>
+      watchedJobs.filter(
+        (item) =>
+          !pathsMatch(item.source_path, moviesRoot) &&
+          !pathsMatch(item.source_path, tvRoot) &&
+          !pathsMatch(item.source_path, rootDrafts.movies) &&
+          !pathsMatch(item.source_path, rootDrafts.tv),
+      ),
+    [moviesRoot, rootDrafts.movies, rootDrafts.tv, tvRoot, watchedJobs],
+  );
+  const libraryProfiles = useMemo<LibraryProfile[]>(() => {
+    const rootProfiles: RootLibraryProfile[] = ROOT_TABS.map((tab) => {
+      const savedPath = tab.key === "movies" ? moviesRoot : tvRoot;
+      return {
+        id: `root:${tab.key}`,
+        kind: "root",
+        rootKind: tab.key,
+        label: tab.label,
+        path: rootDrafts[tab.key],
+        savedPath,
+        watcher: rootWatcherByKind[tab.key],
+      };
+    });
+
+    const watcherProfiles: WatcherLibraryProfile[] = nonRootWatchedJobs.map((item) => {
+      const draft = watcherConfigDrafts[item.id] ?? watcherDraftFromRecord(item);
+      return {
+        id: `watcher:${item.id}`,
+        kind: "watcher",
+        watcher: item,
+        draft,
+        label: draft.display_name || item.display_name || pathLabel(draft.source_path),
+        path: draft.source_path,
+        savedPath: item.source_path,
+      };
+    });
+
+    const draftProfiles: DraftLibraryProfile[] = draftWatcherProfiles.map((item, index) => ({
+      id: item.profileId as `draft:${string}`,
+      kind: "draft",
+      draft: item.draft,
+      label: item.draft.display_name || pathLabel(item.draft.source_path) || `New Library ${index + 1}`,
+      path: item.draft.source_path,
+      savedPath: null,
+    }));
+
+    return [...rootProfiles, ...watcherProfiles, ...draftProfiles];
+  }, [draftWatcherProfiles, moviesRoot, nonRootWatchedJobs, rootDrafts, rootWatcherByKind, tvRoot, watcherConfigDrafts]);
+  const activeLibrary = libraryProfiles.find((profile) => profile.id === activeLibraryKey) ?? libraryProfiles[0];
+  const activeRootKind = activeLibrary.kind === "root" ? activeLibrary.rootKind : null;
+  const activeRootLabel = activeLibrary.label;
+  const activeRootWatcher = activeLibrary.kind === "root" ? activeLibrary.watcher : null;
+  const activeLibraryPath = activeLibrary.path;
+  const activeLibrarySavedPath = activeLibrary.savedPath;
+  const activeLibraryWatcher = activeLibrary.kind === "watcher" ? activeLibrary.watcher : activeRootWatcher;
+  const activeLibraryMonitoringEnabled = activeLibrary.kind === "root" ? rootMonitoringEnabled : activeLibrary.draft.enabled;
+  const activeLibraryPollingSchedule =
+    activeLibrary.kind === "root"
+      ? rootPollingSchedule
+      : pollingScheduleFromWindows(activeLibrary.draft.schedule_windows ?? []);
   const activeScan = activeScanDraft
     ? activeScanDraft.scan_id
       ? recentScans.find((item) => item.scan_id === activeScanDraft.scan_id) ?? activeScanDraft
@@ -204,6 +340,32 @@ export function FilesPage() {
           : 0;
   const selectedCountLabel =
     selectedCount === 1 ? "1 file selected" : `${selectedCount} files selected`;
+  const scopedScans = useMemo(
+    () =>
+      recentScans.filter(
+        (scan) =>
+          pathsWithinScope(scan.folder_path, activeLibraryPath || activeLibrarySavedPath) ||
+          Boolean(activeLibraryWatcher?.id && scan.watched_job_id === activeLibraryWatcher.id),
+      ),
+    [activeLibraryPath, activeLibrarySavedPath, activeLibraryWatcher?.id, recentScans],
+  );
+  const scopedJobs = useMemo(
+    () =>
+      allJobs.filter(
+        (job) =>
+          pathsWithinScope(job.source_path, activeLibraryPath || activeLibrarySavedPath) ||
+          Boolean(activeLibraryWatcher?.id && job.watched_job_id === activeLibraryWatcher.id),
+      ),
+    [activeLibraryPath, activeLibrarySavedPath, activeLibraryWatcher?.id, allJobs],
+  );
+  const discoveredFileCount = useMemo(
+    () => new Set(scopedScans.flatMap((scan) => scan.files.map((file) => file.path))).size,
+    [scopedScans],
+  );
+  const processedJobCount = scopedJobs.filter((job) => ["completed", "skipped"].includes(job.status)).length;
+  const pendingProcessingCount = scopedJobs.filter((job) =>
+    ["pending", "scheduled", "running"].includes(job.status),
+  ).length;
   const selectionScopeLabel =
     selectedPaths.length > 0
       ? `${selectedPaths.length} file${selectedPaths.length === 1 ? "" : "s"} selected`
@@ -264,6 +426,51 @@ export function FilesPage() {
     visibleScanPaths.length > 0 &&
     visibleScanPaths.every((path) => selectedSet.has(path)),
   );
+
+  useEffect(() => {
+    setRootDrafts({
+      movies: roots?.movies_root ?? "",
+      tv: roots?.tv_root ?? "",
+    });
+  }, [roots?.movies_root, roots?.tv_root]);
+
+  useEffect(() => {
+    setWatcherConfigDrafts((current) => {
+      let changed = false;
+      const next = { ...current };
+      const knownIds = new Set(watchedJobs.map((item) => item.id));
+
+      for (const item of watchedJobs) {
+        if (!next[item.id]) {
+          next[item.id] = watcherDraftFromRecord(item);
+          changed = true;
+        }
+      }
+
+      for (const id of Object.keys(next)) {
+        if (!knownIds.has(id)) {
+          delete next[id];
+          changed = true;
+        }
+      }
+
+      return changed ? next : current;
+    });
+  }, [watchedJobs]);
+
+  useEffect(() => {
+    if (!libraryProfiles.some((profile) => profile.id === activeLibraryKey)) {
+      setActiveLibraryKey("root:movies");
+    }
+  }, [activeLibraryKey, libraryProfiles]);
+
+  useEffect(() => {
+    if (!activeRootKind) {
+      return;
+    }
+    setRootMonitoringEnabled(activeRootWatcher?.enabled ?? true);
+    setRootPollingSchedule(pollingScheduleFromWindows(activeRootWatcher?.schedule_windows ?? []));
+  }, [activeRootKind, activeRootWatcher?.id, activeRootWatcher?.enabled, activeRootWatcher?.schedule_windows]);
 
   useEffect(() => {
     setScanSearch("");
@@ -342,6 +549,168 @@ export function FilesPage() {
     setSelectedPaths([]);
     setActiveTab("scan");
     setActiveScanDraft(scan);
+  }
+
+  function addWatcherProfile() {
+    const profileId = `draft:${Date.now()}`;
+    setDraftWatcherProfiles((current) => [
+      ...current,
+      {
+        profileId,
+        draft: {
+          ...inferWatcherDefaults(null, moviesRoot, tvRoot),
+          display_name: `New Library ${current.length + 1}`,
+        },
+      },
+    ]);
+    setActiveLibraryKey(profileId as LibraryProfile["id"]);
+  }
+
+  function updateActiveLibraryPath(path: string) {
+    if (activeLibrary.kind === "root") {
+      setRootDrafts((current) => ({
+        ...current,
+        [activeLibrary.rootKind]: path,
+      }));
+      return;
+    }
+
+    updateActiveWatcherProfileDraft((draft) => ({
+      ...draft,
+      source_path: path,
+      display_name: draft.display_name?.startsWith("New Library") ? pathLabel(path) || draft.display_name : draft.display_name,
+    }));
+  }
+
+  function updateActiveLibraryPollingSchedule(value: PollingSchedule) {
+    if (activeLibrary.kind === "root") {
+      setRootPollingSchedule(value);
+      return;
+    }
+
+    updateActiveWatcherProfileDraft((draft) => ({
+      ...draft,
+      schedule_windows: scheduleWindowsForPolling(value),
+    }));
+  }
+
+  function updateActiveLibraryMonitoringEnabled(enabled: boolean) {
+    if (activeLibrary.kind === "root") {
+      setRootMonitoringEnabled(enabled);
+      return;
+    }
+
+    updateActiveWatcherProfileDraft((draft) => ({
+      ...draft,
+      enabled,
+    }));
+  }
+
+  function updateActiveWatcherProfileDraft(updater: (draft: WatcherDraft) => WatcherDraft) {
+    if (activeLibrary.kind === "watcher") {
+      setWatcherConfigDrafts((current) => ({
+        ...current,
+        [activeLibrary.watcher.id]: updater(current[activeLibrary.watcher.id] ?? watcherDraftFromRecord(activeLibrary.watcher)),
+      }));
+      return;
+    }
+
+    if (activeLibrary.kind === "draft") {
+      setDraftWatcherProfiles((current) =>
+        current.map((item) =>
+          item.profileId === activeLibrary.id
+            ? { ...item, draft: updater(item.draft) }
+            : item,
+        ),
+      );
+    }
+  }
+
+  async function saveActiveLibrarySettings() {
+    if (activeLibrary.kind === "root") {
+      await saveRootWatchSettings(activeLibrary.rootKind);
+      return;
+    }
+
+    const draft = activeLibrary.draft;
+    const path = draft.source_path.trim();
+    if (!path) {
+      return;
+    }
+
+    const payload: WatchedJobPayload = {
+      display_name: draft.display_name?.trim() || pathLabel(path) || "Watched folder",
+      source_path: path,
+      media_class: draft.media_class,
+      ruleset_override: draft.ruleset_override,
+      preferred_worker_id: draft.preferred_worker_id,
+      pinned_worker_id: draft.pinned_worker_id,
+      preferred_backend: draft.preferred_backend,
+      schedule_windows: draft.schedule_windows,
+      auto_queue: draft.auto_queue,
+      stage_only: draft.stage_only,
+      enabled: draft.enabled,
+    };
+
+    if (activeLibrary.kind === "watcher") {
+      await updateWatchedJobMutation.mutateAsync({ watchedJobId: activeLibrary.watcher.id, payload });
+      return;
+    }
+
+    const created = await createWatchedJobMutation.mutateAsync(payload);
+    setDraftWatcherProfiles((current) => current.filter((item) => item.profileId !== activeLibrary.id));
+    setActiveLibraryKey(`watcher:${created.id}`);
+  }
+
+  async function saveRootWatchSettings(kind: RootKind) {
+    const path = rootDrafts[kind].trim();
+    if (!path) {
+      return;
+    }
+    const rootLabel = kind === "movies" ? "Movies" : "TV";
+    const rootWatcher = rootWatcherByKind[kind];
+    await updateLibraryRootsMutation.mutateAsync({
+      movies_root: kind === "movies" ? path : moviesRoot,
+      tv_root: kind === "tv" ? path : tvRoot,
+    });
+
+    const defaultDraft = inferWatcherDefaults(
+      path,
+      kind === "movies" ? path : moviesRoot,
+      kind === "tv" ? path : tvRoot,
+    );
+    const payload: WatchedJobPayload = {
+      display_name: rootWatcher?.display_name ?? `${rootLabel} watch`,
+      source_path: path,
+      media_class: rootWatcher?.media_class ?? defaultDraft.media_class,
+      ruleset_override: rootWatcher?.ruleset_override ?? defaultDraft.ruleset_override,
+      preferred_worker_id: rootWatcher?.preferred_worker_id ?? undefined,
+      pinned_worker_id: rootWatcher?.pinned_worker_id ?? undefined,
+      preferred_backend: rootWatcher?.preferred_backend ?? undefined,
+      schedule_windows: scheduleWindowsForPolling(rootPollingSchedule),
+      auto_queue: true,
+      stage_only: false,
+      enabled: rootMonitoringEnabled,
+    };
+
+    if (rootWatcher) {
+      await updateWatchedJobMutation.mutateAsync({ watchedJobId: rootWatcher.id, payload });
+    } else {
+      await createWatchedJobMutation.mutateAsync(payload);
+    }
+  }
+
+  async function startInitialProcessing() {
+    const path = activeLibraryPath.trim() || activeLibrarySavedPath;
+    if (!path) {
+      return;
+    }
+    setSelectedFolder(path);
+    setSelectedPaths([]);
+    setActiveTab("batch-plan");
+    const scan = await scanMutation.mutateAsync({ source_path: path });
+    setActiveScanDraft(scan);
+    await batchJobsMutation.mutateAsync({ folder_path: path });
   }
 
   function openWatcherDraft(item?: WatchedJob) {
@@ -461,7 +830,7 @@ export function FilesPage() {
       <PageHeader
         eyebrow="Library"
         title="Library"
-        description="Choose a folder, scan it, inspect the files, then dry run or create jobs."
+        description="Configure automation, monitor processing, and manage your media libraries."
         actions={
           <div className="page-actions">
             <button className="button button-secondary" type="button" onClick={() => setPickerOpen(true)}>
@@ -501,6 +870,9 @@ export function FilesPage() {
       {createWatchedJobMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to create watched job" message={createWatchedJobMutation.error.message} />
       ) : null}
+      {updateLibraryRootsMutation.error instanceof Error ? (
+        <ErrorPanel title="Unable to update library roots" message={updateLibraryRootsMutation.error.message} />
+      ) : null}
       {updateWatchedJobMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to update watched job" message={updateWatchedJobMutation.error.message} />
       ) : null}
@@ -514,116 +886,120 @@ export function FilesPage() {
         </div>
       ) : null}
 
-      <SectionCard
-        title="Current folder"
-        subtitle={selectedFolder ?? "Choose a folder to browse and scan."}
-      >
-        <div className="library-header-card">
-          <div className="library-header-roots">
-            <div className="library-root-card">
-              <span className="library-root-label">Movies root</span>
-              <strong>{roots.movies_root ?? "Not set"}</strong>
-              <div className="library-root-actions">
-                {moviesRoot ? (
-                  <button className="button button-secondary button-small" type="button" onClick={() => void runScan(moviesRoot)}>
-                    Open
-                  </button>
-                ) : (
-                  <Link className="button button-secondary button-small" to={APP_ROUTES.config}>
-                    Set in Settings
-                  </Link>
-                )}
-              </div>
-            </div>
-
-            <div className="library-root-card">
-              <span className="library-root-label">TV root</span>
-              <strong>{roots.tv_root ?? "Not set"}</strong>
-              <div className="library-root-actions">
-                {tvRoot ? (
-                  <button className="button button-secondary button-small" type="button" onClick={() => void runScan(tvRoot)}>
-                    Open
-                  </button>
-                ) : (
-                  <Link className="button button-secondary button-small" to={APP_ROUTES.config}>
-                    Set in Settings
-                  </Link>
-                )}
-              </div>
-            </div>
+      <section className="library-watch-section">
+        <div className="section-card-header">
+          <div>
+            <h2>Library Automation</h2>
+            <p>Configure automated root monitoring and queue discovered media when workers are ready.</p>
           </div>
+        </div>
 
-          <div className="library-header-summary">
-            <div className="library-header-copy">
-              <div className="badge-row">
-                <StatusBadge value={selectedFolder ? "selected" : "pending"} />
-                <span className="muted-copy">{selectionScopeLabel}</span>
-                {activeScan?.scanned_at ? <span className="muted-copy">Scanned {formatDateTime(activeScan.scanned_at)}</span> : null}
-              </div>
-              <strong className="library-path-copy">{selectedFolder ?? "No folder selected"}</strong>
-              <p className="muted-copy">{selectionScopeCopy}</p>
-            </div>
+        <div className="library-root-tabs" role="tablist" aria-label="Library automation profiles">
+          {libraryProfiles.map((profile) => (
+            <button
+              key={profile.id}
+              className={`library-tab${activeLibrary.id === profile.id ? " library-tab-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={activeLibrary.id === profile.id}
+              onClick={() => setActiveLibraryKey(profile.id)}
+            >
+              {profile.label}
+            </button>
+          ))}
+          <button className="library-tab library-tab-add" type="button" onClick={addWatcherProfile}>
+            + Add Watcher
+          </button>
+        </div>
 
-            <div className="library-header-metrics">
-              <div className="metric-pill">
-                <span className="metric-label">Selected</span>
-                <strong>{selectedCount}</strong>
-              </div>
-              {activeScan?.folder_path === selectedFolder ? (
-                <>
-                  <div className="metric-pill">
-                    <span className="metric-label">Video files</span>
-                    <strong>{activeScan.video_file_count}</strong>
-                  </div>
-                  <div className="metric-pill">
-                    <span className="metric-label">Likely films</span>
-                    <strong>{activeScan.likely_film_count}</strong>
-                  </div>
-                  <div className="metric-pill">
-                    <span className="metric-label">Likely episodes</span>
-                    <strong>{activeScan.likely_episode_count}</strong>
-                  </div>
-                </>
-              ) : null}
-            </div>
-
-            <div className="library-action-buttons">
-              <button
-                className="button button-secondary"
-                type="button"
-                onClick={() => selectedFolder && void runScan(selectedFolder)}
-                disabled={!selectedFolder || scanMutation.isPending}
-              >
-                {scanMutation.isPending ? "Scanning…" : "Scan folder"}
-              </button>
-                <button
-                  className="button button-primary"
-                  type="button"
-                  onClick={openDryRunModal}
-                  disabled={!activeSelection || createDryRunJobsMutation.isPending}
+        <div className="library-scoped-panel" role="tabpanel" aria-label={`${activeRootLabel} automation settings`}>
+          <div className="library-watch-controls">
+            <div className="library-watch-form">
+              <label className="field">
+                <span>Root directory</span>
+                <input
+                  aria-label={`${activeRootLabel} root directory`}
+                  value={activeLibraryPath}
+                  onChange={(event) => updateActiveLibraryPath(event.target.value)}
+                  placeholder={activeRootKind === "movies" ? "/media/Movies" : activeRootKind === "tv" ? "/media/TV" : "/media/Library"}
+                />
+              </label>
+              <label className="field">
+                <span>Polling schedule</span>
+                <select
+                  aria-label={`${activeRootLabel} polling schedule`}
+                  value={activeLibraryPollingSchedule}
+                  onChange={(event) => updateActiveLibraryPollingSchedule(event.target.value as PollingSchedule)}
                 >
-                  {createDryRunJobsMutation.isPending ? "Starting…" : "Dry Run"}
+                  {POLLING_SCHEDULE_OPTIONS.map((option) => (
+                    <option key={option.value} value={option.value}>{option.label}</option>
+                  ))}
+                </select>
+              </label>
+              <div className="field library-watch-toggle-field">
+                <span>Enable monitoring</span>
+                <button
+                  className={`toggle-switch${activeLibraryMonitoringEnabled ? " toggle-switch-on" : ""}`}
+                  type="button"
+                  role="switch"
+                  aria-label={`${activeRootLabel} enable monitoring`}
+                  aria-checked={activeLibraryMonitoringEnabled}
+                  onClick={() => updateActiveLibraryMonitoringEnabled(!activeLibraryMonitoringEnabled)}
+                >
+                  <span />
                 </button>
-              <button
-                className="button button-secondary"
-                type="button"
-                onClick={runBatchPlan}
-                disabled={!activeSelection || batchPlanMutation.isPending}
-              >
-                {batchPlanMutation.isPending ? "Planning…" : "Batch Plan"}
-              </button>
+              </div>
               <button
                 className="button button-primary"
                 type="button"
-                onClick={runBatchJobs}
-                disabled={!activeSelection || batchJobsMutation.isPending}
+                onClick={() => void saveActiveLibrarySettings()}
+                disabled={
+                  !activeLibraryPath.trim() ||
+                  updateLibraryRootsMutation.isPending ||
+                  createWatchedJobMutation.isPending ||
+                  updateWatchedJobMutation.isPending
+                }
               >
-                {batchJobsMutation.isPending ? "Creating…" : "Create Jobs"}
+                {updateLibraryRootsMutation.isPending || createWatchedJobMutation.isPending || updateWatchedJobMutation.isPending
+                  ? "Saving…"
+                  : "Save settings"}
               </button>
             </div>
           </div>
+
+          <section className="library-processing-panel">
+            <div className="section-card-header">
+              <div>
+                <h2>Processing dashboard</h2>
+                <p>{activeRootLabel} stats are scoped to this library profile.</p>
+              </div>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => void startInitialProcessing()}
+                disabled={!activeLibraryPath.trim() || scanMutation.isPending || batchJobsMutation.isPending}
+              >
+                {scanMutation.isPending || batchJobsMutation.isPending ? "Starting…" : "Start Initial Processing"}
+              </button>
+            </div>
+
+            <div className="metric-grid library-processing-metrics">
+              <div className="metric-panel">
+                <span className="metric-label">Total Files Discovered</span>
+                <strong>{discoveredFileCount}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Successfully Processed</span>
+                <strong>{processedJobCount}</strong>
+              </div>
+              <div className="metric-panel">
+                <span className="metric-label">Pending Processing</span>
+                <strong>{pendingProcessingCount}</strong>
+              </div>
+            </div>
+          </section>
         </div>
-      </SectionCard>
+      </section>
 
       <div className="dashboard-grid">
         <SectionCard
@@ -659,7 +1035,7 @@ export function FilesPage() {
         </SectionCard>
 
         <SectionCard
-          title="Watched folders"
+          title="Active Watchers"
           subtitle="Queue or stage new files automatically from SSD or library folders."
           actions={
             <button className="button button-primary button-small" type="button" onClick={() => openWatcherDraft()}>
@@ -863,10 +1239,58 @@ export function FilesPage() {
         </SectionCard>
       </div>
 
-      <SectionCard
-        title="Library workspace"
-        subtitle={selectedFolder ?? "Choose a folder to browse and scan."}
+      <CollapsibleSection
+        title="Advanced Options"
+        subtitle="Manual browsing, selection, dry-run analysis, and batch job tools"
       >
+        <div className="library-advanced-toolbar">
+          <div className="library-advanced-toolbar-left">
+            <strong>{selectedCountLabel}</strong>
+            <StatusBadge value={selectedFolder ? "pending" : "idle"} />
+            <span className="muted-copy">{selectionScopeLabel}</span>
+          </div>
+          <div className="library-advanced-toolbar-actions">
+            <button
+              className="button button-secondary button-small"
+              type="button"
+              onClick={() => selectedFolder && void runScan(selectedFolder)}
+              disabled={!selectedFolder || scanMutation.isPending}
+            >
+              {scanMutation.isPending ? "Scanning…" : "Scan folder"}
+            </button>
+            <button
+              className="button button-primary button-small"
+              type="button"
+              onClick={openDryRunModal}
+              disabled={!activeSelection || createDryRunJobsMutation.isPending}
+            >
+              {createDryRunJobsMutation.isPending ? "Starting…" : "Dry Run"}
+            </button>
+            <button
+              className="button button-secondary button-small"
+              type="button"
+              onClick={runBatchPlan}
+              disabled={!activeSelection || batchPlanMutation.isPending}
+            >
+              {batchPlanMutation.isPending ? "Planning…" : "Batch Plan"}
+            </button>
+            <button
+              className="button button-primary button-small"
+              type="button"
+              onClick={runBatchJobs}
+              disabled={!activeSelection || batchJobsMutation.isPending}
+            >
+              {batchJobsMutation.isPending ? "Creating…" : "Create Jobs"}
+            </button>
+          </div>
+        </div>
+
+        <div className="library-advanced-context">
+          <strong className="library-path-copy">{selectedFolder ?? "No folder selected"}</strong>
+          <p className="muted-copy">{selectionScopeCopy}</p>
+          {activeScan?.scanned_at ? <p className="muted-copy">Last scan {formatDateTime(activeScan.scanned_at)}</p> : null}
+        </div>
+
         {showWorkspaceTabs ? (
           <div className="library-tabs" role="tablist" aria-label="Library views">
             {tabs.map((tab) => (
@@ -1260,7 +1684,7 @@ export function FilesPage() {
             )
           ) : null}
         </div>
-      </SectionCard>
+      </CollapsibleSection>
 
       <FolderPickerModal
         open={pickerOpen}
@@ -1376,6 +1800,30 @@ export function FilesPage() {
   );
 }
 
+function pathLabel(path: string | null | undefined) {
+  return path?.split("/").filter(Boolean).at(-1) ?? "";
+}
+
+function normalisePath(path: string | null | undefined) {
+  const trimmed = path?.trim().replace(/\/+$/, "") ?? "";
+  return trimmed || null;
+}
+
+function pathsMatch(left: string | null | undefined, right: string | null | undefined) {
+  const normalisedLeft = normalisePath(left);
+  const normalisedRight = normalisePath(right);
+  return Boolean(normalisedLeft && normalisedRight && normalisedLeft === normalisedRight);
+}
+
+function pathsWithinScope(path: string | null | undefined, scope: string | null | undefined) {
+  const normalisedPath = normalisePath(path);
+  const normalisedScope = normalisePath(scope);
+  if (!normalisedPath || !normalisedScope) {
+    return false;
+  }
+  return normalisedPath === normalisedScope || normalisedPath.startsWith(`${normalisedScope}/`);
+}
+
 function mediaClassLabel(value: string) {
   return {
     movie: "Movies",
@@ -1393,6 +1841,42 @@ function rulesetLabel(value: string) {
     tv: "TV",
     tv_4k: "TV 4K",
   }[value] ?? titleCase(value);
+}
+
+function scheduleWindowsForPolling(value: PollingSchedule) {
+  if (value === "continuous") {
+    return [];
+  }
+  if (value === "weekend") {
+    return [
+      { days: ["sat", "sun"], start_time: "00:00", end_time: "23:59" },
+    ];
+  }
+  if (value === "overnight") {
+    return [
+      { days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], start_time: "00:00", end_time: "06:00" },
+    ];
+  }
+  return [
+    { days: ["mon", "tue", "wed", "thu", "fri", "sat", "sun"], start_time: "02:00", end_time: "04:00" },
+  ];
+}
+
+function pollingScheduleFromWindows(windows: WatchedJob["schedule_windows"]): PollingSchedule {
+  if (windows.length === 0) {
+    return "continuous";
+  }
+  if (windows.length === 1) {
+    const [window] = windows;
+    const days = [...window.days].sort().join(",");
+    if (days === "sat,sun" && window.start_time === "00:00" && window.end_time === "23:59") {
+      return "weekend";
+    }
+    if (window.start_time === "00:00" && window.end_time === "06:00") {
+      return "overnight";
+    }
+  }
+  return "daily";
 }
 
 function inferScanKind(scan: FolderScanSummary, moviesRoot: string | null, tvRoot: string | null): ScanKind {

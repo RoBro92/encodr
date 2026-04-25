@@ -10,6 +10,7 @@ from encodr_core.execution import normalise_backend_preference
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
 from encodr_shared.scheduling import next_schedule_opening, schedule_windows_allow_now, schedule_windows_summary
 from encodr_db.models import (
+    ComplianceState,
     FileLifecycleState,
     Job,
     JobKind,
@@ -24,6 +25,8 @@ from encodr_db.models import (
 
 
 class JobRepository:
+    MAX_AUTOMATED_RETRIES = 1
+
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -297,6 +300,68 @@ class JobRepository:
         self.session.flush()
         return job
 
+    def apply_automatic_retry_policy(self, job: Job, result: ExecutionResult) -> Job | None:
+        if result.status != "failed" or job.job_kind != JobKind.EXECUTION:
+            return None
+
+        if job_requires_manual_review(job):
+            self.route_to_manual_review(
+                job,
+                reviewed_at=result.completed_at,
+                reason=result.failure_message
+                or "The failed job matches a manual-review rule and will not be retried automatically.",
+                category=result.failure_category or "manual_review_required",
+            )
+            return None
+
+        if job.attempt_count <= self.MAX_AUTOMATED_RETRIES:
+            return self.create_job_from_plan(
+                job.tracked_file,
+                job.plan_snapshot,
+                attempt_count=job.attempt_count + 1,
+                preferred_worker_id=job.preferred_worker_id,
+                pinned_worker_id=job.pinned_worker_id,
+                preferred_backend_override=job.preferred_backend_override,
+                schedule_windows=job.schedule_windows,
+                watched_job_id=job.watched_job_id,
+                job_kind=job.job_kind,
+                analysis_payload=job.analysis_payload,
+                ignore_worker_schedule=job.ignore_worker_schedule,
+            )
+
+        self.route_to_manual_review(
+            job,
+            reviewed_at=result.completed_at,
+            reason=(
+                result.failure_message
+                or "The job failed after its automated retry budget was exhausted."
+            ),
+            category=result.failure_category or "retry_limit_exceeded",
+        )
+        return None
+
+    def route_to_manual_review(
+        self,
+        job: Job,
+        *,
+        reviewed_at: datetime,
+        reason: str,
+        category: str,
+    ) -> Job:
+        job.status = JobStatus.MANUAL_REVIEW
+        job.completed_at = reviewed_at
+        job.failure_message = reason
+        job.failure_category = category
+        job.progress_stage = "manual_review"
+        job.progress_updated_at = reviewed_at
+        job.assigned_worker_id = None
+        job.scheduled_for_at = None
+        if job.tracked_file is not None:
+            job.tracked_file.lifecycle_state = FileLifecycleState.MANUAL_REVIEW
+            job.tracked_file.compliance_state = ComplianceState.MANUAL_REVIEW
+        self.session.flush()
+        return job
+
     def mark_interrupted(
         self,
         job: Job,
@@ -486,6 +551,20 @@ def replacement_status_for_result(result: ExecutionResult) -> ReplacementStatus:
     if result.replacement.status == "failed":
         return ReplacementStatus.FAILED
     return ReplacementStatus.NOT_REQUIRED
+
+
+def job_requires_manual_review(job: Job) -> bool:
+    tracked_file = job.tracked_file
+    plan_snapshot = job.plan_snapshot
+    return bool(
+        tracked_file is not None
+        and (
+            tracked_file.operator_protected
+            or tracked_file.is_protected
+            or plan_snapshot.action.value == "manual_review"
+            or plan_snapshot.should_treat_as_protected
+        )
+    )
 
 
 def calculate_space_saved(

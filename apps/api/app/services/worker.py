@@ -777,6 +777,7 @@ class WorkerService:
                 plan,
                 result,
             )
+            repository.apply_automatic_retry_policy(job, result)
 
         if runtime_summary is not None:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
@@ -846,6 +847,7 @@ class WorkerService:
                 plan,
                 result,
             )
+            repository.apply_automatic_retry_policy(job, result)
 
         if runtime_summary is not None:
             worker.runtime_payload = self._merge_runtime_summary_preferences(

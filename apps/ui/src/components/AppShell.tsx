@@ -384,7 +384,7 @@ function getCurrentPageHeader(pathname: string): { title: string; description: s
     {
       path: APP_ROUTES.files,
       title: "Library",
-      description: "Choose a folder, scan it, inspect the files, then dry run or create jobs.",
+      description: "Configure automation, monitor processing, and manage your media libraries.",
     },
     {
       path: APP_ROUTES.jobs,

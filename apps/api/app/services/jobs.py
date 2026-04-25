@@ -205,6 +205,15 @@ class JobsService:
         repository = JobRepository(session)
         if repository.has_active_job_for_tracked_file(tracked_file.id):
             return None
+        try:
+            self._validate_review_gate(
+                session,
+                tracked_file=tracked_file,
+                plan_snapshot=plan_snapshot,
+                allow_review_approved=False,
+            )
+        except ApiConflictError:
+            return None
         return repository.create_job_from_plan(
             tracked_file,
             plan_snapshot,
