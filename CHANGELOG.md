@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.5 - 2026-04-25
+
+This live release completes the 0.3.5 release-candidate line with a broad UI polish pass and scale-focused queue/dashboard architecture work.
+
+- refined the operator UI into a more cohesive SaaS-style surface, including:
+  - cleaner warning/action banners without nested white boxes
+  - standardized form control and button heights
+  - path truncation with hover titles on Jobs and Review
+  - stronger Dashboard outcome coloring and active-transcode progress presentation
+  - centered Library empty states
+  - consolidated Jobs queue controls
+  - badge-based Jobs metadata
+  - boxed and aligned Jobs/Review top metrics
+  - a minimal login page with accessible placeholder-only fields
+- added live job progress streaming through Server-Sent Events so Dashboard and Jobs progress can update without REST polling
+- added persisted telemetry aggregation storage and a rebuild fallback so Dashboard summary stats avoid full-table scans as job history grows
+- added exponential retry backoff for transient job failures before routing work to manual Review
+- kept worker execution, dry-run, watched-folder, scheduling, and review flows compatible with the 0.3.5 release-candidate line
+- updated release documentation and the release workflow so stable tags publish GHCR images for:
+  - `ghcr.io/robro92/encodr-api`
+  - `ghcr.io/robro92/encodr-ui`
+  - `ghcr.io/robro92/encodr-worker`
+  - `ghcr.io/robro92/encodr-worker-agent`
+- revalidated locally with:
+  - `pytest`
+  - `npm run test -- App.test.tsx`
+  - `npm run build`
+  - Docker stack health checks
+
 ## 0.3.5-rc.2 - 2026-04-23
 
 This release candidate focuses on UI/functionality stabilisation ahead of the next design pass, with an emphasis on operator clarity, truthful worker diagnostics, safer queue handling, and library scalability.

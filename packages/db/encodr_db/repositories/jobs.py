@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import floor
 
 from sqlalchemy import Select, asc, desc, func, or_, select
@@ -25,7 +25,9 @@ from encodr_db.models import (
 
 
 class JobRepository:
-    MAX_AUTOMATED_RETRIES = 1
+    MAX_AUTOMATED_RETRIES = 3
+    RETRY_BACKOFF_BASE_SECONDS = 60
+    RETRY_BACKOFF_MAX_SECONDS = 15 * 60
 
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -45,11 +47,17 @@ class JobRepository:
         job_kind: JobKind = JobKind.EXECUTION,
         analysis_payload: dict | None = None,
         ignore_worker_schedule: bool = False,
+        scheduled_for_at: datetime | None = None,
     ) -> Job:
         payload = plan_snapshot.payload
         replace_payload = payload["replace"]
-        scheduled_for_at = next_schedule_opening(schedule_windows)
-        starts_scheduled = bool(schedule_windows and not schedule_windows_allow_now(schedule_windows))
+        window_opening_at = next_schedule_opening(schedule_windows)
+        backoff_due_at = _normalise_datetime(scheduled_for_at) if scheduled_for_at is not None else None
+        starts_scheduled = bool(
+            backoff_due_at is not None
+            or (schedule_windows and not schedule_windows_allow_now(schedule_windows))
+        )
+        effective_scheduled_for_at = backoff_due_at or window_opening_at
         job = Job(
             tracked_file_id=tracked_file.id,
             plan_snapshot_id=plan_snapshot.id,
@@ -69,7 +77,7 @@ class JobRepository:
             requested_worker_type=None,
             input_size_bytes=tracked_file.last_observed_size,
             analysis_payload=analysis_payload,
-            scheduled_for_at=scheduled_for_at if starts_scheduled else None,
+            scheduled_for_at=effective_scheduled_for_at if starts_scheduled else None,
             verification_status=VerificationStatus.PENDING,
             replacement_status=ReplacementStatus.PENDING,
             replace_in_place=replace_payload["in_place"],
@@ -236,6 +244,7 @@ class JobRepository:
         return job
 
     def mark_result(self, job: Job, result: ExecutionResult) -> Job:
+        previous_status = job.status
         status_map = {
             "completed": JobStatus.COMPLETED,
             "failed": JobStatus.FAILED,
@@ -298,6 +307,12 @@ class JobRepository:
         job.assigned_worker_id = None
         job.scheduled_for_at = None
         self.session.flush()
+        from encodr_db.repositories.telemetry import TelemetryAggregationRepository
+
+        TelemetryAggregationRepository(self.session).record_job_result(
+            job,
+            previous_status=previous_status,
+        )
         return job
 
     def apply_automatic_retry_policy(self, job: Job, result: ExecutionResult) -> Job | None:
@@ -315,10 +330,12 @@ class JobRepository:
             return None
 
         if job.attempt_count <= self.MAX_AUTOMATED_RETRIES:
+            next_attempt_count = job.attempt_count + 1
+            scheduled_for_at = result.completed_at + self.automatic_retry_delay(next_attempt_count)
             return self.create_job_from_plan(
                 job.tracked_file,
                 job.plan_snapshot,
-                attempt_count=job.attempt_count + 1,
+                attempt_count=next_attempt_count,
                 preferred_worker_id=job.preferred_worker_id,
                 pinned_worker_id=job.pinned_worker_id,
                 preferred_backend_override=job.preferred_backend_override,
@@ -327,6 +344,7 @@ class JobRepository:
                 job_kind=job.job_kind,
                 analysis_payload=job.analysis_payload,
                 ignore_worker_schedule=job.ignore_worker_schedule,
+                scheduled_for_at=scheduled_for_at,
             )
 
         self.route_to_manual_review(
@@ -339,6 +357,14 @@ class JobRepository:
             category=result.failure_category or "retry_limit_exceeded",
         )
         return None
+
+    def automatic_retry_delay(self, attempt_count: int) -> timedelta:
+        retry_index = max(0, attempt_count - 2)
+        seconds = min(
+            self.RETRY_BACKOFF_BASE_SECONDS * (2 ** retry_index),
+            self.RETRY_BACKOFF_MAX_SECONDS,
+        )
+        return timedelta(seconds=seconds)
 
     def route_to_manual_review(
         self,
@@ -574,3 +600,9 @@ def calculate_space_saved(
     if input_size_bytes is None or output_size_bytes is None:
         return None
     return input_size_bytes - output_size_bytes
+
+
+def _normalise_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value

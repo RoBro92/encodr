@@ -45,13 +45,9 @@ export function LoginPage() {
       <main className="login-shell">
         <section className="login-panel">
           <LogoStacked className="logo-stacked login-logo" />
-          <h1>Unable to load sign-in state</h1>
-          <p className="section-copy">
-            Encodr could not confirm whether a first admin user needs to be created. Check API access and refresh the page.
-          </p>
-          <p className="login-version">Encodr v{__ENCODR_VERSION__}</p>
           <ErrorPanel title="Unable to load first-run status" message={message} />
         </section>
+        <p className="login-version">Encodr v{__ENCODR_VERSION__}</p>
       </main>
     );
   }
@@ -108,42 +104,35 @@ export function LoginPage() {
     <main className="login-shell">
       <section className="login-panel">
         <LogoStacked className="logo-stacked login-logo" />
-        <h1>{bootstrapRequired ? "Set up the first admin user" : "Sign in to the operator console"}</h1>
-        <p className="section-copy">
-          {bootstrapRequired
-            ? "No users exist yet. Create the first admin account to finish setup. You can mount your media library later if it is not ready yet."
-            : "Sign in to manage your library, jobs, review queue, and system status."}
-        </p>
-        <p className="login-version">Encodr v{displayedVersion}</p>
         <form className="form-grid" onSubmit={bootstrapRequired ? handleBootstrapSubmit : handleSubmit}>
           <label className="field">
-            <span>Username</span>
             <input
+              aria-label="Username"
               autoComplete="username"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="admin"
+              placeholder="Username"
             />
           </label>
           <label className="field">
-            <span>Password</span>
             <input
+              aria-label="Password"
               autoComplete={bootstrapRequired ? "new-password" : "current-password"}
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="Enter your password"
+              placeholder="Password"
             />
           </label>
           {bootstrapRequired ? (
             <label className="field">
-              <span>Confirm password</span>
               <input
+                aria-label="Confirm password"
                 autoComplete="new-password"
                 type="password"
                 value={confirmPassword}
                 onChange={(event) => setConfirmPassword(event.target.value)}
-                placeholder="Re-enter your password"
+                placeholder="Confirm password"
               />
             </label>
           ) : null}
@@ -155,6 +144,7 @@ export function LoginPage() {
           </button>
         </form>
       </section>
+      <p className="login-version">Encodr v{displayedVersion}</p>
     </main>
   );
 }

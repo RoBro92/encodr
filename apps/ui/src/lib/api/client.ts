@@ -57,6 +57,27 @@ export class ApiClient {
     init: RequestInit = {},
     options: RequestOptions = {},
   ): Promise<T> {
+    const response = await this.fetch(path, init, options);
+    return this.parseResponse<T>(response);
+  }
+
+  async stream(
+    path: string,
+    init: RequestInit = {},
+    options: RequestOptions = {},
+  ): Promise<Response> {
+    const response = await this.fetch(path, init, options);
+    if (!response.ok) {
+      await this.parseResponse<unknown>(response);
+    }
+    return response;
+  }
+
+  private async fetch(
+    path: string,
+    init: RequestInit = {},
+    options: RequestOptions = {},
+  ): Promise<Response> {
     const { auth = true, retryOnUnauthorised = true } = options;
     const headers = new Headers(init.headers);
     if (!headers.has("Content-Type") && init.body) {
@@ -87,10 +108,10 @@ export class ApiClient {
         ...init,
         headers: retryHeaders,
       });
-      return this.parseResponse<T>(retryResponse);
+      return retryResponse;
     }
 
-    return this.parseResponse<T>(response);
+    return response;
   }
 
   private async parseResponse<T>(response: Response): Promise<T> {

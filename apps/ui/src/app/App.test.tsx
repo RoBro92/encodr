@@ -40,7 +40,9 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/" });
 
-    expect(await screen.findByRole("heading", { name: /sign in to the operator console/i })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/username/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
     expect(screen.getByText(new RegExp(`encodr v${CURRENT_VERSION}`, "i"))).toBeInTheDocument();
   });
 
@@ -102,7 +104,7 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/login" });
 
-    expect(await screen.findByRole("heading", { name: /set up the first admin user/i })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/confirm password/i)).toBeInTheDocument();
     await userEvent.clear(screen.getByLabelText(/username/i));
     await userEvent.type(screen.getByLabelText(/username/i), "admin");
     await userEvent.type(screen.getByLabelText(/^password$/i), "super-secure-password");
@@ -124,7 +126,7 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/login" });
 
-    expect(await screen.findByRole("heading", { name: /unable to load sign-in state/i })).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/unable to load first-run status/i);
     expect(screen.getByRole("alert")).toHaveTextContent(/bootstrap status unavailable/i);
   });
 

@@ -17,6 +17,7 @@ from encodr_db.models import (
     TrackedFile,
     VerificationStatus,
 )
+from encodr_db.repositories.telemetry import TelemetryAggregationRepository
 
 
 @dataclass(frozen=True, slots=True)
@@ -93,65 +94,49 @@ class AnalyticsRepository:
         )
 
     def summarise_storage_outcomes(self) -> StorageSummary:
-        jobs = list(
-            self.session.scalars(
-                select(Job)
-                .options(joinedload(Job.plan_snapshot))
-                .where(
-                    Job.input_size_bytes.is_not(None),
-                    Job.output_size_bytes.is_not(None),
-                )
-            )
-        )
-        total_original = sum(job.input_size_bytes or 0 for job in jobs)
-        total_output = sum(job.output_size_bytes or 0 for job in jobs)
-        total_saved = sum(job.space_saved_bytes or 0 for job in jobs)
-        measurable_completed_jobs = [job for job in jobs if job.status == JobStatus.COMPLETED]
+        aggregation = TelemetryAggregationRepository(self.session).get_or_rebuild_global()
         savings_by_action: dict[str, dict[str, int | None]] = {}
-        for action in ("remux", "transcode"):
-            action_jobs = [
-                job for job in measurable_completed_jobs if job.plan_snapshot.action.value == action
-            ]
-            action_saved = sum(job.space_saved_bytes or 0 for job in action_jobs)
+        for action, values in (aggregation.savings_by_action or {}).items():
+            job_count = int(values.get("job_count") or 0)
+            space_saved = int(values.get("space_saved_bytes") or 0)
             savings_by_action[action] = {
-                "job_count": len(action_jobs),
-                "space_saved_bytes": action_saved,
-                "average_space_saved_bytes": (
-                    int(action_saved / len(action_jobs)) if action_jobs else None
-                ),
+                "job_count": job_count,
+                "space_saved_bytes": space_saved,
+                "average_space_saved_bytes": int(space_saved / job_count) if job_count else None,
             }
 
-        average_saved = int(total_saved / len(measurable_completed_jobs)) if measurable_completed_jobs else None
-        average_saved_per_day = self._average_saved_per_day(measurable_completed_jobs)
+        average_saved = (
+            int(aggregation.completed_space_saved_bytes / aggregation.measurable_completed_job_count)
+            if aggregation.measurable_completed_job_count
+            else None
+        )
+        average_saved_per_day = (
+            int(aggregation.completed_space_saved_bytes / self._aggregation_date_span_days(aggregation))
+            if aggregation.processed_file_count
+            else None
+        )
         return StorageSummary(
-            total_original_size_bytes=total_original,
-            total_output_size_bytes=total_output,
-            total_space_saved_bytes=total_saved,
+            total_original_size_bytes=aggregation.total_original_size_bytes,
+            total_output_size_bytes=aggregation.total_output_size_bytes,
+            total_space_saved_bytes=aggregation.total_space_saved_bytes,
             average_space_saved_bytes=average_saved,
             average_space_saved_per_day_bytes=average_saved_per_day,
-            measurable_job_count=len(jobs),
-            measurable_completed_job_count=len(measurable_completed_jobs),
+            measurable_job_count=aggregation.measurable_job_count,
+            measurable_completed_job_count=aggregation.measurable_completed_job_count,
             savings_by_action=savings_by_action,
         )
 
     def summarise_processing_history(self) -> ProcessingHistorySummary:
-        processed_jobs = list(
-            self.session.scalars(
-                select(Job).where(
-                    Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED]),
-                    Job.completed_at.is_not(None),
-                )
-            )
-        )
+        aggregation = TelemetryAggregationRepository(self.session).get_or_rebuild_global()
         return ProcessingHistorySummary(
-            processed_file_count=len(processed_jobs),
-            average_processed_per_day=self._average_count_per_day(processed_jobs),
-            total_audio_tracks_removed=sum(
-                self._analysis_count(job, "audio_tracks_removed_count") for job in processed_jobs
+            processed_file_count=aggregation.processed_file_count,
+            average_processed_per_day=(
+                aggregation.processed_file_count / self._aggregation_date_span_days(aggregation)
+                if aggregation.processed_file_count
+                else None
             ),
-            total_subtitle_tracks_removed=sum(
-                self._analysis_count(job, "subtitle_tracks_removed_count") for job in processed_jobs
-            ),
+            total_audio_tracks_removed=aggregation.total_audio_tracks_removed,
+            total_subtitle_tracks_removed=aggregation.total_subtitle_tracks_removed,
         )
 
     def top_failure_categories(self, *, limit: int = 5) -> list[dict[str, Any]]:
@@ -258,6 +243,11 @@ class AnalyticsRepository:
         if not completed_dates:
             return 1
         return max(1, (max(completed_dates) - min(completed_dates)).days + 1)
+
+    def _aggregation_date_span_days(self, aggregation) -> int:
+        if aggregation.first_completed_at is None or aggregation.last_completed_at is None:
+            return 1
+        return max(1, (aggregation.last_completed_at.date() - aggregation.first_completed_at.date()).days + 1)
 
     def _analysis_count(self, job: Job, key: str) -> int:
         payload = job.analysis_payload

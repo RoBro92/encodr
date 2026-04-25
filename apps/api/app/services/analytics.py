@@ -166,8 +166,26 @@ class AnalyticsService:
             overview=self.overview(session),
             storage=self.storage(session),
             outcomes=self.outcomes(session),
-            media=self.media(session),
+            media=self._dashboard_media(session),
             recent=self.recent(session),
+        )
+
+    def _dashboard_media(self, session: Session) -> AnalyticsMediaResponse:
+        repository = AnalyticsRepository(session)
+        processing = repository.summarise_processing_history()
+        return AnalyticsMediaResponse(
+            latest_probe_count=0,
+            latest_plan_count=0,
+            total_audio_tracks_removed=processing.total_audio_tracks_removed,
+            total_subtitle_tracks_removed=processing.total_subtitle_tracks_removed,
+            latest_probe_english_audio_count=0,
+            latest_probe_forced_english_subtitle_count=0,
+            latest_plan_forced_subtitle_intent_count=0,
+            latest_plan_surround_preservation_intent_count=0,
+            latest_plan_atmos_preservation_intent_count=0,
+            action_breakdown_by_resolution=[],
+            container_distribution=[],
+            video_codec_distribution=[],
         )
 
     def _count_items(self, counts: dict[str, int]) -> list[CountByValueResponse]:

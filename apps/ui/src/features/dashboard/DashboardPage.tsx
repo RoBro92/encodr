@@ -6,6 +6,7 @@ import { PageHeader } from "../../components/PageHeader";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
   useAnalyticsDashboardQuery,
+  useJobProgressStream,
   useJobsQuery,
   useRuntimeStatusQuery,
   useStorageStatusQuery,
@@ -29,6 +30,7 @@ type SystemNode = {
 };
 
 export function DashboardPage() {
+  useJobProgressStream();
   const analyticsQuery = useAnalyticsDashboardQuery();
   const workerQuery = useWorkerStatusQuery();
   const runtimeQuery = useRuntimeStatusQuery();
@@ -161,18 +163,22 @@ export function DashboardPage() {
 
           {activeJob ? (
             <div className="dashboard-active-file-body">
-              <div>
-                <strong>{activeJob.source_filename ?? activeJob.source_path?.split("/").pop() ?? activeJob.id}</strong>
-                <p>{activeJob.worker_name ?? worker?.worker_name ?? "Worker not assigned"}</p>
+              <div className="dashboard-active-file-main">
+                <div>
+                  <strong>{activeJob.source_filename ?? activeJob.source_path?.split("/").pop() ?? activeJob.id}</strong>
+                  <p>{activeJob.worker_name ?? worker?.worker_name ?? "Worker not assigned"}</p>
+                </div>
+                <Link className="button button-secondary button-small" to={APP_ROUTES.jobDetail(activeJob.id)}>
+                  Open job
+                </Link>
               </div>
               <div className="dashboard-progress" aria-label="Active transcoding progress">
                 <span style={{ width: `${activeProgress ?? 0}%` }} />
               </div>
               <div className="dashboard-progress-meta">
-                <span>{activeProgress == null ? "Progress unavailable" : `${activeProgress}% complete`}</span>
+                <strong className="dashboard-progress-value">{activeProgress == null ? "Progress unavailable" : `${activeProgress}% complete`}</strong>
                 <span>{activeJob.progress_stage ? titleCase(activeJob.progress_stage) : "Processing"}</span>
               </div>
-              <Link className="text-link" to={APP_ROUTES.jobDetail(activeJob.id)}>Open job</Link>
             </div>
           ) : (
             <div className="dashboard-idle-state">

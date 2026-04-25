@@ -148,22 +148,22 @@ export function ReviewPage() {
         <ErrorPanel title="Review action failed" message={mutationError.message} />
       ) : null}
 
-      <section className="review-metrics-grid" aria-label="Review metrics">
-        <div className="review-metric">
-          <span>Items in view</span>
-          <strong>{metrics.total}</strong>
+      <section className="metrics-card-grid" aria-label="Review metrics">
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Items in view</span>
+          <strong className="metrics-card-value">{metrics.total}</strong>
         </div>
-        <div className="review-metric">
-          <span>Open</span>
-          <strong>{metrics.open}</strong>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Open</span>
+          <strong className="metrics-card-value">{metrics.open}</strong>
         </div>
-        <div className="review-metric">
-          <span>Protected</span>
-          <strong>{metrics.protected}</strong>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Protected</span>
+          <strong className="metrics-card-value">{metrics.protected}</strong>
         </div>
-        <div className="review-metric">
-          <span>Held</span>
-          <strong>{metrics.held}</strong>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Held</span>
+          <strong className="metrics-card-value">{metrics.held}</strong>
         </div>
       </section>
 
@@ -200,6 +200,7 @@ export function ReviewPage() {
               </label>
               <label className="field checkbox-field">
                 <input
+                  className="review-filter-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600"
                   type="checkbox"
                   checked={recentFailuresOnly}
                   onChange={(event) => setRecentFailuresOnly(event.target.checked)}
@@ -228,7 +229,7 @@ export function ReviewPage() {
                       <div className="review-inbox-main">
                         <div className="review-inbox-heading">
                           <strong>{item.tracked_file.source_filename}</strong>
-                          <span>{item.source_path}</span>
+                          <span title={item.source_path}>{item.source_path}</span>
                         </div>
                         <p className="review-inbox-reason">
                           {summariseReasons(item.reasons, item.warnings)}
@@ -359,7 +360,11 @@ function ReviewDetailDrawer({
               </section>
 
               <section className="review-metadata-grid" aria-label="Review metadata">
-                <ReviewMetadataItem label="Source path" value={detail.source_path} className="review-metadata-item-wide review-source-path" />
+                <ReviewMetadataItem
+                  label="Source path"
+                  value={<span className="truncate-text" title={detail.source_path}>{detail.source_path}</span>}
+                  className="review-metadata-item-wide review-source-path"
+                />
                 <ReviewMetadataItem label="Protected" value={formatRelativeBoolean(detail.protected_state.is_protected)} />
                 <ReviewMetadataItem label="Protected source" value={formatProtectedSource(detail.protected_state.source)} />
                 <ReviewMetadataItem

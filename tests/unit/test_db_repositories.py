@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -350,7 +350,7 @@ def test_interrupted_jobs_clear_assignment_and_stop_counting_as_active() -> None
         assert jobs.has_active_job_for_tracked_file(tracked_file.id) is False
 
 
-def test_failed_execution_gets_one_automatic_retry_then_manual_review() -> None:
+def test_failed_execution_uses_exponential_backoff_before_manual_review() -> None:
     with database_session() as session:
         tracked_files = TrackedFileRepository(session)
         probes = ProbeSnapshotRepository(session)
@@ -382,8 +382,9 @@ def test_failed_execution_gets_one_automatic_retry_then_manual_review() -> None:
 
         assert retry_job is not None
         assert first_job.status == JobStatus.FAILED
-        assert retry_job.status == JobStatus.PENDING
+        assert retry_job.status == JobStatus.SCHEDULED
         assert retry_job.attempt_count == 2
+        assert retry_job.scheduled_for_at == failed_at + timedelta(seconds=60)
         assert tracked_file.lifecycle_state == FileLifecycleState.QUEUED
         assert tracked_file.id not in {item.id for item in tracked_files.list_review_candidates()}
 
@@ -399,10 +400,48 @@ def test_failed_execution_gets_one_automatic_retry_then_manual_review() -> None:
         )
         jobs.mark_result(retry_job, second_result)
         tracked_files.update_file_state_from_execution_result(tracked_file, plan, second_result)
-        final_retry = jobs.apply_automatic_retry_policy(retry_job, second_result)
+        second_retry = jobs.apply_automatic_retry_policy(retry_job, second_result)
+
+        assert second_retry is not None
+        assert second_retry.status == JobStatus.SCHEDULED
+        assert second_retry.attempt_count == 3
+        assert second_retry.scheduled_for_at == failed_at + timedelta(seconds=120)
+
+        third_result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            failure_message="Retry failed again.",
+            failure_category="execution_failed",
+            started_at=failed_at,
+            completed_at=failed_at,
+        )
+        jobs.mark_result(second_retry, third_result)
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, third_result)
+        third_retry = jobs.apply_automatic_retry_policy(second_retry, third_result)
+
+        assert third_retry is not None
+        assert third_retry.status == JobStatus.SCHEDULED
+        assert third_retry.attempt_count == 4
+        assert third_retry.scheduled_for_at == failed_at + timedelta(seconds=240)
+
+        final_result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            failure_message="Retry budget exhausted.",
+            failure_category="execution_failed",
+            started_at=failed_at,
+            completed_at=failed_at,
+        )
+        jobs.mark_result(third_retry, final_result)
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, final_result)
+        final_retry = jobs.apply_automatic_retry_policy(third_retry, final_result)
 
         assert final_retry is None
-        assert retry_job.status == JobStatus.MANUAL_REVIEW
+        assert third_retry.status == JobStatus.MANUAL_REVIEW
         assert tracked_file.lifecycle_state == FileLifecycleState.MANUAL_REVIEW
         assert tracked_file.id in {item.id for item in tracked_files.list_review_candidates()}
 

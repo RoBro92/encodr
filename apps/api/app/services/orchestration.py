@@ -163,16 +163,23 @@ class OrchestrationService:
     def _refresh_scheduled_jobs(self, session: Session) -> int:
         repository = JobRepository(session)
         changed = 0
+        now = datetime.now(timezone.utc)
         for job in repository.list_jobs_for_scheduling():
-            if not job.schedule_windows:
+            scheduled_for_at = _normalise_datetime(job.scheduled_for_at) if job.scheduled_for_at is not None else None
+            if job.status == JobStatus.SCHEDULED and scheduled_for_at is not None and scheduled_for_at > now:
                 continue
-            if schedule_windows_allow_now(job.schedule_windows):
+            if schedule_windows_allow_now(job.schedule_windows, now=now):
                 if job.status == JobStatus.SCHEDULED:
                     repository.promote_scheduled(job)
                     changed += 1
                 continue
+            if not job.schedule_windows:
+                continue
             if job.status == JobStatus.PENDING and job.assigned_worker_id is None:
-                repository.mark_scheduled(job, scheduled_for_at=next_schedule_opening(job.schedule_windows))
+                repository.mark_scheduled(job, scheduled_for_at=next_schedule_opening(job.schedule_windows, now=now))
+                changed += 1
+            elif job.status == JobStatus.SCHEDULED:
+                repository.mark_scheduled(job, scheduled_for_at=next_schedule_opening(job.schedule_windows, now=now))
                 changed += 1
         return changed
 
@@ -349,3 +356,9 @@ def _parse_datetime(value: Any) -> datetime:
     if isinstance(value, str):
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     raise ValueError("Unsupported datetime value.")
+
+
+def _normalise_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value

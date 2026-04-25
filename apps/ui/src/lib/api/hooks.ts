@@ -1,4 +1,5 @@
-import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useEffect } from "react";
+import { useMutation, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
 
 import {
   approveReviewItem,
@@ -72,6 +73,9 @@ import type {
   CreateJobPayload,
   CreateDryRunJobsPayload,
   FileSelectionPayload,
+  JobDetail,
+  JobListResponse,
+  JobSummary,
   LoginPayload,
   ProbeOrPlanPayload,
   ProcessingRuleValues,
@@ -80,6 +84,8 @@ import type {
   WatchedJobPayload,
   WorkerPreferencePayload,
 } from "../types/api";
+
+const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "interrupted", "manual_review", "skipped"]);
 
 export function useBootstrapStatusQuery(enabled = true) {
   const { apiClient } = useSession();
@@ -206,6 +212,168 @@ export function useJobDetailQuery(jobId?: string) {
     queryFn: () => getJob(apiClient, jobId as string),
     enabled: isAuthenticated && Boolean(jobId),
   });
+}
+
+export function useJobProgressStream() {
+  const { apiClient, isAuthenticated } = useSession();
+  const queryClient = useQueryClient();
+
+  useEffect(() => {
+    if (!isAuthenticated) {
+      return undefined;
+    }
+
+    const controller = new AbortController();
+    void (async () => {
+      try {
+        const response = await apiClient.stream("/jobs/progress-stream", {
+          headers: { Accept: "text/event-stream" },
+          signal: controller.signal,
+        });
+        await readJobProgressStream(response, (items) => {
+          applyJobProgressUpdates(queryClient, items);
+        });
+      } catch (error) {
+        if (!controller.signal.aborted) {
+          console.warn("Job progress stream disconnected.", error);
+        }
+      }
+    })();
+
+    return () => {
+      controller.abort();
+    };
+  }, [apiClient, isAuthenticated, queryClient]);
+}
+
+async function readJobProgressStream(
+  response: Response,
+  onJobs: (items: JobSummary[]) => void,
+) {
+  const reader = response.body?.getReader();
+  if (!reader) {
+    return;
+  }
+
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) {
+      break;
+    }
+    buffer += decoder.decode(value, { stream: true });
+
+    while (true) {
+      const delimiter = buffer.match(/\r?\n\r?\n/);
+      if (!delimiter || delimiter.index == null) {
+        break;
+      }
+      const block = buffer.slice(0, delimiter.index);
+      buffer = buffer.slice(delimiter.index + delimiter[0].length);
+      parseJobProgressEvent(block, onJobs);
+    }
+  }
+}
+
+function parseJobProgressEvent(
+  block: string,
+  onJobs: (items: JobSummary[]) => void,
+) {
+  let eventName = "message";
+  const dataLines: string[] = [];
+
+  for (const rawLine of block.replace(/\r\n/g, "\n").split("\n")) {
+    if (rawLine.startsWith("event:")) {
+      eventName = rawLine.slice("event:".length).trim();
+    } else if (rawLine.startsWith("data:")) {
+      dataLines.push(rawLine.slice("data:".length).trimStart());
+    }
+  }
+
+  if (eventName !== "jobs" || dataLines.length === 0) {
+    return;
+  }
+
+  try {
+    const payload = JSON.parse(dataLines.join("\n")) as { items?: JobSummary[] };
+    if (Array.isArray(payload.items)) {
+      onJobs(payload.items);
+    }
+  } catch {
+    return;
+  }
+}
+
+function applyJobProgressUpdates(queryClient: QueryClient, items: JobSummary[]) {
+  if (items.length === 0) {
+    return;
+  }
+
+  const updates = new Map(items.map((item) => [item.id, item]));
+  for (const query of queryClient.getQueryCache().findAll({ queryKey: ["jobs"] })) {
+    const queryKey = query.queryKey;
+    if (queryKey[1] === "detail") {
+      continue;
+    }
+    const filters = isJobFilterQueryKey(queryKey[1]) ? queryKey[1] : {};
+    queryClient.setQueryData<JobListResponse>(queryKey, (current) => {
+      if (!current?.items) {
+        return current;
+      }
+      let changed = false;
+      const seen = new Set<string>();
+      const nextItems = current.items.flatMap((item) => {
+        const update = updates.get(item.id);
+        if (!update) {
+          return [item];
+        }
+        seen.add(item.id);
+        const merged = { ...item, ...update };
+        changed = true;
+        return matchesJobFilters(merged, filters) ? [merged] : [];
+      });
+      for (const update of items) {
+        if (!seen.has(update.id) && matchesJobFilters(update, filters)) {
+          nextItems.unshift(update);
+          changed = true;
+        }
+      }
+      return changed ? { ...current, items: nextItems } : current;
+    });
+  }
+
+  for (const update of items) {
+    queryClient.setQueryData<JobDetail>(["jobs", "detail", update.id], (current) =>
+      current ? { ...current, ...update } : current,
+    );
+  }
+
+  if (items.some((item) => TERMINAL_JOB_STATUSES.has(item.status))) {
+    void queryClient.invalidateQueries({ queryKey: ["jobs"], refetchType: "active" });
+    void queryClient.invalidateQueries({ queryKey: ["worker", "status"], refetchType: "active" });
+    void queryClient.invalidateQueries({ queryKey: ["analytics", "dashboard"], refetchType: "active" });
+  }
+}
+
+function isJobFilterQueryKey(value: unknown): value is Record<string, string | number | undefined> {
+  return Boolean(value && typeof value === "object" && !Array.isArray(value));
+}
+
+function matchesJobFilters(job: JobSummary, filters: Record<string, string | number | undefined>) {
+  if (filters.status && job.status !== filters.status) {
+    return false;
+  }
+  if (filters.file_id && job.tracked_file_id !== filters.file_id) {
+    return false;
+  }
+  if (filters.job_kind && job.job_kind !== filters.job_kind) {
+    return false;
+  }
+  if (filters.worker_name && job.worker_name !== filters.worker_name) {
+    return false;
+  }
+  return true;
 }
 
 export function useCancelJobMutation() {

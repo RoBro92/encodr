@@ -1171,7 +1171,9 @@ export function FilesPage() {
             ) : null}
 
             {watchedJobs.length === 0 ? (
-              <EmptyState title="No watched folders yet" message="Create a watched job to queue or stage new files automatically from an SSD or library path." />
+              <div className="library-watchers-empty">
+                <EmptyState title="No watched folders yet" message="Create a watched job to queue or stage new files automatically from an SSD or library path." />
+              </div>
             ) : (
               <div className="list-stack">
                 {watchedJobs.map((item) => (

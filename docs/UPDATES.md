@@ -4,6 +4,7 @@ Encodr uses a conservative command-line update flow.
 
 The recommended install path uses the installer from `main`, while updates after install should use the local CLI.
 Update checks are enabled by default for installed releases and use the Encodr GitHub release feed.
+Release container images are also published to GHCR for operators who pin images directly, but the standard installer/update path still consumes the GitHub release archive.
 
 ## Check for updates
 
@@ -36,4 +37,5 @@ The web UI shows a modal when a newer release is available, including a short ch
 - automatic rollback is not implemented
 - update checks can be disabled
 - update checks depend on a trusted version metadata source
+- stable release tags publish GHCR `latest`; production-like installs should prefer explicit version tags
 - after updating, run `encodr doctor` if you want an extra manual check

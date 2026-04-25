@@ -15,6 +15,7 @@ import {
   useCreateJobMutation,
   useFilesQuery,
   useJobDetailQuery,
+  useJobProgressStream,
   useJobsQuery,
   useRetryJobMutation,
   useWorkerStatusQuery,
@@ -50,6 +51,7 @@ type JobWorkerGroup = {
 };
 
 export function JobsPage() {
+  useJobProgressStream();
   const { jobId } = useParams();
   const navigate = useNavigate();
   const [status, setStatus] = useState("");
@@ -147,28 +149,28 @@ export function JobsPage() {
         <ErrorPanel title="Job creation failed" message={createJobMutation.error.message} />
       ) : null}
 
-      <section className="jobs-metrics-grid" aria-label="Jobs metrics">
-        <div className="jobs-metric">
-          <span className="metric-label">Visible jobs</span>
-          <strong>{metrics.total}</strong>
+      <section className="metrics-card-grid" aria-label="Jobs metrics">
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Visible jobs</span>
+          <strong className="metrics-card-value">{metrics.total}</strong>
         </div>
-        <div className="jobs-metric">
-          <span className="metric-label">Running now</span>
-          <strong>{metrics.running}</strong>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Running now</span>
+          <strong className="metrics-card-value">{metrics.running}</strong>
         </div>
-        <div className="jobs-metric">
-          <span className="metric-label">Needs attention</span>
-          <strong>{metrics.attention}</strong>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Needs attention</span>
+          <strong className="metrics-card-value">{metrics.attention}</strong>
         </div>
-        <div className="jobs-metric">
-          <span className="metric-label">Completed</span>
-          <strong>{metrics.completed}</strong>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Completed</span>
+          <strong className="metrics-card-value">{metrics.completed}</strong>
         </div>
       </section>
 
       <SectionCard title="Queue controls" subtitle="Filter the queue or create a job from a tracked file.">
-        <div className="jobs-controls-stack">
-          <div className="jobs-filter-grid">
+        <div className="jobs-control-bar">
+          <div className="jobs-control-group jobs-control-group-filters">
             <label className="field">
               <span>Status</span>
               <select aria-label="Status" value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -203,7 +205,7 @@ export function JobsPage() {
             />
           </div>
           <form
-            className="jobs-create-inline"
+            className="jobs-control-group jobs-create-inline"
             onSubmit={(event) => {
               event.preventDefault();
               if (!createFromFileId.trim()) {
@@ -298,8 +300,8 @@ export function JobsPage() {
                                         {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
                                       </div>
                                     </div>
-                                    <div className="queue-job-card-context" title={jobSecondaryLabel(item)}>
-                                      <span className="queue-job-card-path">{jobContextPathLabel(item)}</span>
+                                    <div className="queue-job-card-context">
+                                      <span className="queue-job-card-path" title={jobContextPathLabel(item)}>{jobContextPathLabel(item)}</span>
                                       <span className="queue-job-card-id">Job {shortId(item.id)}</span>
                                     </div>
                                   </div>
@@ -310,7 +312,7 @@ export function JobsPage() {
                                     <span>{formatDateTime(item.updated_at)}</span>
                                   </div>
                                 </div>
-                                <p className="queue-job-card-metadata">{jobMediaInfoLabel(item)}</p>
+                                <JobMetadataBadges items={jobMediaInfoItems(item)} />
                                 <JobProgressBar job={item} compact />
                                 {item.job_kind === "dry_run" && item.analysis_payload?.summary ? (
                                   <p className="queue-job-card-message">{item.analysis_payload.summary}</p>
@@ -922,6 +924,17 @@ function JobProgressBar({
   );
 }
 
+function JobMetadataBadges({ items }: { items: string[] }) {
+  const labels = items.length > 0 ? items : ["Media summary pending"];
+  return (
+    <div className="queue-job-card-metadata-badges" aria-label="Job media metadata">
+      {labels.map((item) => (
+        <span key={item}>{item}</span>
+      ))}
+    </div>
+  );
+}
+
 function deduplicateTrackedFiles(items: FileSummary[]) {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -946,13 +959,6 @@ function jobPrimaryLabel(
   }
   const trackedFile = files.find((item) => item.id === job.tracked_file_id);
   return trackedFile ? trackedFile.source_filename : `Tracked file ${shortId(job.tracked_file_id)}`;
-}
-
-function jobSecondaryLabel(job: Pick<JobSummary, "source_path" | "tracked_file_id" | "id">) {
-  if (job.source_path) {
-    return `${job.source_path} • Job ${shortId(job.id)}`;
-  }
-  return `Tracked file ${shortId(job.tracked_file_id)} • Job ${shortId(job.id)}`;
 }
 
 function jobContextPathLabel(job: Pick<JobSummary, "source_path" | "tracked_file_id">) {
@@ -1266,8 +1272,8 @@ function workerGroupLabel(job: JobSummary) {
   return "Automatic assignment";
 }
 
-function jobMediaInfoLabel(job: JobSummary) {
-  const parts = [];
+function jobMediaInfoItems(job: JobSummary) {
+  const parts: string[] = [];
   if (job.job_kind === "dry_run") {
     if (job.output_size_bytes != null) {
       parts.push(`Estimated Output ${formatBytes(job.output_size_bytes)}`);
@@ -1298,7 +1304,7 @@ function jobMediaInfoLabel(job: JobSummary) {
   if (job.duration_seconds != null) {
     parts.push(formatDurationSeconds(job.duration_seconds));
   }
-  return parts.join(" • ") || "Media summary pending";
+  return parts;
 }
 
 function clampProgress(value: number | null) {
