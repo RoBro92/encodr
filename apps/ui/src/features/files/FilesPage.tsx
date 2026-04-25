@@ -887,13 +887,6 @@ export function FilesPage() {
       ) : null}
 
       <section className="library-watch-section">
-        <div className="section-card-header">
-          <div>
-            <h2>Library Automation</h2>
-            <p>Configure automated root monitoring and queue discovered media when workers are ready.</p>
-          </div>
-        </div>
-
         <div className="library-root-tabs" role="tablist" aria-label="Library automation profiles">
           {libraryProfiles.map((profile) => (
             <button
@@ -983,16 +976,16 @@ export function FilesPage() {
               </button>
             </div>
 
-            <div className="metric-grid library-processing-metrics">
-              <div className="metric-panel">
+            <div className="library-processing-stats">
+              <div className="library-processing-stat">
                 <span className="metric-label">Total Files Discovered</span>
                 <strong>{discoveredFileCount}</strong>
               </div>
-              <div className="metric-panel">
+              <div className="library-processing-stat">
                 <span className="metric-label">Successfully Processed</span>
                 <strong>{processedJobCount}</strong>
               </div>
-              <div className="metric-panel">
+              <div className="library-processing-stat">
                 <span className="metric-label">Pending Processing</span>
                 <strong>{pendingProcessingCount}</strong>
               </div>

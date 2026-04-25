@@ -25,9 +25,18 @@ class StorageSummary:
     total_output_size_bytes: int
     total_space_saved_bytes: int
     average_space_saved_bytes: int | None
+    average_space_saved_per_day_bytes: int | None
     measurable_job_count: int
     measurable_completed_job_count: int
     savings_by_action: dict[str, dict[str, int | None]]
+
+
+@dataclass(frozen=True, slots=True)
+class ProcessingHistorySummary:
+    processed_file_count: int
+    average_processed_per_day: float | None
+    total_audio_tracks_removed: int
+    total_subtitle_tracks_removed: int
 
 
 class AnalyticsRepository:
@@ -113,14 +122,36 @@ class AnalyticsRepository:
             }
 
         average_saved = int(total_saved / len(measurable_completed_jobs)) if measurable_completed_jobs else None
+        average_saved_per_day = self._average_saved_per_day(measurable_completed_jobs)
         return StorageSummary(
             total_original_size_bytes=total_original,
             total_output_size_bytes=total_output,
             total_space_saved_bytes=total_saved,
             average_space_saved_bytes=average_saved,
+            average_space_saved_per_day_bytes=average_saved_per_day,
             measurable_job_count=len(jobs),
             measurable_completed_job_count=len(measurable_completed_jobs),
             savings_by_action=savings_by_action,
+        )
+
+    def summarise_processing_history(self) -> ProcessingHistorySummary:
+        processed_jobs = list(
+            self.session.scalars(
+                select(Job).where(
+                    Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED]),
+                    Job.completed_at.is_not(None),
+                )
+            )
+        )
+        return ProcessingHistorySummary(
+            processed_file_count=len(processed_jobs),
+            average_processed_per_day=self._average_count_per_day(processed_jobs),
+            total_audio_tracks_removed=sum(
+                self._analysis_count(job, "audio_tracks_removed_count") for job in processed_jobs
+            ),
+            total_subtitle_tracks_removed=sum(
+                self._analysis_count(job, "subtitle_tracks_removed_count") for job in processed_jobs
+            ),
         )
 
     def top_failure_categories(self, *, limit: int = 5) -> list[dict[str, Any]]:
@@ -209,3 +240,31 @@ class AnalyticsRepository:
             name = key.value if hasattr(key, "value") else str(key)
             result[name] = int(count)
         return result
+
+    def _average_saved_per_day(self, jobs: list[Job]) -> int | None:
+        dated_jobs = [job for job in jobs if job.completed_at is not None]
+        if not dated_jobs:
+            return None
+        total_saved = sum(job.space_saved_bytes or 0 for job in dated_jobs)
+        return int(total_saved / self._date_span_days(dated_jobs))
+
+    def _average_count_per_day(self, jobs: list[Job]) -> float | None:
+        if not jobs:
+            return None
+        return len(jobs) / self._date_span_days(jobs)
+
+    def _date_span_days(self, jobs: list[Job]) -> int:
+        completed_dates = [job.completed_at.date() for job in jobs if job.completed_at is not None]
+        if not completed_dates:
+            return 1
+        return max(1, (max(completed_dates) - min(completed_dates)).days + 1)
+
+    def _analysis_count(self, job: Job, key: str) -> int:
+        payload = job.analysis_payload
+        if not isinstance(payload, dict):
+            return 0
+        value = payload.get(key)
+        try:
+            return int(value or 0)
+        except (TypeError, ValueError):
+            return 0

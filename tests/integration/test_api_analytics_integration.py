@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
@@ -29,6 +30,8 @@ def test_analytics_overview_endpoint_returns_expected_aggregate_structure(
     assert response.status_code == 200
     payload = response.json()
     assert payload["total_tracked_files"] == 2
+    assert payload["processed_file_count"] == 1
+    assert payload["average_processed_per_day"] == 1
     assert any(item["value"] == "completed" for item in payload["jobs_by_status"])
     assert payload["protected_file_count"] == 1
     assert payload["four_k_file_count"] == 1
@@ -48,6 +51,7 @@ def test_analytics_storage_endpoint_returns_measured_savings(
     assert response.status_code == 200
     payload = response.json()
     assert payload["total_space_saved_bytes"] == 800
+    assert payload["average_space_saved_per_day_bytes"] == 600
     assert payload["measurable_completed_job_count"] == 1
     assert any(item["action"] == "remux" and item["space_saved_bytes"] == 600 for item in payload["savings_by_action"])
 
@@ -86,6 +90,8 @@ def test_analytics_media_endpoint_returns_supported_media_summaries(
     payload = response.json()
     assert payload["latest_probe_count"] == 2
     assert payload["latest_plan_count"] == 2
+    assert payload["total_audio_tracks_removed"] == 1
+    assert payload["total_subtitle_tracks_removed"] == 2
     assert payload["latest_probe_english_audio_count"] >= 1
     assert any(item["resolution"] == "4K" for item in payload["action_breakdown_by_resolution"])
 
@@ -155,11 +161,16 @@ def seed_analytics_history(session_factory, layout, bundle) -> None:
         remux_media = media_at_path(parse_fixture("non4k_remux_languages.json"), remux_source)
         remux_context = create_job(session, bundle, remux_media, source_path=remux_source.as_posix())
         remux_context.job.status = JobStatus.COMPLETED
+        remux_context.job.completed_at = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
         remux_context.job.verification_status = VerificationStatus.PASSED
         remux_context.job.replacement_status = ReplacementStatus.SUCCEEDED
         remux_context.job.input_size_bytes = 1000
         remux_context.job.output_size_bytes = 400
         remux_context.job.space_saved_bytes = 600
+        remux_context.job.analysis_payload = {
+            "audio_tracks_removed_count": 1,
+            "subtitle_tracks_removed_count": 2,
+        }
         remux_context.job.tracked_file.lifecycle_state = remux_context.job.tracked_file.lifecycle_state.COMPLETED
         remux_context.job.tracked_file.is_protected = False
 

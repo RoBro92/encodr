@@ -1,39 +1,52 @@
 import { Link } from "react-router-dom";
 
-import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
-import { SectionCard } from "../../components/SectionCard";
-import { StatCard } from "../../components/StatCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
   useAnalyticsDashboardQuery,
-  useRunWorkerOnceMutation,
+  useJobsQuery,
   useRuntimeStatusQuery,
   useStorageStatusQuery,
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
-import { formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
+import type { JobSummary, RuntimeStatus, StorageStatus, WorkerStatus } from "../../lib/types/api";
+import { formatBytes, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
+
+type ActionItem = {
+  title: string;
+  description: string;
+  to: string;
+};
+
+type SystemNode = {
+  name: string;
+  detail: string;
+  status: string;
+  tone: "nominal" | "processing" | "idle" | "degraded" | "offline";
+};
 
 export function DashboardPage() {
   const analyticsQuery = useAnalyticsDashboardQuery();
   const workerQuery = useWorkerStatusQuery();
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
-  const runOnceMutation = useRunWorkerOnceMutation();
+  const runningJobsQuery = useJobsQuery({ status: "running", limit: 10 });
 
   const error =
     analyticsQuery.error ??
     workerQuery.error ??
     runtimeQuery.error ??
-    storageQuery.error;
+    storageQuery.error ??
+    runningJobsQuery.error;
   const loading =
     analyticsQuery.isLoading ||
     workerQuery.isLoading ||
     runtimeQuery.isLoading ||
-    storageQuery.isLoading;
+    storageQuery.isLoading ||
+    runningJobsQuery.isLoading;
 
   if (loading) {
     return <LoadingBlock label="Loading dashboard" />;
@@ -47,41 +60,24 @@ export function DashboardPage() {
   const worker = workerQuery.data;
   const runtime = runtimeQuery.data;
   const storage = storageQuery.data;
+  const runningJobs = runningJobsQuery.data?.items ?? [];
   const jobStatusCounts = toCountMap(analytics?.overview.jobs_by_status ?? []);
-  const queuedJobCount = (jobStatusCounts.pending ?? 0) + (jobStatusCounts.running ?? 0);
-  const completedJobCount = jobStatusCounts.completed ?? 0;
+  const completedJobCount = (jobStatusCounts.completed ?? 0) + (jobStatusCounts.skipped ?? 0);
+  const manualReviewCount = jobStatusCounts.manual_review ?? 0;
   const failedJobCount = jobStatusCounts.failed ?? 0;
-  const outcomeActions = analytics?.overview.plans_by_action.filter((item) => item.count > 0) ?? [];
-  const outcomeStatuses = analytics?.outcomes.jobs_by_status.filter((item) => item.count > 0) ?? [];
-  const hasOutcomePanel = outcomeActions.length > 0 || outcomeStatuses.length > 0;
-  const hasSpaceSaved =
-    (analytics?.storage.total_space_saved_bytes ?? 0) > 0 ||
-    (analytics?.storage.savings_by_action.some((item) => item.space_saved_bytes > 0) ?? false);
-  const mediaHighlights = analytics
-    ? [
-        {
-          label: "English audio present",
-          value: analytics.media.latest_probe_english_audio_count,
-        },
-        {
-          label: "Forced subtitle intent",
-          value: analytics.media.latest_plan_forced_subtitle_intent_count,
-        },
-        {
-          label: "Surround preserved",
-          value: analytics.media.latest_plan_surround_preservation_intent_count,
-        },
-        {
-          label: "Atmos preserved",
-          value: analytics.media.latest_plan_atmos_preservation_intent_count,
-        },
-      ].filter((item) => item.value > 0)
-    : [];
-  const recentItems = analytics
-    ? [...analytics.recent.recent_failed_jobs, ...analytics.recent.recent_completed_jobs]
-        .sort((left, right) => right.updated_at.localeCompare(left.updated_at))
-        .slice(0, 5)
-    : [];
+  const interruptedJobCount = jobStatusCounts.interrupted ?? 0;
+  const runningJobCount = jobStatusCounts.running ?? 0;
+  const totalTranscodes = countByValue(analytics?.overview.plans_by_action ?? [], "transcode");
+  const processedFileCount = analytics?.overview.processed_file_count ?? completedJobCount;
+  const averageProcessedPerDay = analytics?.overview.average_processed_per_day ?? null;
+  const totalSpaceSaved = analytics?.storage.total_space_saved_bytes ?? 0;
+  const averageSavedPerDay = analytics?.storage.average_space_saved_per_day_bytes ?? null;
+  const totalAudioRemoved = analytics?.media.total_audio_tracks_removed ?? 0;
+  const totalSubtitleRemoved = analytics?.media.total_subtitle_tracks_removed ?? 0;
+  const actionItems = buildActionItems(runtime, storage, worker);
+  const activeJob = pickActiveJob(runningJobs, worker?.current_job_id);
+  const activeProgress = clampProgress(activeJob?.progress_percent ?? worker?.current_progress_percent ?? null);
+  const systemNodes = buildSystemNodes(runtime, storage, worker);
 
   return (
     <div className="page-stack">
@@ -91,181 +87,260 @@ export function DashboardPage() {
         description="Library, jobs, review, and storage at a glance."
       />
 
-      {runOnceMutation.error instanceof Error ? (
-        <ErrorPanel title="Worker run failed" message={runOnceMutation.error.message} />
+      {actionItems.length > 0 ? (
+        <section className="dashboard-action-banner" role="note" aria-label="Action required">
+          <div>
+            <span className="section-eyebrow">Action Required</span>
+            <h2>Finish critical setup before relying on automation.</h2>
+          </div>
+          <div className="dashboard-action-list">
+            {actionItems.map((item) => (
+              <Link key={item.title} className="dashboard-action-item" to={item.to}>
+                <strong>{item.title}</strong>
+                <span>{item.description}</span>
+              </Link>
+            ))}
+          </div>
+        </section>
       ) : null}
 
-      <section className="stats-grid">
-        <StatCard label="Tracked files" value={analytics?.overview.total_tracked_files ?? 0} />
-        <StatCard label="Queued or running jobs" value={queuedJobCount} tone="warning" />
-        <StatCard label="Completed jobs" value={completedJobCount} tone="positive" />
-        <StatCard label="Failed jobs" value={failedJobCount} tone="danger" />
-        <StatCard label="Protected files" value={analytics?.overview.protected_file_count ?? 0} />
-        <StatCard label="4K files" value={analytics?.overview.four_k_file_count ?? 0} />
+      <section className="dashboard-analytics-row" aria-label="Historical processing metrics">
+        <article className="dashboard-metric-card">
+          <span className="metric-label">Files Processed</span>
+          <strong>{formatInteger(processedFileCount)}</strong>
+          <small>{formatAverage(averageProcessedPerDay, "Average per day")}</small>
+        </article>
+        <article className="dashboard-metric-card">
+          <span className="metric-label">Storage Saved</span>
+          <strong>{formatBytes(totalSpaceSaved)}</strong>
+          <small>{averageSavedPerDay == null ? "Average saved per day unavailable" : `${formatBytes(averageSavedPerDay)} average saved per day`}</small>
+        </article>
+        <article className="dashboard-metric-card">
+          <span className="metric-label">Media Cleaned</span>
+          <strong>{formatInteger(totalAudioRemoved)} audio</strong>
+          <small>{formatInteger(totalSubtitleRemoved)} subtitles removed</small>
+        </article>
       </section>
 
-      <section className="dashboard-grid">
-        <SectionCard title="Start here" subtitle="Choose the next step.">
-          <div className="action-button-row">
-            <Link className="button button-secondary" to={APP_ROUTES.files}>
-              Open Library
-            </Link>
-            <Link className="button button-secondary" to={APP_ROUTES.review}>
-              Open Review
-            </Link>
-            <Link className="button button-secondary" to={APP_ROUTES.config}>
-              Open Settings
-            </Link>
-            <Link className="button button-secondary" to={APP_ROUTES.reports}>
-              Open Reports
-            </Link>
-            <button
-              className="button button-primary"
-              type="button"
-              onClick={() => runOnceMutation.mutate()}
-              disabled={runOnceMutation.isPending}
-            >
-              {runOnceMutation.isPending ? "Running worker…" : "Run worker once"}
-            </button>
+      <section className="dashboard-command-grid" aria-label="Transcoding command center">
+        <article className="dashboard-widget">
+          <div className="dashboard-widget-header">
+            <div>
+              <h2>Transcoding Outcomes</h2>
+              <p>Current queue health and outcomes that need attention.</p>
+            </div>
+            <Link className="text-link" to={APP_ROUTES.jobs}>Open jobs</Link>
           </div>
-          <p className="muted-copy">Process the next queued job.</p>
-        </SectionCard>
 
-        {hasOutcomePanel ? (
-          <SectionCard title="Outcomes" subtitle="Current results.">
-            <div className="card-stack">
-              {outcomeActions.length > 0 ? (
-                <div className="badge-list">
-                  {outcomeActions.map((item) => (
-                    <div key={item.value} className="metric-pill">
-                      <span>{titleCase(item.value)}</span>
-                      <strong>{item.count}</strong>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              {outcomeStatuses.length > 0 ? (
-                <div className="badge-list">
-                  {outcomeStatuses.map((item) => (
-                    <div key={item.value} className="metric-pill">
-                      <StatusBadge value={item.value} />
-                      <strong>{item.count}</strong>
-                    </div>
-                  ))}
-                </div>
-              ) : null}
-              <Link className="text-link" to={APP_ROUTES.reports}>Open reports</Link>
+          <div className="dashboard-outcome-top">
+            <div className={`dashboard-outcome-card${manualReviewCount > 0 ? " dashboard-outcome-card-attention" : ""}`}>
+              <span className="metric-label">Manual Review</span>
+              <strong>{formatInteger(manualReviewCount)}</strong>
             </div>
-          </SectionCard>
-        ) : null}
-
-        {hasSpaceSaved ? (
-          <SectionCard title="Space saved" subtitle="Measured completed jobs only.">
-            <div className="card-stack">
-              <p className="metric-lead">{formatBytes(analytics!.storage.total_space_saved_bytes)} saved</p>
-              <p className="muted-copy">
-                Average per completed measurable job:{" "}
-                <strong>{formatBytes(analytics!.storage.average_space_saved_bytes)}</strong>
-              </p>
-              <div className="metric-grid">
-                {analytics!.storage.savings_by_action
-                  .filter((item) => item.space_saved_bytes > 0)
-                  .map((item) => (
-                    <div key={item.action} className="metric-pill">
-                      <span>{titleCase(item.action)}</span>
-                      <strong>{formatBytes(item.space_saved_bytes)}</strong>
-                      <span className="metric-subtle">{item.job_count} measurable jobs</span>
-                    </div>
-                  ))}
-              </div>
+            <div className="dashboard-outcome-card">
+              <span className="metric-label">Total Transcodes</span>
+              <strong>{formatInteger(totalTranscodes)}</strong>
             </div>
-          </SectionCard>
-        ) : null}
+          </div>
 
-        <SectionCard title="Worker" subtitle="Current status.">
-          {worker ? (
-            <div className="card-stack">
-              <div className="info-strip">
-                <StatusBadge value={worker.last_result_status ?? "idle"} />
-                <span>{worker.worker_name}</span>
+          <div className="dashboard-breakdown-grid">
+            <StatusSummaryCard label="Failed" value={failedJobCount} tone="danger" />
+            <StatusSummaryCard label="Interrupted" value={interruptedJobCount} tone="warning" />
+            <StatusSummaryCard label="Running" value={runningJobCount} tone="success" />
+          </div>
+        </article>
+
+        <article className="dashboard-widget dashboard-active-file-card">
+          <div className="dashboard-widget-header">
+            <div>
+              <h2>Active Transcoding File</h2>
+              <p>{activeJob ? "Current worker output." : "System Idle - Waiting for jobs"}</p>
+            </div>
+            {activeJob ? <StatusBadge value={activeJob.status} /> : <StatusBadge value="idle" />}
+          </div>
+
+          {activeJob ? (
+            <div className="dashboard-active-file-body">
+              <div>
+                <strong>{activeJob.source_filename ?? activeJob.source_path?.split("/").pop() ?? activeJob.id}</strong>
+                <p>{activeJob.worker_name ?? worker?.worker_name ?? "Worker not assigned"}</p>
               </div>
-              <p className="muted-copy">
-                Queue: <strong>{worker.local_worker_queue}</strong> · Processed jobs:{" "}
-                <strong>{worker.processed_jobs}</strong>
-              </p>
-              <p className="muted-copy">
-                Last completed run: <strong>{formatDateTime(worker.last_run_completed_at)}</strong>
-              </p>
-              <Link className="text-link" to={APP_ROUTES.system}>
-                Open system
-              </Link>
+              <div className="dashboard-progress" aria-label="Active transcoding progress">
+                <span style={{ width: `${activeProgress ?? 0}%` }} />
+              </div>
+              <div className="dashboard-progress-meta">
+                <span>{activeProgress == null ? "Progress unavailable" : `${activeProgress}% complete`}</span>
+                <span>{activeJob.progress_stage ? titleCase(activeJob.progress_stage) : "Processing"}</span>
+              </div>
+              <Link className="text-link" to={APP_ROUTES.jobDetail(activeJob.id)}>Open job</Link>
             </div>
           ) : (
-            <EmptyState title="No worker data" message="Worker status is not available yet." />
+            <div className="dashboard-idle-state">
+              <strong>System Idle</strong>
+              <p>Waiting for queued jobs or scheduled watcher activity.</p>
+            </div>
           )}
-        </SectionCard>
+        </article>
+      </section>
 
-        <SectionCard title="System" subtitle="Runtime and storage.">
-          {runtime && storage ? (
-            <div className="card-stack">
-              <div className="info-strip">
-                <StatusBadge value={runtime.db_reachable ? "ok" : "failed"} />
-                <span>Database reachable: {runtime.db_reachable ? "Yes" : "No"}</span>
+      <section className="dashboard-widget">
+        <div className="dashboard-widget-header">
+          <div>
+            <h2>System & Nodes</h2>
+            <p>General health checks without hardware telemetry noise.</p>
+          </div>
+          <Link className="text-link" to={APP_ROUTES.system}>Open system</Link>
+        </div>
+
+        <div className="dashboard-node-grid">
+          {systemNodes.map((node) => (
+            <div key={node.name} className="dashboard-node-row">
+              <div className={`dashboard-status-dot dashboard-status-dot-${node.tone}`} aria-hidden="true" />
+              <div>
+                <strong>{node.name}</strong>
+                <p>{node.detail}</p>
               </div>
-              {runtime.storage_setup_incomplete ? (
-                <div className="info-strip" role="note">
-                  <strong>Storage still needs setup.</strong>
-                  <span>
-                    Encodr expects media at <code>{storage.standard_media_root}</code>. Finish setup when your mounts are ready.
-                  </span>
-                </div>
-              ) : null}
-              <p className="muted-copy">
-                Scratch path writable: <strong>{storage.scratch.writable ? "Yes" : "No"}</strong>
-              </p>
-              <p className="muted-copy">
-                Auth enabled: <strong>{runtime.auth_enabled ? "Yes" : "No"}</strong>
-              </p>
+              <span className={`dashboard-node-pill dashboard-node-pill-${node.tone}`}>{node.status}</span>
             </div>
-          ) : null}
-        </SectionCard>
-
-        <SectionCard title="Recent activity" subtitle="Latest completed and failed jobs.">
-          {recentItems.length > 0 ? (
-            <div className="list-stack">
-              {recentItems.map((item) => (
-                <Link key={item.job_id} className="list-row" to={APP_ROUTES.jobDetail(item.job_id)}>
-                  <div>
-                    <strong>{item.file_name}</strong>
-                    <p>{formatDateTime(item.updated_at)}</p>
-                  </div>
-                  <div className="list-row-meta">
-                    <span className="muted-copy">{titleCase(item.action)}</span>
-                    <StatusBadge value={item.status} />
-                  </div>
-                </Link>
-              ))}
-            </div>
-          ) : (
-            <EmptyState title="No activity yet" message="Completed and failed jobs will appear here." />
-          )}
-        </SectionCard>
-
-        {mediaHighlights.length > 0 ? (
-          <SectionCard title="Media summary" subtitle="Recent media signals.">
-            <div className="metric-grid">
-              {mediaHighlights.map((item) => (
-                <div key={item.label} className="metric-panel">
-                  <span className="metric-label">{item.label}</span>
-                  <strong>{item.value}</strong>
-                </div>
-              ))}
-            </div>
-          </SectionCard>
-        ) : null}
+          ))}
+        </div>
       </section>
     </div>
   );
+}
+
+function StatusSummaryCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone: "danger" | "warning" | "success";
+}) {
+  return (
+    <div className={`dashboard-breakdown-card dashboard-breakdown-card-${tone}`}>
+      <span className="metric-label">{label}</span>
+      <strong>{formatInteger(value)}</strong>
+    </div>
+  );
+}
+
+function buildActionItems(
+  runtime: RuntimeStatus | undefined,
+  storage: StorageStatus | undefined,
+  worker: WorkerStatus | undefined,
+): ActionItem[] {
+  const items: ActionItem[] = [];
+  if (runtime?.storage_setup_incomplete || storage?.status === "degraded" || storage?.status === "failed") {
+    items.push({
+      title: "Storage still needs setup.",
+      description: storage?.summary ?? "Setup storage mounts before running automation.",
+      to: APP_ROUTES.config,
+    });
+  }
+  if (worker && (!worker.configured || !worker.enabled || !worker.eligible)) {
+    items.push({
+      title: worker.configured ? "Review worker node." : "Configure first worker node.",
+      description: worker.eligibility_summary || worker.summary,
+      to: APP_ROUTES.workers,
+    });
+  }
+  if (runtime && (!runtime.db_reachable || !runtime.schema_reachable)) {
+    items.push({
+      title: "Database requires attention.",
+      description: runtime.summary,
+      to: APP_ROUTES.system,
+    });
+  }
+  return items;
+}
+
+function buildSystemNodes(
+  runtime: RuntimeStatus | undefined,
+  storage: StorageStatus | undefined,
+  worker: WorkerStatus | undefined,
+): SystemNode[] {
+  return [
+    {
+      name: "Database",
+      detail: runtime?.db_reachable ? "Schema reachable and accepting requests." : "Database connection is unavailable.",
+      status: runtime?.db_reachable ? "Nominal" : "Offline",
+      tone: runtime?.db_reachable ? "nominal" : "offline",
+    },
+    {
+      name: "Storage",
+      detail: storage?.summary ?? "Storage status unavailable.",
+      status: titleCase(storage?.status ?? "unknown"),
+      tone: healthTone(storage?.status),
+    },
+    {
+      name: worker?.worker_name ?? "Worker Node",
+      detail: worker?.summary ?? "Worker status unavailable.",
+      status: workerStatusLabel(worker),
+      tone: workerTone(worker),
+    },
+  ];
+}
+
+function workerStatusLabel(worker: WorkerStatus | undefined) {
+  if (!worker) {
+    return "Offline";
+  }
+  if (worker.current_job_id || worker.queue_health.running_count > 0) {
+    return "Processing";
+  }
+  if (!worker.enabled || !worker.available) {
+    return "Offline";
+  }
+  if (!worker.eligible || worker.status === "degraded") {
+    return "Degraded";
+  }
+  return "Idle";
+}
+
+function workerTone(worker: WorkerStatus | undefined): SystemNode["tone"] {
+  if (!worker || !worker.enabled || !worker.available) {
+    return "offline";
+  }
+  if (worker.current_job_id || worker.queue_health.running_count > 0) {
+    return "processing";
+  }
+  if (!worker.eligible || worker.status === "degraded" || worker.status === "failed") {
+    return "degraded";
+  }
+  return "idle";
+}
+
+function healthTone(status: string | undefined): SystemNode["tone"] {
+  if (status === "healthy") {
+    return "nominal";
+  }
+  if (status === "failed") {
+    return "offline";
+  }
+  if (status === "degraded") {
+    return "degraded";
+  }
+  return "idle";
+}
+
+function pickActiveJob(jobs: JobSummary[], currentJobId?: string | null) {
+  if (currentJobId) {
+    return jobs.find((job) => job.id === currentJobId) ?? jobs[0] ?? null;
+  }
+  return jobs[0] ?? null;
+}
+
+function clampProgress(value: number | null) {
+  if (value == null || Number.isNaN(value)) {
+    return null;
+  }
+  return Math.max(0, Math.min(100, Math.round(value)));
+}
+
+function countByValue(items: Array<{ value: string; count: number }>, value: string) {
+  return items.find((item) => item.value === value)?.count ?? 0;
 }
 
 function toCountMap(items: Array<{ value: string; count: number }>) {
@@ -273,4 +348,15 @@ function toCountMap(items: Array<{ value: string; count: number }>) {
     accumulator[item.value] = item.count;
     return accumulator;
   }, {});
+}
+
+function formatInteger(value: number | null | undefined) {
+  return new Intl.NumberFormat("en-GB", { maximumFractionDigits: 0 }).format(value ?? 0);
+}
+
+function formatAverage(value: number | null | undefined, label: string) {
+  if (value == null || Number.isNaN(value)) {
+    return `${label} unavailable`;
+  }
+  return `${new Intl.NumberFormat("en-GB", { maximumFractionDigits: 1 }).format(value)} ${label.toLowerCase()}`;
 }

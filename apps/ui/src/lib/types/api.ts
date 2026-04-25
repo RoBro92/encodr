@@ -940,6 +940,8 @@ export type AnalyticsOverview = {
   files_by_lifecycle: CountByValue[];
   files_by_compliance: CountByValue[];
   total_jobs: number;
+  processed_file_count: number;
+  average_processed_per_day: number | null;
   jobs_by_status: CountByValue[];
   plans_by_action: CountByValue[];
   verification_outcomes: CountByValue[];
@@ -961,6 +963,7 @@ export type AnalyticsStorage = {
   total_output_size_bytes: number;
   total_space_saved_bytes: number;
   average_space_saved_bytes: number | null;
+  average_space_saved_per_day_bytes: number | null;
   measurable_job_count: number;
   measurable_completed_job_count: number;
   savings_by_action: ActionStorageSummary[];
@@ -999,6 +1002,8 @@ export type ResolutionActionBreakdown = {
 export type AnalyticsMedia = {
   latest_probe_count: number;
   latest_plan_count: number;
+  total_audio_tracks_removed: number;
+  total_subtitle_tracks_removed: number;
   latest_probe_english_audio_count: number;
   latest_probe_forced_english_subtitle_count: number;
   latest_plan_forced_subtitle_intent_count: number;

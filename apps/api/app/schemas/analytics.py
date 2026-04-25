@@ -15,6 +15,8 @@ class AnalyticsOverviewResponse(BaseModel):
     files_by_lifecycle: list[CountByValueResponse]
     files_by_compliance: list[CountByValueResponse]
     total_jobs: int
+    processed_file_count: int
+    average_processed_per_day: float | None = None
     jobs_by_status: list[CountByValueResponse]
     plans_by_action: list[CountByValueResponse]
     verification_outcomes: list[CountByValueResponse]
@@ -36,6 +38,7 @@ class AnalyticsStorageResponse(BaseModel):
     total_output_size_bytes: int
     total_space_saved_bytes: int
     average_space_saved_bytes: int | None = None
+    average_space_saved_per_day_bytes: int | None = None
     measurable_job_count: int
     measurable_completed_job_count: int
     savings_by_action: list[ActionStorageSummaryResponse]
@@ -74,6 +77,8 @@ class ResolutionActionBreakdownResponse(BaseModel):
 class AnalyticsMediaResponse(BaseModel):
     latest_probe_count: int
     latest_plan_count: int
+    total_audio_tracks_removed: int = 0
+    total_subtitle_tracks_removed: int = 0
     latest_probe_english_audio_count: int
     latest_probe_forced_english_subtitle_count: int
     latest_plan_forced_subtitle_intent_count: int

@@ -95,6 +95,7 @@ describe("Encodr UI shell", () => {
       },
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
     ]);
@@ -131,6 +132,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
     ]);
@@ -143,9 +145,14 @@ describe("Encodr UI shell", () => {
       .getAllByRole("link")
       .map((item) => item.textContent?.trim());
     expect(navLabels).toEqual(["Dashboard", "Library", "Jobs", "Review", "Workers", "System", "Settings"]);
-    expect(screen.getByRole("link", { name: /open library/i })).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: /open reports/i }).length).toBeGreaterThan(0);
+    expect(screen.getByText(/files processed/i)).toBeInTheDocument();
+    expect(screen.getByText(/storage saved/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /transcoding outcomes/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /active transcoding file/i })).toBeInTheDocument();
+    expect(screen.getByText(/example film \(2024\)\.mkv/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open jobs/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^reports$/i, hidden: false })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /start here/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/probe source path/i)).not.toBeInTheDocument();
   });
 
@@ -153,6 +160,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       {
         method: "GET",
         path: "/api/system/runtime",
@@ -173,6 +181,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
       {
@@ -208,6 +217,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
       {
@@ -522,7 +532,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /library automation/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /library automation/i })).not.toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /^movies$/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /^tv$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /\+ add watcher/i })).toBeInTheDocument();
@@ -1527,10 +1537,17 @@ function analyticsDashboard() {
       total_tracked_files: 12,
       protected_file_count: 2,
       four_k_file_count: 3,
+      total_jobs: 8,
+      processed_file_count: 5,
+      average_processed_per_day: 1.7,
+      files_by_lifecycle: [],
+      files_by_compliance: [],
       jobs_by_status: [
         { value: "pending", count: 1 },
+        { value: "running", count: 1 },
         { value: "completed", count: 5 },
         { value: "failed", count: 2 },
+        { value: "manual_review", count: 1 },
       ],
       plans_by_action: [
         { value: "skip", count: 2 },
@@ -1541,6 +1558,11 @@ function analyticsDashboard() {
     storage: {
       total_space_saved_bytes: 1073741824,
       average_space_saved_bytes: 536870912,
+      average_space_saved_per_day_bytes: 268435456,
+      total_original_size_bytes: 2147483648,
+      total_output_size_bytes: 1073741824,
+      measurable_job_count: 2,
+      measurable_completed_job_count: 2,
       savings_by_action: [
         { action: "remux", space_saved_bytes: 268435456, job_count: 1 },
         { action: "transcode", space_saved_bytes: 805306368, job_count: 1 },
@@ -1550,17 +1572,27 @@ function analyticsDashboard() {
       jobs_by_status: [
         { value: "completed", count: 5 },
         { value: "failed", count: 2 },
+        { value: "manual_review", count: 1 },
+        { value: "running", count: 1 },
       ],
-      verification_by_status: [],
-      replacement_by_status: [],
+      verification_outcomes: [],
+      replacement_outcomes: [],
       top_failure_categories: [],
-      container_distribution: [],
+      recent_outcomes: [],
     },
     media: {
+      latest_probe_count: 12,
+      latest_plan_count: 8,
+      total_audio_tracks_removed: 9,
+      total_subtitle_tracks_removed: 14,
       latest_probe_english_audio_count: 5,
       latest_probe_forced_subtitle_count: 2,
-      latest_probe_surround_audio_count: 3,
-      latest_probe_atmos_audio_count: 1,
+      latest_plan_forced_subtitle_intent_count: 2,
+      latest_plan_surround_preservation_intent_count: 3,
+      latest_plan_atmos_preservation_intent_count: 1,
+      action_breakdown_by_resolution: [],
+      container_distribution: [],
+      video_codec_distribution: [],
     },
     recent: {
       recent_completed_jobs: [
@@ -1582,6 +1614,26 @@ function analyticsDashboard() {
         },
       ],
     },
+  };
+}
+
+function runningJobsResponse() {
+  return {
+    items: [
+      {
+        ...jobDetail(),
+        id: "job-running",
+        source_filename: "Example Film (2024).mkv",
+        source_path: "/media/Movies/Example Film (2024).mkv",
+        worker_name: "worker-local",
+        status: "running",
+        progress_stage: "transcoding",
+        progress_percent: 42,
+        updated_at: "2026-04-20T10:10:00Z",
+      },
+    ],
+    limit: 10,
+    offset: 0,
   };
 }
 
