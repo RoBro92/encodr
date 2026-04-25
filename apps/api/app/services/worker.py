@@ -11,7 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import Request
-from sqlalchemy import text
+from sqlalchemy import desc, select, text
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas.worker import HealthStatus
@@ -26,6 +26,7 @@ from encodr_db.models import (
     AuditOutcome,
     JobKind,
     JobStatus,
+    Job,
     User,
     Worker,
     WorkerHealthStatus,
@@ -776,6 +777,7 @@ class WorkerService:
                 plan,
                 result,
             )
+            repository.apply_automatic_retry_policy(job, result)
 
         if runtime_summary is not None:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
@@ -845,6 +847,7 @@ class WorkerService:
                 plan,
                 result,
             )
+            repository.apply_automatic_retry_policy(job, result)
 
         if runtime_summary is not None:
             worker.runtime_payload = self._merge_runtime_summary_preferences(
@@ -1158,6 +1161,14 @@ class WorkerService:
 
     def _local_worker_inventory(self, *, worker: Worker, detail: bool = False) -> dict[str, object]:
         status = self.status_summary(local_worker_override=worker)
+        current_job = self._local_current_job_snapshot(worker.id)
+        current_job_id = status["current_job_id"] or current_job.get("id")
+        current_backend = status["current_backend"] or current_job.get("actual_execution_backend") or current_job.get("requested_execution_backend")
+        current_stage = status["current_stage"] or current_job.get("progress_stage")
+        current_progress_percent = status["current_progress_percent"]
+        if current_progress_percent is None:
+            current_progress_percent = current_job.get("progress_percent")
+        current_progress_updated_at = status["current_progress_updated_at"] or current_job.get("progress_updated_at")
         local_config = self.config_bundle.workers.local
         item: dict[str, object] = {
             "id": worker.id,
@@ -1191,10 +1202,10 @@ class WorkerService:
             ),
             "schedule_windows": worker.schedule_windows or [],
             "schedule_summary": schedule_windows_summary(worker.schedule_windows),
-            "current_job_id": status["current_job_id"],
-            "current_backend": status["current_backend"],
-            "current_stage": status["current_stage"],
-            "current_progress_percent": status["current_progress_percent"],
+            "current_job_id": current_job_id,
+            "current_backend": current_backend,
+            "current_stage": current_stage,
+            "current_progress_percent": current_progress_percent,
             "onboarding_platform": None,
             "pairing_expires_at": None,
             "pending_assignment_count": status["queue_health"]["pending_count"],
@@ -1220,11 +1231,11 @@ class WorkerService:
                         "allow_cpu_fallback": worker.allow_cpu_fallback,
                         "max_concurrent_jobs": worker.max_concurrent_jobs,
                         "schedule_windows": worker.schedule_windows or [],
-                        "current_job_id": status["current_job_id"],
-                        "current_backend": status["current_backend"],
-                        "current_stage": status["current_stage"],
-                        "current_progress_percent": status["current_progress_percent"],
-                        "current_progress_updated_at": status["current_progress_updated_at"],
+                        "current_job_id": current_job_id,
+                        "current_backend": current_backend,
+                        "current_stage": current_stage,
+                        "current_progress_percent": current_progress_percent,
+                        "current_progress_updated_at": current_progress_updated_at,
                         "telemetry": status["telemetry"],
                         "last_completed_job_id": status["last_processed_job_id"],
                     },
@@ -1232,13 +1243,37 @@ class WorkerService:
                         self._binary_inventory_item("ffmpeg", status["ffmpeg"]),
                         self._binary_inventory_item("ffprobe", status["ffprobe"]),
                     ],
-                    "assigned_job_ids": [],
+                    "assigned_job_ids": [str(current_job_id)] if current_job_id else [],
                     "last_processed_job_id": status["last_processed_job_id"],
                     "recent_failure_message": status["last_failure_message"],
                     "recent_jobs": self._recent_job_history(remote_worker_id=worker.id),
                 }
             )
         return item
+
+    def _local_current_job_snapshot(self, worker_id: str) -> dict[str, object]:
+        if self.session_factory is None:
+            return {}
+        with self.session_factory() as session:
+            job = session.scalar(
+                select(Job)
+                .where(
+                    Job.assigned_worker_id == worker_id,
+                    Job.status == JobStatus.RUNNING,
+                )
+                .order_by(desc(Job.started_at), desc(Job.updated_at))
+                .limit(1)
+            )
+            if job is None:
+                return {}
+            return {
+                "id": job.id,
+                "requested_execution_backend": job.requested_execution_backend,
+                "actual_execution_backend": job.actual_execution_backend,
+                "progress_stage": job.progress_stage,
+                "progress_percent": job.progress_percent,
+                "progress_updated_at": job.progress_updated_at,
+            }
 
     def _remote_worker_summary(self, worker: Worker, *, detail: bool = False) -> dict[str, object]:
         runtime_payload = worker.runtime_payload or {}

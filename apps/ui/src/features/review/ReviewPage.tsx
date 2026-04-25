@@ -1,10 +1,10 @@
-import { Link, useParams } from "react-router-dom";
-import { useMemo, useState } from "react";
+import type { ReactNode } from "react";
+import { Link, useNavigate, useParams } from "react-router-dom";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { EmptyState } from "../../components/EmptyState";
 import { ErrorPanel } from "../../components/ErrorPanel";
-import { KeyValueList } from "../../components/KeyValueList";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
 import { PayloadViewer } from "../../components/PayloadViewer";
@@ -21,11 +21,22 @@ import {
   useReviewItemDetailQuery,
   useReviewItemsQuery,
 } from "../../lib/api/hooks";
+import type { ReviewItemDetail, ReviewReason } from "../../lib/types/api";
 import { formatDateTime, formatRelativeBoolean } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
+type ReviewDecisionAction =
+  | "approve"
+  | "reject"
+  | "hold"
+  | "mark_protected"
+  | "clear_protected"
+  | "replan"
+  | "create_job";
+
 export function ReviewPage() {
   const { itemId } = useParams();
+  const navigate = useNavigate();
   const [status, setStatus] = useState("open");
   const [protectedOnly, setProtectedOnly] = useState("");
   const [is4k, setIs4k] = useState("");
@@ -85,14 +96,7 @@ export function ReviewPage() {
   const metrics = summariseReviewItems(items);
 
   async function handleDecision(
-    action:
-      | "approve"
-      | "reject"
-      | "hold"
-      | "mark_protected"
-      | "clear_protected"
-      | "replan"
-      | "create_job",
+    action: ReviewDecisionAction,
   ) {
     if (!detail) {
       return;
@@ -127,6 +131,11 @@ export function ReviewPage() {
     setDecisionNote("");
   }
 
+  function closeDrawer() {
+    setDecisionNote("");
+    navigate(APP_ROUTES.review);
+  }
+
   return (
     <div className="page-stack">
       <PageHeader
@@ -139,33 +148,29 @@ export function ReviewPage() {
         <ErrorPanel title="Review action failed" message={mutationError.message} />
       ) : null}
 
-      <section className="metric-grid">
-        <div className="metric-panel">
-          <span className="metric-label">Items in view</span>
-          <strong>{metrics.total}</strong>
-          <span className="metric-subtle">Current review queue</span>
+      <section className="metrics-card-grid" aria-label="Review metrics">
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Items in view</span>
+          <strong className="metrics-card-value">{metrics.total}</strong>
         </div>
-        <div className="metric-panel">
-          <span className="metric-label">Open</span>
-          <strong>{metrics.open}</strong>
-          <span className="metric-subtle">Awaiting a decision</span>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Open</span>
+          <strong className="metrics-card-value">{metrics.open}</strong>
         </div>
-        <div className="metric-panel">
-          <span className="metric-label">Protected</span>
-          <strong>{metrics.protected}</strong>
-          <span className="metric-subtle">Planner or operator protected</span>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Protected</span>
+          <strong className="metrics-card-value">{metrics.protected}</strong>
         </div>
-        <div className="metric-panel">
-          <span className="metric-label">Held</span>
-          <strong>{metrics.held}</strong>
-          <span className="metric-subtle">Paused for later follow-up</span>
+        <div className="metrics-card-item">
+          <span className="metrics-card-label">Held</span>
+          <strong className="metrics-card-value">{metrics.held}</strong>
         </div>
       </section>
 
-      <section className={`jobs-review-layout${items.length === 0 || (!detail && !(itemId && detailQuery.isLoading)) ? " jobs-review-layout-single" : ""}`}>
+      <section className="review-workspace">
         <div className="list-detail-stack">
           <SectionCard title="Filters" subtitle="Focus on the items that need a decision now.">
-            <div className="filter-grid filter-grid-tight">
+            <div className="review-filter-row">
               <label className="field">
                 <span>Review status</span>
                 <select value={status} onChange={(event) => setStatus(event.target.value)}>
@@ -195,6 +200,7 @@ export function ReviewPage() {
               </label>
               <label className="field checkbox-field">
                 <input
+                  className="review-filter-checkbox h-4 w-4 rounded border-gray-300 text-indigo-600 focus:ring-indigo-600"
                   type="checkbox"
                   checked={recentFailuresOnly}
                   onChange={(event) => setRecentFailuresOnly(event.target.checked)}
@@ -211,20 +217,23 @@ export function ReviewPage() {
                 message="Nothing needs a manual decision right now."
               />
             ) : (
-              <div className="record-list" role="list" aria-label="Review items list">
+              <div className="record-list review-inbox-list" role="list" aria-label="Review items list">
                 {items.map((item) => {
                   const isActive = item.id === itemId;
                   return (
                     <Link
                       key={item.id}
-                      className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
+                      className={`review-inbox-item${isActive ? " review-inbox-item-active" : ""}`}
                       to={APP_ROUTES.reviewDetail(item.id)}
                     >
-                      <div className="record-list-main">
-                        <div className="record-list-heading">
+                      <div className="review-inbox-main">
+                        <div className="review-inbox-heading">
                           <strong>{item.tracked_file.source_filename}</strong>
-                          <span>{item.tracked_file.source_directory}</span>
+                          <span title={item.source_path}>{item.source_path}</span>
                         </div>
+                        <p className="review-inbox-reason">
+                          {summariseReasons(item.reasons, item.warnings)}
+                        </p>
                         <div className="badge-row">
                           <StatusBadge value={item.review_status} />
                           <StatusBadge value={item.confidence ?? "unknown"} />
@@ -232,12 +241,9 @@ export function ReviewPage() {
                           {item.protected_state.is_protected ? <StatusBadge value="protected" /> : null}
                         </div>
                       </div>
-                      <div className="record-list-meta">
+                      <div className="review-inbox-meta">
                         <span className="record-list-kicker">{reviewPriorityLabel(item)}</span>
                         <span>{formatDateTime(item.latest_job_at ?? item.latest_plan_at ?? item.latest_probe_at)}</span>
-                        <span className="record-list-emphasis">
-                          {summariseReasons(item.reasons, item.warnings)}
-                        </span>
                       </div>
                     </Link>
                   );
@@ -246,48 +252,73 @@ export function ReviewPage() {
             )}
           </SectionCard>
         </div>
+      </section>
 
-        {itemId && detailQuery.isLoading ? (
-          <SectionCard title="Selected item" subtitle="Loading the latest decision context.">
-            <LoadingBlock label="Loading review detail" />
-          </SectionCard>
-        ) : detail ? (
-          <SectionCard
-            title="Selected item"
-            subtitle={detail.tracked_file.source_filename}
-          >
-            <div className="card-stack">
-              <section className="review-reasons-grid">
-                <div className="review-alert-panel review-alert-danger">
-                  <span className="metric-label">Needs review because</span>
-                  {detail.reasons.length > 0 ? (
-                    <ul className="plain-list">
-                      {detail.reasons.map((reason) => (
-                        <li key={`reason-${reason.code}`}>
-                          <strong>{reason.message}</strong>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="muted-copy">No explicit review reasons are attached.</p>
-                  )}
-                </div>
-                <div className="review-alert-panel review-alert-warning">
-                  <span className="metric-label">Warnings</span>
-                  {detail.warnings.length > 0 ? (
-                    <ul className="plain-list">
-                      {detail.warnings.map((warning) => (
-                        <li key={`warning-${warning.code}`}>
-                          <strong>{warning.message}</strong>
-                        </li>
-                      ))}
-                    </ul>
-                  ) : (
-                    <p className="muted-copy">No warnings recorded.</p>
-                  )}
-                </div>
-              </section>
+      {itemId ? (
+        <ReviewDetailDrawer
+          detail={detail}
+          isLoading={detailQuery.isLoading}
+          decisionNote={decisionNote}
+          isActionPending={isActionPending}
+          onClose={closeDrawer}
+          onDecision={(action) => void handleDecision(action)}
+          onDecisionNoteChange={setDecisionNote}
+        />
+      ) : null}
+    </div>
+  );
+}
 
+function ReviewDetailDrawer({
+  detail,
+  isLoading,
+  decisionNote,
+  isActionPending,
+  onClose,
+  onDecision,
+  onDecisionNoteChange,
+}: {
+  detail: ReviewItemDetail | undefined;
+  isLoading: boolean;
+  decisionNote: string;
+  isActionPending: boolean;
+  onClose: () => void;
+  onDecision: (action: ReviewDecisionAction) => void;
+  onDecisionNoteChange: (value: string) => void;
+}) {
+  const closeButtonRef = useRef<HTMLButtonElement>(null);
+
+  useEffect(() => {
+    closeButtonRef.current?.focus();
+  }, [detail?.id]);
+
+  useEffect(() => {
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key === "Escape") {
+        onClose();
+      }
+    }
+
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, [onClose]);
+
+  const title = detail?.tracked_file.source_filename ?? "Selected item";
+
+  return (
+    <>
+      <button
+        className="review-drawer-backdrop"
+        type="button"
+        aria-label="Close review detail"
+        onClick={onClose}
+      />
+      <aside className="review-drawer-panel" role="dialog" aria-modal="true" aria-labelledby="review-drawer-title">
+        <header className="review-drawer-header">
+          <div className="review-drawer-title">
+            <span className="metric-label">Selected item</span>
+            <h2 id="review-drawer-title">{title}</h2>
+            {detail ? (
               <div className="badge-row">
                 <StatusBadge value={detail.review_status} />
                 <StatusBadge value={detail.confidence ?? "unknown"} />
@@ -295,116 +326,83 @@ export function ReviewPage() {
                 {detail.protected_state.is_protected ? <StatusBadge value="protected" /> : null}
                 {detail.latest_job ? <StatusBadge value={detail.latest_job.status} /> : null}
               </div>
+            ) : null}
+          </div>
+          <button
+            ref={closeButtonRef}
+            className="review-drawer-close"
+            type="button"
+            aria-label="Close selected review item"
+            onClick={onClose}
+          >
+            X
+          </button>
+        </header>
 
-              <KeyValueList
-                items={[
-                  { label: "Source path", value: detail.source_path },
-                  { label: "Protected", value: formatRelativeBoolean(detail.protected_state.is_protected) },
-                  { label: "Protected source", value: formatProtectedSource(detail.protected_state.source) },
-                  {
-                    label: "Latest decision",
-                    value: detail.latest_decision
-                      ? `${detail.latest_decision.decision_type} by ${detail.latest_decision.created_by_username}`
-                      : "No decision recorded",
-                  },
-                  {
-                    label: "Latest activity",
-                    value: formatDateTime(detail.latest_job_at ?? detail.latest_plan_at ?? detail.latest_probe_at),
-                  },
-                ]}
-              />
-
-              <section className="decision-panel">
-                <div className="decision-panel-copy">
-                  <span className="metric-label">Decision</span>
-                  <strong>Choose the next step</strong>
-                  <span className="metric-subtle">
-                    Approval, rejection, protection, replan, and job creation stay on the same backend actions.
-                  </span>
-                </div>
-                <label className="field">
-                  <span>Operator note</span>
-                  <textarea
-                    rows={3}
-                    value={decisionNote}
-                    onChange={(event) => setDecisionNote(event.target.value)}
-                    placeholder="Add context for the next operator or audit trail"
-                  />
-                </label>
-                <div className="decision-button-grid">
-                  <button
-                    className="button button-primary"
-                    type="button"
-                    onClick={() => void handleDecision("approve")}
-                    disabled={isActionPending || !detail.requires_review}
-                  >
-                    Approve
-                  </button>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void handleDecision("hold")}
-                    disabled={isActionPending}
-                  >
-                    Hold
-                  </button>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void handleDecision("reject")}
-                    disabled={isActionPending}
-                  >
-                    Reject
-                  </button>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void handleDecision("mark_protected")}
-                    disabled={isActionPending || detail.protected_state.operator_protected}
-                  >
-                    Mark protected
-                  </button>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void handleDecision("clear_protected")}
-                    disabled={isActionPending || !detail.protected_state.operator_protected}
-                  >
-                    Clear protected
-                  </button>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void handleDecision("replan")}
-                    disabled={isActionPending}
-                  >
-                    Replan
-                  </button>
-                  <button
-                    className="button button-secondary"
-                    type="button"
-                    onClick={() => void handleDecision("create_job")}
-                    disabled={isActionPending || detail.review_status !== "approved"}
-                  >
-                    Create job
-                  </button>
-                </div>
+        <div className="review-drawer-body">
+          {isLoading ? (
+            <LoadingBlock label="Loading review detail" />
+          ) : detail ? (
+            <div className="card-stack">
+              <section className="review-alert-stack" aria-label="Review alerts">
+                <ReviewAlert
+                  tone="danger"
+                  title="Needs review because"
+                  items={detail.reasons}
+                  emptyMessage="No explicit review reasons are attached."
+                />
+                <ReviewAlert
+                  tone="warning"
+                  title="Warnings"
+                  items={detail.warnings}
+                  emptyMessage="No warnings recorded."
+                />
               </section>
+
+              <section className="review-metadata-grid" aria-label="Review metadata">
+                <ReviewMetadataItem
+                  label="Source path"
+                  value={<span className="truncate-text" title={detail.source_path}>{detail.source_path}</span>}
+                  className="review-metadata-item-wide review-source-path"
+                />
+                <ReviewMetadataItem label="Protected" value={formatRelativeBoolean(detail.protected_state.is_protected)} />
+                <ReviewMetadataItem label="Protected source" value={formatProtectedSource(detail.protected_state.source)} />
+                <ReviewMetadataItem
+                  label="Latest decision"
+                  value={
+                    detail.latest_decision
+                      ? `${detail.latest_decision.decision_type} by ${detail.latest_decision.created_by_username}`
+                      : "No decision recorded"
+                  }
+                />
+                <ReviewMetadataItem
+                  label="Latest activity"
+                  value={formatDateTime(detail.latest_job_at ?? detail.latest_plan_at ?? detail.latest_probe_at)}
+                />
+              </section>
+
+              <label className="field review-operator-note">
+                <span>Operator note</span>
+                <textarea
+                  rows={2}
+                  value={decisionNote}
+                  onChange={(event) => onDecisionNoteChange(event.target.value)}
+                  placeholder="Add context for the next operator or audit trail"
+                />
+              </label>
 
               <CollapsibleSection
                 title="Show protection details"
                 subtitle="Planner and operator protection are kept separate."
               >
-                <KeyValueList
-                  items={[
-                    { label: "Planner protected", value: formatRelativeBoolean(detail.protected_state.planner_protected) },
-                    { label: "Operator protected", value: formatRelativeBoolean(detail.protected_state.operator_protected) },
-                    { label: "Reason codes", value: detail.protected_state.reason_codes.join(", ") || "None" },
-                    { label: "Operator note", value: detail.protected_state.note ?? "None" },
-                    { label: "Updated by", value: detail.protected_state.updated_by_username ?? "Not recorded" },
-                    { label: "Updated at", value: formatDateTime(detail.protected_state.updated_at) },
-                  ]}
-                />
+                <section className="review-metadata-grid" aria-label="Protection details">
+                  <ReviewMetadataItem label="Planner protected" value={formatRelativeBoolean(detail.protected_state.planner_protected)} />
+                  <ReviewMetadataItem label="Operator protected" value={formatRelativeBoolean(detail.protected_state.operator_protected)} />
+                  <ReviewMetadataItem label="Reason codes" value={detail.protected_state.reason_codes.join(", ") || "None"} />
+                  <ReviewMetadataItem label="Operator note" value={detail.protected_state.note ?? "None"} />
+                  <ReviewMetadataItem label="Updated by" value={detail.protected_state.updated_by_username ?? "Not recorded"} />
+                  <ReviewMetadataItem label="Updated at" value={formatDateTime(detail.protected_state.updated_at)} />
+                </section>
               </CollapsibleSection>
 
               {detail.latest_plan ? (
@@ -412,14 +410,12 @@ export function ReviewPage() {
                   title="Show latest plan"
                   subtitle="Planner action, confidence, and profile details."
                 >
-                  <KeyValueList
-                    items={[
-                      { label: "Action", value: <StatusBadge value={detail.latest_plan.action} /> },
-                      { label: "Confidence", value: <StatusBadge value={detail.latest_plan.confidence} /> },
-                      { label: "Policy version", value: detail.latest_plan.policy_version },
-                      { label: "Profile", value: detail.latest_plan.profile_name ?? "Default policy" },
-                    ]}
-                  />
+                  <section className="review-metadata-grid" aria-label="Latest plan">
+                    <ReviewMetadataItem label="Action" value={<StatusBadge value={detail.latest_plan.action} />} />
+                    <ReviewMetadataItem label="Confidence" value={<StatusBadge value={detail.latest_plan.confidence} />} />
+                    <ReviewMetadataItem label="Policy version" value={detail.latest_plan.policy_version} />
+                    <ReviewMetadataItem label="Profile" value={detail.latest_plan.profile_name ?? "Default policy"} />
+                  </section>
                 </CollapsibleSection>
               ) : null}
 
@@ -429,14 +425,12 @@ export function ReviewPage() {
                   subtitle="Latest execution status and verification outcome."
                 >
                   <div className="card-stack">
-                    <KeyValueList
-                      items={[
-                        { label: "Status", value: <StatusBadge value={detail.latest_job.status} /> },
-                        { label: "Verification", value: <StatusBadge value={detail.latest_job.verification_status} /> },
-                        { label: "Replacement", value: <StatusBadge value={detail.latest_job.replacement_status} /> },
-                        { label: "Failure", value: detail.latest_job.failure_message ?? "None" },
-                      ]}
-                    />
+                    <section className="review-metadata-grid" aria-label="Latest job details">
+                      <ReviewMetadataItem label="Status" value={<StatusBadge value={detail.latest_job.status} />} />
+                      <ReviewMetadataItem label="Verification" value={<StatusBadge value={detail.latest_job.verification_status} />} />
+                      <ReviewMetadataItem label="Replacement" value={<StatusBadge value={detail.latest_job.replacement_status} />} />
+                      <ReviewMetadataItem label="Failure" value={detail.latest_job.failure_message ?? "None"} />
+                    </section>
                     <PayloadViewer
                       payload={{
                         latest_plan: detail.latest_plan,
@@ -448,9 +442,112 @@ export function ReviewPage() {
                 </CollapsibleSection>
               ) : null}
             </div>
-          </SectionCard>
+          ) : (
+            <EmptyState title="No item selected" message="Choose a review item to inspect its decision context." />
+          )}
+        </div>
+
+        {detail ? (
+          <footer className="review-drawer-footer">
+            <div className="review-action-bar">
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("hold")}
+                disabled={isActionPending}
+              >
+                Hold
+              </button>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("reject")}
+                disabled={isActionPending}
+              >
+                Reject
+              </button>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("mark_protected")}
+                disabled={isActionPending || detail.protected_state.operator_protected}
+              >
+                Mark protected
+              </button>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("clear_protected")}
+                disabled={isActionPending || !detail.protected_state.operator_protected}
+              >
+                Clear protected
+              </button>
+              <button
+                className="button button-primary review-primary-action"
+                type="button"
+                onClick={() => onDecision("approve")}
+                disabled={isActionPending || !detail.requires_review}
+              >
+                Approve
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => onDecision("replan")}
+                disabled={isActionPending}
+              >
+                Replan
+              </button>
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={() => onDecision("create_job")}
+                disabled={isActionPending || detail.review_status !== "approved"}
+              >
+                Create job
+              </button>
+            </div>
+          </footer>
         ) : null}
-      </section>
+      </aside>
+    </>
+  );
+}
+
+function ReviewAlert({
+  tone,
+  title,
+  items,
+  emptyMessage,
+}: {
+  tone: "danger" | "warning";
+  title: string;
+  items: ReviewReason[];
+  emptyMessage: string;
+}) {
+  return (
+    <div className={`review-callout review-callout-${tone}`}>
+      <span className="metric-label">{title}</span>
+      {items.length > 0 ? (
+        <ul className="plain-list">
+          {items.map((item) => (
+            <li key={`${tone}-${item.code}`}>
+              <span>{item.message}</span>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted-copy">{emptyMessage}</p>
+      )}
+    </div>
+  );
+}
+
+function ReviewMetadataItem({ label, value, className }: { label: string; value: ReactNode; className?: string }) {
+  return (
+    <div className={`review-metadata-item${className ? ` ${className}` : ""}`}>
+      <span>{label}</span>
+      <strong>{value}</strong>
     </div>
   );
 }

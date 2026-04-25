@@ -4,7 +4,7 @@ from datetime import datetime
 from pathlib import Path
 
 from sqlalchemy import Select, desc, or_, select
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, aliased
 
 from encodr_core.execution import ExecutionResult
 from encodr_core.media.models import MediaFile
@@ -93,6 +93,8 @@ class TrackedFileRepository:
         return list(self.session.scalars(query))
 
     def list_review_candidates(self) -> list[TrackedFile]:
+        failed_job = aliased(Job)
+        newer_job = aliased(Job)
         manual_review_plan_exists = (
             select(PlanSnapshot.id)
             .where(
@@ -101,11 +103,38 @@ class TrackedFileRepository:
             )
             .exists()
         )
-        review_job_exists = (
+        manual_review_job_exists = (
             select(Job.id)
             .where(
                 Job.tracked_file_id == TrackedFile.id,
-                Job.status.in_([JobStatus.MANUAL_REVIEW, JobStatus.FAILED]),
+                Job.status == JobStatus.MANUAL_REVIEW,
+            )
+            .exists()
+        )
+        newer_job_exists = (
+            select(newer_job.id)
+            .where(
+                newer_job.tracked_file_id == TrackedFile.id,
+                newer_job.created_at > failed_job.created_at,
+                newer_job.status.in_(
+                    [
+                        JobStatus.PENDING,
+                        JobStatus.SCHEDULED,
+                        JobStatus.RUNNING,
+                        JobStatus.COMPLETED,
+                        JobStatus.SKIPPED,
+                        JobStatus.MANUAL_REVIEW,
+                    ]
+                ),
+            )
+            .exists()
+        )
+        review_job_exists = (
+            select(failed_job.id)
+            .where(
+                failed_job.tracked_file_id == TrackedFile.id,
+                failed_job.status == JobStatus.FAILED,
+                ~newer_job_exists,
             )
             .exists()
         )
@@ -118,6 +147,7 @@ class TrackedFileRepository:
                     TrackedFile.is_protected.is_(True),
                     TrackedFile.operator_protected.is_(True),
                     manual_review_plan_exists,
+                    manual_review_job_exists,
                     review_job_exists,
                 )
             )

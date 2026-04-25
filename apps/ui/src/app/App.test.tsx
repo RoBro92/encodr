@@ -40,7 +40,9 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/" });
 
-    expect(await screen.findByRole("heading", { name: /sign in to the operator console/i })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/username/i)).toBeInTheDocument();
+    expect(screen.getByLabelText(/^password$/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /sign in/i })).toBeInTheDocument();
     expect(screen.getByText(new RegExp(`encodr v${CURRENT_VERSION}`, "i"))).toBeInTheDocument();
   });
 
@@ -95,13 +97,14 @@ describe("Encodr UI shell", () => {
       },
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
     ]);
 
     renderApp({ route: "/login" });
 
-    expect(await screen.findByRole("heading", { name: /set up the first admin user/i })).toBeInTheDocument();
+    expect(await screen.findByLabelText(/confirm password/i)).toBeInTheDocument();
     await userEvent.clear(screen.getByLabelText(/username/i));
     await userEvent.type(screen.getByLabelText(/username/i), "admin");
     await userEvent.type(screen.getByLabelText(/^password$/i), "super-secure-password");
@@ -123,7 +126,7 @@ describe("Encodr UI shell", () => {
 
     renderApp({ route: "/login" });
 
-    expect(await screen.findByRole("heading", { name: /unable to load sign-in state/i })).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/unable to load first-run status/i);
     expect(screen.getByRole("alert")).toHaveTextContent(/bootstrap status unavailable/i);
   });
 
@@ -131,6 +134,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
     ]);
@@ -143,9 +147,14 @@ describe("Encodr UI shell", () => {
       .getAllByRole("link")
       .map((item) => item.textContent?.trim());
     expect(navLabels).toEqual(["Dashboard", "Library", "Jobs", "Review", "Workers", "System", "Settings"]);
-    expect(screen.getByRole("link", { name: /open library/i })).toBeInTheDocument();
-    expect(screen.getAllByRole("link", { name: /open reports/i }).length).toBeGreaterThan(0);
+    expect(screen.getByText(/files processed/i)).toBeInTheDocument();
+    expect(screen.getByText(/storage saved/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /transcoding outcomes/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /active transcoding file/i })).toBeInTheDocument();
+    expect(screen.getByText(/example film \(2024\)\.mkv/i)).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /open jobs/i })).toBeInTheDocument();
     expect(screen.queryByRole("link", { name: /^reports$/i, hidden: false })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /start here/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/probe source path/i)).not.toBeInTheDocument();
   });
 
@@ -153,6 +162,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       {
         method: "GET",
         path: "/api/system/runtime",
@@ -173,6 +183,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
       {
@@ -208,6 +219,7 @@ describe("Encodr UI shell", () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
       {
@@ -328,10 +340,10 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/config", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
-    expect(screen.getByText(/^movies$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^movies 4k$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^tv$/i)).toBeInTheDocument();
-    expect(screen.getByText(/^tv 4k$/i)).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-movies")).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-movies_4k")).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-tv")).toBeInTheDocument();
+    expect(screen.getByTestId("processing-rules-tab-tv_4k")).toBeInTheDocument();
     expect(screen.getByLabelText(/^Movies max video reduction$/i)).toBeInTheDocument();
 
     await userEvent.selectOptions(screen.getByLabelText(/^Movies target video codec$/i), "h264");
@@ -387,7 +399,9 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/config", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByTestId("processing-rules-tab-tv"));
     await userEvent.selectOptions(screen.getByLabelText(/^TV target video codec$/i), "av1");
+    await userEvent.click(screen.getByTestId("processing-rules-tab-movies"));
     await userEvent.selectOptions(screen.getByLabelText(/^Movies target video codec$/i), "h264");
     await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
 
@@ -413,16 +427,31 @@ describe("Encodr UI shell", () => {
 
   it("shows the simplified settings structure and update status", async () => {
     mockFetchRoutes([
-      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
-      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      {
+        method: "GET",
+        path: "/api/system/runtime",
+        body: {
+          ...runtimeStatus(),
+          storage_setup_incomplete: true,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/system/storage",
+        body: {
+          ...storageStatus(),
+          warnings: ["Media path is empty. If you expected a mounted library, check the host or LXC bind mount."],
+        },
+      },
       {
         method: "GET",
         path: "/api/system/update",
         body: {
           ...updateStatus(),
           latest_version: nextPatchVersion(CURRENT_VERSION),
-          update_available: true,
-          release_summary: "Runtime detection and update guidance improvements.",
+          update_available: false,
+          checked_at: "2026-04-21T08:00:00Z",
+          release_summary: "## Runtime detection 2026-04-20\n\n- Update guidance improvements.\n- Safer `encodr update --apply` output.",
           breaking_changes_summary: "Restart after update if newly passed-through devices are not visible.",
         },
       },
@@ -438,9 +467,32 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("heading", { name: /^storage$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /^updates$/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /processing rules/i })).toBeInTheDocument();
-    expect(screen.getByText(/worker backends are configured per worker on the workers page/i)).toBeInTheDocument();
+    expect(screen.queryByText(/storage needs attention/i)).not.toBeInTheDocument();
+    const settingsWarning = screen.getByRole("alert");
+    expect(settingsWarning).toHaveTextContent(/media path is empty/i);
+    const storageCard = screen.getByRole("heading", { name: /^storage$/i }).closest(".section-card");
+    expect(storageCard).not.toHaveTextContent(/media path is empty/i);
+    expect(screen.queryByText(/worker backends are configured per worker on the workers page/i)).not.toBeInTheDocument();
+    expect(screen.getAllByText(/runtime health/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/scratch path/i).length).toBeGreaterThan(0);
     expect(screen.getAllByText(/encodr update --apply/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/update guidance improvements/i)).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view changelog/i }));
+    expect(screen.getByRole("dialog", { name: /release notes/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /release notes/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /close release notes/i })).not.toBeInTheDocument();
+    expect(screen.getByText(/checked 21-04-2026/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /runtime detection 20-04-2026/i })).toBeInTheDocument();
+    expect(screen.getByText(/update guidance improvements/i)).toBeInTheDocument();
     expect(screen.getAllByText(/breaking changes/i).length).toBeGreaterThan(0);
+
+    await userEvent.keyboard("{Escape}");
+    expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view changelog/i }));
+    await userEvent.click(screen.getByRole("presentation"));
+    expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
   });
 
   it("renders the redesigned library workspace and lets tabs switch cleanly", async () => {
@@ -482,14 +534,21 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    expect(screen.getByText(/movies root/i)).toBeInTheDocument();
-    expect(screen.getByText(/tv root/i)).toBeInTheDocument();
-    expect(screen.getByRole("heading", { name: /current folder/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /library automation/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /^movies$/i })).toHaveAttribute("aria-selected", "true");
+    expect(screen.getByRole("tab", { name: /^tv$/i })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /\+ add watcher/i })).toBeInTheDocument();
+    expect(screen.getByRole("textbox", { name: /movies root directory/i })).toHaveValue("/media/Movies");
+    expect(screen.getByRole("heading", { name: /active watchers/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /processing dashboard/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /current folder/i })).not.toBeInTheDocument();
     expect(screen.queryByRole("tab", { name: /dry run/i })).not.toBeInTheDocument();
-    expect(screen.getByText(/choose another folder/i)).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /advanced options/i })).toBeInTheDocument();
 
-    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
 
+    expect(await screen.findByRole("button", { name: /choose another folder/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /^movies/i }));
     expect(await screen.findByRole("tab", { name: /^browse$/i })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: /^dry run$/i }));
     expect(screen.getByText(/no dry run yet/i)).toBeInTheDocument();
@@ -617,13 +676,10 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^movies/i }));
 
-    const selectedFolderCard = screen.getByRole("heading", { name: /current folder/i }).closest(".section-card") as HTMLElement | null;
-    expect(selectedFolderCard).not.toBeNull();
-    if (selectedFolderCard) {
-      expect((await within(selectedFolderCard).findAllByText("/media/Movies")).length).toBeGreaterThan(0);
-    }
+    expect((await screen.findAllByText("/media/Movies")).length).toBeGreaterThan(0);
     await userEvent.click(await screen.findByRole("checkbox", { name: /film one/i }));
     expect(screen.getAllByText(/1 file selected/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^dry run$/i })).toBeInTheDocument();
@@ -732,7 +788,7 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
     expect(screen.getAllByText("/ssd/downloads").length).toBeGreaterThan(0);
     expect(screen.getByText(/saved result may be stale/i)).toBeInTheDocument();
-    expect(screen.getByText(/ssd ingest/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/ssd ingest/i).length).toBeGreaterThan(0);
     expect(screen.getByText(/mon,tue 23:00-07:30/i)).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /reopen/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /edit/i })).toBeInTheDocument();
@@ -806,7 +862,8 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/files", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
-    await userEvent.click(screen.getAllByRole("button", { name: /^open$/i })[0]);
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^movies/i }));
     await userEvent.click(await screen.findByRole("button", { name: /create jobs/i }));
 
     await waitFor(() => {
@@ -1238,6 +1295,7 @@ describe("Encodr UI shell", () => {
   });
 
   it("moves system warnings to the top when runtime or storage is degraded", async () => {
+    const mediaPathWarning = "Media path is empty. If you expected a mounted library, check the host or LXC bind mount.";
     mockFetchRoutes([
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
       {
@@ -1245,7 +1303,7 @@ describe("Encodr UI shell", () => {
         path: "/api/system/runtime",
         body: {
           ...runtimeStatus(),
-          warnings: ["Database lag detected"],
+          warnings: ["Database lag detected", mediaPathWarning],
         },
       },
       {
@@ -1253,7 +1311,7 @@ describe("Encodr UI shell", () => {
         path: "/api/system/storage",
         body: {
           ...storageStatus(),
-          warnings: ["Scratch workspace is nearly full"],
+          warnings: ["Scratch workspace is nearly full", mediaPathWarning],
         },
       },
     ]);
@@ -1261,11 +1319,52 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/system", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
-    const warningsHeading = screen.getByRole("heading", { name: /^warnings$/i });
-    expect(warningsHeading).toBeInTheDocument();
-    const warningCard = warningsHeading.closest(".section-card");
-    expect(warningCard).toHaveTextContent(/database lag detected/i);
-    expect(warningCard).toHaveTextContent(/scratch workspace is nearly full/i);
+    const alert = screen.getByRole("alert");
+    expect(alert).toHaveTextContent(/database lag detected/i);
+    expect(alert).toHaveTextContent(/media path is empty/i);
+    expect(alert).toHaveTextContent(/encodr mount-setup --validate-only/i);
+    expect(alert).toHaveTextContent(/host or lxc bind mount/i);
+    expect(alert).toHaveTextContent(/scratch workspace is nearly full/i);
+    expect(screen.getAllByText(/media path is empty/i)).toHaveLength(1);
+  });
+
+  it("keeps worker-specific backend diagnostics off the system page", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: "/api/system/runtime",
+        body: {
+          ...runtimeStatus(),
+          storage_setup_incomplete: true,
+        },
+      },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/system", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^system$/i })).toBeInTheDocument();
+    const main = screen.getByRole("main");
+    expect(screen.queryByText(/storage needs attention/i)).not.toBeInTheDocument();
+    expect(within(main).queryByRole("heading", { name: /^worker$/i })).not.toBeInTheDocument();
+    expect(within(main).queryByText(/^pending jobs$/i)).not.toBeInTheDocument();
+    expect(within(main).queryByText(/^queue$/i)).not.toBeInTheDocument();
+    expect(within(main).queryByRole("button", { name: /run worker once/i })).not.toBeInTheDocument();
+    expect(within(main).queryByRole("button", { name: /run self-test/i })).not.toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /^runtime$/i })).toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /^storage$/i })).toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /service health/i })).toBeInTheDocument();
+    expect(within(main).getByRole("heading", { name: /compute health/i })).toBeInTheDocument();
+    expect(within(main).queryByText(/scratch path/i)).not.toBeInTheDocument();
+    expect(within(main).queryByText(/data path/i)).not.toBeInTheDocument();
+    expect(within(main).queryByText(/^unavailable$/i)).not.toBeInTheDocument();
+    expect(within(main).getByRole("progressbar", { name: /scratch workspace storage usage/i })).toHaveAttribute("aria-valuenow", "50");
+    expect(within(main).getByRole("progressbar", { name: /application data storage usage/i })).toHaveAttribute("aria-valuenow", "50");
+    expect(within(main).getByRole("progressbar", { name: /media library storage usage/i })).toHaveAttribute("aria-valuenow", "50");
+    expect(screen.queryByRole("heading", { name: /execution backends/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /runtime devices/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/current execution path/i)).not.toBeInTheDocument();
   });
 
   it("marks a remote worker without a heartbeat as not configured", async () => {
@@ -1370,6 +1469,68 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("heading", { name: /recent jobs/i })).toBeInTheDocument();
     expect(screen.getByText(/previous film \(2024\)\.mkv/i)).toBeInTheDocument();
   });
+
+  it("shows only the selected primary backend diagnostics on worker detail", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: {
+          ...workerInventory(),
+          preferred_backend: "prefer_nvidia_gpu",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [{ ...workerInventory(), preferred_backend: "prefer_nvidia_gpu" }],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByText(/selected backend diagnostic/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/no nvidia runtime device is visible/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/primary backend failed\. falling back to cpu execution/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/cpu fallback active/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/backend degraded/i)).toBeInTheDocument();
+    expect(screen.getByText(/primary backend failed \(reason: no nvidia runtime device is visible to the runtime\)\. worker is safely falling back to cpu execution\./i)).toBeInTheDocument();
+    expect(screen.queryByText(/intel driver missing/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/amd render device is not visible/i)).not.toBeInTheDocument();
+  });
+
+  it("marks workers failed when the configured backend fails and CPU fallback is disabled", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: {
+          ...workerInventory(),
+          preferred_backend: "prefer_nvidia_gpu",
+          allow_cpu_fallback: false,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [{ ...workerInventory(), preferred_backend: "prefer_nvidia_gpu", allow_cpu_fallback: false }],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getAllByText(/primary backend failed and cpu fallback is disabled/i).length).toBeGreaterThan(0);
+    expect(screen.getByText(/^backend failed$/i)).toBeInTheDocument();
+    expect(screen.getByText(/primary backend failed \(reason: no nvidia runtime device is visible to the runtime\)\. cpu fallback is disabled\. worker cannot execute jobs\./i)).toBeInTheDocument();
+  });
 });
 
 function analyticsDashboard() {
@@ -1378,10 +1539,17 @@ function analyticsDashboard() {
       total_tracked_files: 12,
       protected_file_count: 2,
       four_k_file_count: 3,
+      total_jobs: 8,
+      processed_file_count: 5,
+      average_processed_per_day: 1.7,
+      files_by_lifecycle: [],
+      files_by_compliance: [],
       jobs_by_status: [
         { value: "pending", count: 1 },
+        { value: "running", count: 1 },
         { value: "completed", count: 5 },
         { value: "failed", count: 2 },
+        { value: "manual_review", count: 1 },
       ],
       plans_by_action: [
         { value: "skip", count: 2 },
@@ -1392,6 +1560,11 @@ function analyticsDashboard() {
     storage: {
       total_space_saved_bytes: 1073741824,
       average_space_saved_bytes: 536870912,
+      average_space_saved_per_day_bytes: 268435456,
+      total_original_size_bytes: 2147483648,
+      total_output_size_bytes: 1073741824,
+      measurable_job_count: 2,
+      measurable_completed_job_count: 2,
       savings_by_action: [
         { action: "remux", space_saved_bytes: 268435456, job_count: 1 },
         { action: "transcode", space_saved_bytes: 805306368, job_count: 1 },
@@ -1401,17 +1574,27 @@ function analyticsDashboard() {
       jobs_by_status: [
         { value: "completed", count: 5 },
         { value: "failed", count: 2 },
+        { value: "manual_review", count: 1 },
+        { value: "running", count: 1 },
       ],
-      verification_by_status: [],
-      replacement_by_status: [],
+      verification_outcomes: [],
+      replacement_outcomes: [],
       top_failure_categories: [],
-      container_distribution: [],
+      recent_outcomes: [],
     },
     media: {
+      latest_probe_count: 12,
+      latest_plan_count: 8,
+      total_audio_tracks_removed: 9,
+      total_subtitle_tracks_removed: 14,
       latest_probe_english_audio_count: 5,
       latest_probe_forced_subtitle_count: 2,
-      latest_probe_surround_audio_count: 3,
-      latest_probe_atmos_audio_count: 1,
+      latest_plan_forced_subtitle_intent_count: 2,
+      latest_plan_surround_preservation_intent_count: 3,
+      latest_plan_atmos_preservation_intent_count: 1,
+      action_breakdown_by_resolution: [],
+      container_distribution: [],
+      video_codec_distribution: [],
     },
     recent: {
       recent_completed_jobs: [
@@ -1433,6 +1616,26 @@ function analyticsDashboard() {
         },
       ],
     },
+  };
+}
+
+function runningJobsResponse() {
+  return {
+    items: [
+      {
+        ...jobDetail(),
+        id: "job-running",
+        source_filename: "Example Film (2024).mkv",
+        source_path: "/media/Movies/Example Film (2024).mkv",
+        worker_name: "worker-local",
+        status: "running",
+        progress_stage: "transcoding",
+        progress_percent: 42,
+        updated_at: "2026-04-20T10:10:00Z",
+      },
+    ],
+    limit: 10,
+    offset: 0,
   };
 }
 

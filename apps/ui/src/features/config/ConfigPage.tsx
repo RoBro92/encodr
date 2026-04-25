@@ -1,9 +1,8 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
+import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 
-import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { ErrorPanel } from "../../components/ErrorPanel";
-import { KeyValueList } from "../../components/KeyValueList";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
@@ -78,6 +77,7 @@ export function ConfigPage() {
   const [pickerTarget, setPickerTarget] = useState<PickerTarget>(null);
   const [rulesDraft, setRulesDraft] = useState<ProcessingRules | null>(null);
   const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
+  const [isChangelogModalOpen, setIsChangelogModalOpen] = useState(false);
   const rootsQuery = useLibraryRootsQuery();
   const rulesQuery = useProcessingRulesQuery();
   const runtimeQuery = useRuntimeStatusQuery();
@@ -149,148 +149,141 @@ export function ConfigPage() {
       {updateRulesMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to save processing rules" message={updateRulesMutation.error.message} />
       ) : null}
-      <section className="dashboard-grid">
-        <SectionCard title="Library folders" subtitle="Choose the main folders you want Encodr to use.">
-          <div className="list-stack">
-            <div className="list-row">
-              <div>
-                <strong>Movies root</strong>
-                <p>{roots.movies_root ?? "Not selected yet"}</p>
-              </div>
-              <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("movies")}>
-                Choose folder
-              </button>
-            </div>
-            <div className="list-row">
-              <div>
-                <strong>TV root</strong>
-                <p>{roots.tv_root ?? "Not selected yet"}</p>
-              </div>
-              <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("tv")}>
-                Choose folder
-              </button>
-            </div>
-            <div className="info-strip">
-              <strong>Media root</strong>
-              <span>{roots.media_root}</span>
-            </div>
+      {storage.warnings.length > 0 ? (
+        <div className="settings-page-warning" role="alert">
+          <span className="settings-page-warning-icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" focusable="false">
+              <path d="M12 3 2.5 20.5h19L12 3Z" />
+              <path d="M12 9v5" />
+              <path d="M12 17.5h.01" />
+            </svg>
+          </span>
+          <div>
+            {storage.warnings.map((warning) => (
+              <p key={warning}>{warning}</p>
+            ))}
           </div>
-        </SectionCard>
-
-        <SectionCard title="Storage" subtitle="Check your media and scratch paths before you run jobs.">
-          <div className="card-stack">
-            <div className="info-strip">
-              <strong>Host runtime</strong>
-              <span>
-                Runtime health here only reflects the Encodr host itself: storage, scratch, and core runtime reachability. Worker backends are configured per worker on the Workers page.
-              </span>
-            </div>
-            <KeyValueList
-              items={[
-                { label: "Runtime health", value: <StatusBadge value={runtime.status} /> },
-                { label: "Environment", value: runtime.environment },
-                { label: "Version", value: runtime.version },
-                { label: "Media root", value: storage.standard_media_root },
-                { label: "Media status", value: <StatusBadge value={storage.media_mounts[0]?.status ?? "unknown"} /> },
-                { label: "Scratch status", value: <StatusBadge value={storage.scratch.status} /> },
-                { label: "Scratch path", value: runtime.scratch_dir },
-                { label: "Data path", value: runtime.data_dir },
-              ]}
-            />
-            {storage.warnings.length > 0 ? (
-              <div className="card-stack">
-                {storage.warnings.map((warning) => (
-                  <div key={warning} className="info-strip" role="note">
-                    <span>{warning}</span>
-                  </div>
-                ))}
-              </div>
-            ) : null}
-          </div>
-        </SectionCard>
-
-      </section>
-
-      <section className="dashboard-grid">
-        <SectionCard title="Updates" subtitle="Check what is installed and what to run from the root console.">
-          <div className="card-stack">
-            <div className="info-strip">
-              <StatusBadge value={updateStatus.update_available ? "degraded" : "healthy"} />
-              <span>
-                Current {updateStatus.current_version}
-                {updateStatus.latest_version ? ` • Latest ${updateStatus.latest_version}` : ""}
-              </span>
-            </div>
-            <KeyValueList
-              items={[
-                { label: "Update available", value: updateStatus.update_available ? "Yes" : "No" },
-                { label: "Release", value: updateStatus.release_name ?? "Not reported" },
-                { label: "Check status", value: updateStatus.status },
-                { label: "Command", value: <code>encodr update --apply</code> },
-              ]}
-            />
-            {updateStatus.release_summary ? (
-              <div className="info-strip" role="note">
-                <strong>Summary</strong>
-                <span>{updateStatus.release_summary}</span>
-              </div>
-            ) : null}
-            {updateStatus.breaking_changes_summary ? (
-              <div className="info-strip info-strip-warning" role="note">
-                <strong>Breaking changes</strong>
-                <span>{updateStatus.breaking_changes_summary}</span>
-              </div>
-            ) : null}
-          </div>
-        </SectionCard>
-      </section>
-
-      <SectionCard
-        title="Processing rules"
-        subtitle="Set separate defaults for Movies, TV, and 4K handling without editing raw config files."
-      >
-        <div className="settings-rules-grid settings-rules-grid-four">
-          {RULESET_ORDER.map((rulesetKey) => (
-            <RulesetEditor
-              key={rulesetKey}
-              rulesetKey={rulesetKey}
-              label={RULESET_META[rulesetKey].title}
-              description={RULESET_META[rulesetKey].summary}
-              ruleset={rules[rulesetKey]}
-              onChange={(nextValues) => {
-                setRulesDraft((current) =>
-                  current
-                    ? {
-                        ...current,
-                        [rulesetKey]: { ...current[rulesetKey], current: nextValues, uses_defaults: false },
-                      }
-                    : current,
-                );
-              }}
-              onSave={() => {
-                if (!rulesDraft) {
-                  return;
-                }
-                updateRulesMutation.mutate(buildRulesPayload(rulesetKey, rulesDraft[rulesetKey].current), {
-                  onSuccess: (data) => {
-                    setPersistedRules(data);
-                    setRulesDraft(data);
-                  },
-                });
-              }}
-              onUseDefaults={() => {
-                updateRulesMutation.mutate(buildRulesPayload(rulesetKey, null), {
-                  onSuccess: (data) => {
-                    setPersistedRules(data);
-                    setRulesDraft(data);
-                  },
-                });
-              }}
-              saving={updateRulesMutation.isPending}
-            />
-          ))}
         </div>
-      </SectionCard>
+      ) : null}
+      <section className="settings-overview-grid">
+        <div className="settings-overview-item">
+          <SectionCard title="Library folders" subtitle="Choose the main folders you want Encodr to use.">
+            <div className="settings-folder-list">
+              <div className="settings-folder-row">
+                <div>
+                  <strong>Movies root</strong>
+                  <p>{roots.movies_root ?? "Not selected yet"}</p>
+                </div>
+                <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("movies")}>
+                  Choose folder
+                </button>
+              </div>
+              <div className="settings-folder-row">
+                <div>
+                  <strong>TV root</strong>
+                  <p>{roots.tv_root ?? "Not selected yet"}</p>
+                </div>
+                <button className="button button-primary button-small" type="button" onClick={() => setPickerTarget("tv")}>
+                  Choose folder
+                </button>
+              </div>
+              <div className="settings-folder-row settings-folder-row-readonly">
+                <div>
+                  <strong>Media root</strong>
+                  <p>{roots.media_root}</p>
+                </div>
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+
+        <div className="settings-overview-item settings-overview-item-storage">
+          <SectionCard title="Storage" subtitle="Check your media and scratch paths before you run jobs.">
+            <div className="settings-storage-stack">
+              <div className="settings-data-grid settings-data-grid-storage">
+                <SettingsDataItem label="Runtime health" value={<StatusBadge value={runtime.status} />} />
+                <SettingsDataItem label="Environment" value={runtime.environment} />
+                <SettingsDataItem label="Version" value={runtime.version} />
+                <SettingsDataItem label="Media root" value={storage.standard_media_root} />
+                <SettingsDataItem label="Media status" value={<StatusBadge value={storage.media_mounts[0]?.status ?? "unknown"} />} />
+                <SettingsDataItem label="Scratch path" value={runtime.scratch_dir} />
+                <SettingsDataItem label="Scratch status" value={<StatusBadge value={storage.scratch.status} />} />
+                <SettingsDataItem label="Data path" value={runtime.data_dir} />
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+
+        <div className="settings-overview-item">
+          <SectionCard title="Updates" subtitle="Check what is installed and what to run from the root console.">
+            <div className="settings-updates-stack">
+              <div className="info-strip">
+                <StatusBadge value={updateStatus.update_available ? "degraded" : "healthy"} />
+                <span>
+                  Current {updateStatus.current_version}
+                  {updateStatus.latest_version ? ` • Latest ${updateStatus.latest_version}` : ""}
+                </span>
+              </div>
+              <div className="settings-data-grid settings-data-grid-updates">
+                <SettingsDataItem label="Update available" value={updateStatus.update_available ? "Yes" : "No"} />
+                <SettingsDataItem label="Release" value={updateStatus.release_name ?? "Not reported"} />
+                <SettingsDataItem label="Check status" value={updateStatus.status} />
+                <SettingsDataItem label="Command" value={<code className="settings-command-code">encodr update --apply</code>} />
+              </div>
+              <div className="settings-updates-actions">
+                <button className="button button-secondary button-small" type="button" onClick={() => setIsChangelogModalOpen(true)}>
+                  View changelog
+                </button>
+              </div>
+            </div>
+          </SectionCard>
+        </div>
+      </section>
+
+      {isChangelogModalOpen ? (
+        <ChangelogModal
+          releaseName={updateStatus.release_name}
+          checkedAt={updateStatus.checked_at}
+          releaseSummary={updateStatus.release_summary}
+          breakingChangesSummary={updateStatus.breaking_changes_summary}
+          onClose={() => setIsChangelogModalOpen(false)}
+        />
+      ) : null}
+
+      <ProcessingRulesSection
+        rules={rules}
+        persistedRules={persistedRules ?? rules}
+        onRulesetChange={(rulesetKey, nextValues) => {
+          setRulesDraft((current) =>
+            current
+              ? {
+                  ...current,
+                  [rulesetKey]: { ...current[rulesetKey], current: nextValues, uses_defaults: false },
+                }
+              : current,
+          );
+        }}
+        onRulesetSave={(rulesetKey) => {
+          if (!rulesDraft) {
+            return;
+          }
+          updateRulesMutation.mutate(buildRulesPayload(rulesetKey, rulesDraft[rulesetKey].current), {
+            onSuccess: (data) => {
+              setPersistedRules(data);
+              setRulesDraft(data);
+            },
+          });
+        }}
+        onRulesetUseDefaults={(rulesetKey) => {
+          updateRulesMutation.mutate(buildRulesPayload(rulesetKey, null), {
+            onSuccess: (data) => {
+              setPersistedRules(data);
+              setRulesDraft(data);
+            },
+          });
+        }}
+        saving={updateRulesMutation.isPending}
+      />
 
       <FolderPickerModal
         open={pickerTarget !== null}
@@ -308,6 +301,332 @@ export function ConfigPage() {
         }}
       />
     </div>
+  );
+}
+
+function ChangelogModal({
+  releaseName,
+  checkedAt,
+  releaseSummary,
+  breakingChangesSummary,
+  onClose,
+}: {
+  releaseName: string | null;
+  checkedAt: string | null;
+  releaseSummary: string | null;
+  breakingChangesSummary: string | null;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+  const checkedDate = formatDisplayDate(checkedAt);
+  const markdown = [
+    releaseSummary ?? "No release notes were reported for this update.",
+    breakingChangesSummary ? `\n\n## Breaking changes\n\n${breakingChangesSummary}` : "",
+  ].join("");
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    return () => {
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key !== "Tab" || !dialogRef.current) {
+      return;
+    }
+
+    const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeElement = document.activeElement;
+    if (event.shiftKey && activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div
+      className="modal-backdrop changelog-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+      onKeyDown={handleKeyDown}
+    >
+      <section
+        ref={dialogRef}
+        className="modal-panel changelog-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="changelog-modal-title"
+      >
+        <div className="changelog-modal-header">
+          <div>
+            <p className="section-eyebrow">{releaseName ?? "Encodr changelog"}</p>
+            <h2 id="changelog-modal-title">Release Notes</h2>
+            {checkedDate ? <p className="changelog-modal-date">Checked {checkedDate}</p> : null}
+          </div>
+        </div>
+        <div className="changelog-markdown">
+          <MarkdownContent source={markdown} />
+        </div>
+        <div className="changelog-modal-footer">
+          <button ref={closeButtonRef} className="button button-primary button-small" type="button" onClick={onClose}>
+            Close
+          </button>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function SettingsDataItem({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="settings-data-item">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
+function MarkdownContent({ source }: { source: string }) {
+  const blocks = parseMarkdownBlocks(source);
+  return (
+    <>
+      {blocks.map((block, index) => {
+        const key = `${block.type}-${index}`;
+        switch (block.type) {
+          case "heading":
+            return block.level === 2 ? (
+              <h2 key={key}>{renderInlineMarkdown(block.text)}</h2>
+            ) : block.level === 3 ? (
+              <h3 key={key}>{renderInlineMarkdown(block.text)}</h3>
+            ) : (
+              <h4 key={key}>{renderInlineMarkdown(block.text)}</h4>
+            );
+          case "list":
+            return block.ordered ? (
+              <ol key={key}>
+                {block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInlineMarkdown(item)}</li>)}
+              </ol>
+            ) : (
+              <ul key={key}>
+                {block.items.map((item, itemIndex) => <li key={`${key}-${itemIndex}`}>{renderInlineMarkdown(item)}</li>)}
+              </ul>
+            );
+          default:
+            return <p key={key}>{renderInlineMarkdown(block.text)}</p>;
+        }
+      })}
+    </>
+  );
+}
+
+type MarkdownBlock =
+  | { type: "heading"; level: number; text: string }
+  | { type: "list"; ordered: boolean; items: string[] }
+  | { type: "paragraph"; text: string };
+
+function parseMarkdownBlocks(source: string): MarkdownBlock[] {
+  const blocks: MarkdownBlock[] = [];
+  const lines = source.replace(/\r\n/g, "\n").split("\n");
+  let paragraph: string[] = [];
+  let listItems: string[] = [];
+  let listOrdered = false;
+
+  const flushParagraph = () => {
+    if (paragraph.length > 0) {
+      blocks.push({ type: "paragraph", text: paragraph.join(" ") });
+      paragraph = [];
+    }
+  };
+  const flushList = () => {
+    if (listItems.length > 0) {
+      blocks.push({ type: "list", ordered: listOrdered, items: listItems });
+      listItems = [];
+    }
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (!trimmed) {
+      flushParagraph();
+      flushList();
+      continue;
+    }
+
+    const heading = trimmed.match(/^(#{1,4})\s+(.+)$/);
+    if (heading) {
+      flushParagraph();
+      flushList();
+      blocks.push({ type: "heading", level: Math.max(2, heading[1].length), text: heading[2] });
+      continue;
+    }
+
+    const unorderedList = trimmed.match(/^[-*]\s+(.+)$/);
+    const orderedList = trimmed.match(/^\d+\.\s+(.+)$/);
+    if (unorderedList || orderedList) {
+      flushParagraph();
+      const ordered = Boolean(orderedList);
+      if (listItems.length > 0 && ordered !== listOrdered) {
+        flushList();
+      }
+      listOrdered = ordered;
+      listItems.push((orderedList ?? unorderedList)![1]);
+      continue;
+    }
+
+    flushList();
+    paragraph.push(trimmed);
+  }
+
+  flushParagraph();
+  flushList();
+  return blocks.length > 0 ? blocks : [{ type: "paragraph", text: "No release notes were reported for this update." }];
+}
+
+function renderInlineMarkdown(source: string): ReactNode[] {
+  const nodes: ReactNode[] = [];
+  const pattern = /(`[^`]+`|\*\*[^*]+\*\*|\[[^\]]+\]\(https?:\/\/[^)\s]+\))/g;
+  const formattedSource = formatMarkdownDates(source);
+  let lastIndex = 0;
+  for (const match of formattedSource.matchAll(pattern)) {
+    const matchIndex = match.index ?? 0;
+    if (matchIndex > lastIndex) {
+      nodes.push(formattedSource.slice(lastIndex, matchIndex));
+    }
+    const token = match[0];
+    if (token.startsWith("`")) {
+      nodes.push(<code key={matchIndex}>{token.slice(1, -1)}</code>);
+    } else if (token.startsWith("**")) {
+      nodes.push(<strong key={matchIndex}>{token.slice(2, -2)}</strong>);
+    } else {
+      const link = token.match(/^\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)$/);
+      nodes.push(link ? <a key={matchIndex} href={link[2]} target="_blank" rel="noreferrer">{link[1]}</a> : token);
+    }
+    lastIndex = matchIndex + token.length;
+  }
+  if (lastIndex < formattedSource.length) {
+    nodes.push(formattedSource.slice(lastIndex));
+  }
+  return nodes;
+}
+
+function formatMarkdownDates(value: string) {
+  return value.replace(/\b(\d{4})-(\d{2})-(\d{2})(?:T\d{2}:\d{2}:\d{2}(?:\.\d+)?Z?)?\b/g, (_match, year, month, day) => `${day}-${month}-${year}`);
+}
+
+function formatDisplayDate(value: string | null) {
+  if (!value) {
+    return null;
+  }
+  const match = value.match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) {
+    return value;
+  }
+  return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function ProcessingRulesSection({
+  rules,
+  persistedRules,
+  onRulesetChange,
+  onRulesetSave,
+  onRulesetUseDefaults,
+  saving,
+}: {
+  rules: ProcessingRules;
+  persistedRules: ProcessingRules;
+  onRulesetChange: (rulesetKey: RulesetKey, values: ProcessingRuleValues) => void;
+  onRulesetSave: (rulesetKey: RulesetKey) => void;
+  onRulesetUseDefaults: (rulesetKey: RulesetKey) => void;
+  saving: boolean;
+}) {
+  const [activeTab, setActiveTab] = useState<RulesetKey>("movies");
+  const activeRuleset = rules[activeTab];
+  const activePersistedRuleset = persistedRules[activeTab];
+
+  return (
+    <SectionCard
+      title="Processing rules"
+      subtitle="Set separate defaults for Movies, TV, and 4K handling without editing raw config files."
+    >
+      <div className="settings-rules-shell" data-testid="processing-rules-section">
+        <div className="settings-rules-tabs" role="tablist" aria-label="Processing rulesets">
+          {RULESET_ORDER.map((rulesetKey) => {
+            const selected = activeTab === rulesetKey;
+            const persistedRuleset = persistedRules[rulesetKey];
+            const badgeLabel = persistedRuleset.uses_defaults ? "Default" : "Custom";
+            return (
+              <button
+                key={rulesetKey}
+                id={`processing-rules-tab-${rulesetKey}`}
+                className={`settings-rules-tab ${selected ? "settings-rules-tab-active" : ""}`}
+                type="button"
+                role="tab"
+                aria-selected={selected}
+                aria-controls={`processing-rules-panel-${rulesetKey}`}
+                data-testid={`processing-rules-tab-${rulesetKey}`}
+                onClick={() => setActiveTab(rulesetKey)}
+              >
+                <span>
+                  <strong>{RULESET_META[rulesetKey].title}</strong>
+                  <small>{isFourKRuleset(rulesetKey) ? "4K policy" : "Standard policy"}</small>
+                </span>
+                <span
+                  className={`settings-rules-tab-badge ${
+                    persistedRuleset.uses_defaults ? "settings-rules-tab-badge-default" : "settings-rules-tab-badge-custom"
+                  }`}
+                >
+                  {badgeLabel}
+                </span>
+              </button>
+            );
+          })}
+        </div>
+
+        <div
+          id={`processing-rules-panel-${activeTab}`}
+          role="tabpanel"
+          aria-labelledby={`processing-rules-tab-${activeTab}`}
+          data-testid={`processing-rules-editor-${activeTab}`}
+        >
+          <RulesetEditor
+            rulesetKey={activeTab}
+            label={RULESET_META[activeTab].title}
+            description={RULESET_META[activeTab].summary}
+            ruleset={activeRuleset}
+            persistedRuleset={activePersistedRuleset}
+            onChange={(nextValues) => onRulesetChange(activeTab, nextValues)}
+            onSave={() => onRulesetSave(activeTab)}
+            onUseDefaults={() => onRulesetUseDefaults(activeTab)}
+            saving={saving}
+          />
+        </div>
+      </div>
+    </SectionCard>
   );
 }
 
@@ -331,6 +650,7 @@ function RulesetEditor({
   description,
   rulesetKey,
   ruleset,
+  persistedRuleset,
   onChange,
   onSave,
   onUseDefaults,
@@ -340,21 +660,24 @@ function RulesetEditor({
   description: string;
   rulesetKey: RulesetKey;
   ruleset: ProcessingRuleset;
+  persistedRuleset: ProcessingRuleset;
   onChange: (values: ProcessingRuleValues) => void;
   onSave: () => void;
   onUseDefaults: () => void;
   saving: boolean;
 }) {
   const isDirty = useMemo(
-    () => JSON.stringify(ruleset.current) !== JSON.stringify(ruleset.defaults) || !ruleset.uses_defaults,
-    [ruleset],
+    () =>
+      JSON.stringify(ruleset.current) !== JSON.stringify(persistedRuleset.current) ||
+      ruleset.uses_defaults !== persistedRuleset.uses_defaults,
+    [persistedRuleset, ruleset],
   );
   const summary = summariseRuleset(ruleset.current);
   const transcodeEnabled = ruleset.current.handling_mode === "transcode";
 
   return (
-    <div className="settings-rules-card">
-      <div className="settings-rules-header">
+    <div className="settings-rules-editor">
+      <div className="settings-rules-editor-header">
         <div className="settings-rules-heading">
           <span className="metric-label">{label}</span>
           <strong>{ruleset.profile_name ?? "Built-in defaults"}</strong>
@@ -366,128 +689,169 @@ function RulesetEditor({
         </div>
       </div>
 
-      <div className="info-strip settings-rule-summary">
-        <strong>{summary.title}</strong>
-        <span>{summary.body}</span>
+      <div className="settings-rules-summary-banner">
+        <span className="settings-rules-summary-icon" aria-hidden="true">
+          i
+        </span>
+        <div>
+          <strong>{summary.title}</strong>
+          <span>{summary.body}</span>
+        </div>
       </div>
 
-      <div className="settings-rules-fields settings-rules-fields-compact">
-        <label className="field">
-          <span>Handling mode</span>
-          <select
-            aria-label={`${label} handling mode`}
-            value={ruleset.current.handling_mode}
-            onChange={(event) => onChange({ ...ruleset.current, handling_mode: event.target.value })}
-          >
-            {HANDLING_MODE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+      <div className="settings-rules-form-card">
+        <div className="settings-rules-form-card-header">
+          <h3>Video pipeline</h3>
+          <p>Choose the primary handling path and output format.</p>
+        </div>
+        <div className="settings-rules-fields settings-rules-fields-three">
+          <label className="field">
+            <span>Handling mode</span>
+            <select
+              aria-label={`${label} handling mode`}
+              value={ruleset.current.handling_mode}
+              onChange={(event) => onChange({ ...ruleset.current, handling_mode: event.target.value })}
+            >
+              {HANDLING_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <label className="field">
-          <span>Target video codec</span>
-          <select
-            aria-label={`${label} target video codec`}
-            value={ruleset.current.target_video_codec}
-            onChange={(event) => onChange({ ...ruleset.current, target_video_codec: event.target.value })}
-          >
-            {VIDEO_CODEC_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
+          <label className="field">
+            <span>Target video codec</span>
+            <select
+              aria-label={`${label} target video codec`}
+              value={ruleset.current.target_video_codec}
+              onChange={(event) => onChange({ ...ruleset.current, target_video_codec: event.target.value })}
+            >
+              {VIDEO_CODEC_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
 
-        <label className="field">
-          <span>Output container</span>
-          <select
-            aria-label={`${label} output container`}
-            value={ruleset.current.output_container}
-            onChange={(event) => onChange({ ...ruleset.current, output_container: event.target.value })}
-          >
-            {CONTAINER_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span>Quality mode</span>
-          <select
-            aria-label={`${label} quality mode`}
-            value={ruleset.current.target_quality_mode}
-            onChange={(event) => onChange({ ...ruleset.current, target_quality_mode: event.target.value })}
-            disabled={!transcodeEnabled}
-          >
-            {QUALITY_MODE_OPTIONS.map((option) => (
-              <option key={option.value} value={option.value}>
-                {option.label}
-              </option>
-            ))}
-          </select>
-        </label>
-
-        <label className="field">
-          <span>Max video reduction (%)</span>
-          <input
-            aria-label={`${label} max video reduction`}
-            type="number"
-            min={0}
-            max={100}
-            value={ruleset.current.max_allowed_video_reduction_percent}
-            onChange={(event) =>
-              onChange({
-                ...ruleset.current,
-                max_allowed_video_reduction_percent: clampPercentage(event.target.value, ruleset.current.max_allowed_video_reduction_percent),
-              })}
-            disabled={!transcodeEnabled}
-          />
-        </label>
+          <label className="field">
+            <span>Output container</span>
+            <select
+              aria-label={`${label} output container`}
+              value={ruleset.current.output_container}
+              onChange={(event) => onChange({ ...ruleset.current, output_container: event.target.value })}
+            >
+              {CONTAINER_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+        </div>
       </div>
 
-      <div className="settings-rules-fields">
-        <LanguageListField
-          label="Preferred audio languages"
-          value={ruleset.current.preferred_audio_languages}
-          onChange={(languages) => onChange({ ...ruleset.current, preferred_audio_languages: languages })}
-        />
-        <LanguageListField
-          label="Preferred subtitle languages"
-          value={ruleset.current.preferred_subtitle_languages}
-          onChange={(languages) => onChange({ ...ruleset.current, preferred_subtitle_languages: languages })}
-        />
+      <div className={`settings-rules-form-card settings-rules-quality-card ${transcodeEnabled ? "" : "settings-rules-card-disabled"}`}>
+        <div className="settings-rules-form-card-header">
+          <h3>Quality limits</h3>
+          <p>{transcodeEnabled ? "Tune transcode quality and safety boundaries." : "Only available when handling mode is set to transcode."}</p>
+        </div>
+        <div className="settings-rules-fields settings-rules-fields-two">
+          <label className="field">
+            <span>Quality mode</span>
+            <select
+              aria-label={`${label} quality mode`}
+              value={ruleset.current.target_quality_mode}
+              onChange={(event) => onChange({ ...ruleset.current, target_quality_mode: event.target.value })}
+              disabled={!transcodeEnabled}
+            >
+              {QUALITY_MODE_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>
+                  {option.label}
+                </option>
+              ))}
+            </select>
+          </label>
+
+          <label className="field">
+            <span>Max video reduction (%)</span>
+            <input
+              aria-label={`${label} max video reduction`}
+              type="number"
+              min={0}
+              max={100}
+              value={ruleset.current.max_allowed_video_reduction_percent}
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  max_allowed_video_reduction_percent: clampPercentage(event.target.value, ruleset.current.max_allowed_video_reduction_percent),
+                })}
+              disabled={!transcodeEnabled}
+            />
+          </label>
+        </div>
       </div>
 
-      <div className="settings-rules-toggles">
-        <ToggleField
-          label="Keep only preferred audio languages"
-          checked={ruleset.current.keep_only_preferred_audio_languages}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_only_preferred_audio_languages: checked })}
-        />
-        <ToggleField
-          label="Keep forced subtitles"
-          checked={ruleset.current.keep_forced_subtitles}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_forced_subtitles: checked })}
-        />
-        <ToggleField
-          label="Keep one full preferred subtitle"
-          checked={ruleset.current.keep_one_full_preferred_subtitle}
-          onChange={(checked) => onChange({ ...ruleset.current, keep_one_full_preferred_subtitle: checked })}
-        />
-        <ToggleField
-          label="Drop other subtitles"
-          checked={ruleset.current.drop_other_subtitles}
-          onChange={(checked) => onChange({ ...ruleset.current, drop_other_subtitles: checked })}
-        />
+      <div className="settings-rules-form-card">
+        <div className="settings-rules-form-card-header">
+          <h3>Language and subtitle matrix</h3>
+          <p>Set the audio and subtitle language policy for this ruleset.</p>
+        </div>
+        <div className="settings-rules-language-matrix">
+          <div className="settings-rules-language-column">
+            <div className="settings-rules-column-heading">
+              <h4>Audio</h4>
+              <p>Preferred audio tracks and cleanup rules.</p>
+            </div>
+            <LanguageListField
+              label="Preferred audio languages"
+              value={ruleset.current.preferred_audio_languages}
+              onChange={(languages) => onChange({ ...ruleset.current, preferred_audio_languages: languages })}
+            />
+            <ToggleField
+              label="Keep only preferred audio languages"
+              checked={ruleset.current.keep_only_preferred_audio_languages}
+              onChange={(checked) => onChange({ ...ruleset.current, keep_only_preferred_audio_languages: checked })}
+            />
+          </div>
+
+          <div className="settings-rules-language-column settings-rules-language-column-divided">
+            <div className="settings-rules-column-heading">
+              <h4>Subtitles</h4>
+              <p>Forced, full, and non-preferred subtitle behavior.</p>
+            </div>
+            <LanguageListField
+              label="Preferred subtitle languages"
+              value={ruleset.current.preferred_subtitle_languages}
+              onChange={(languages) => onChange({ ...ruleset.current, preferred_subtitle_languages: languages })}
+            />
+            <div className="settings-rules-toggles">
+              <ToggleField
+                label="Keep forced subtitles"
+                checked={ruleset.current.keep_forced_subtitles}
+                onChange={(checked) => onChange({ ...ruleset.current, keep_forced_subtitles: checked })}
+              />
+              <ToggleField
+                label="Keep one full preferred subtitle"
+                checked={ruleset.current.keep_one_full_preferred_subtitle}
+                onChange={(checked) => onChange({ ...ruleset.current, keep_one_full_preferred_subtitle: checked })}
+              />
+              <ToggleField
+                label="Drop other subtitles"
+                checked={ruleset.current.drop_other_subtitles}
+                onChange={(checked) => onChange({ ...ruleset.current, drop_other_subtitles: checked })}
+              />
+            </div>
+          </div>
+        </div>
       </div>
 
-      <CollapsibleSection title="Advanced options" subtitle="Preservation controls for higher-end audio and stricter subtitle handling.">
+      <details className="settings-rules-advanced">
+        <summary>
+          <span>Advanced audio preservation</span>
+          <small>Surround, 7.1, and Atmos-capable tracks</small>
+        </summary>
         <div className="settings-rules-toggles">
           <ToggleField
             label="Preserve surround audio"
@@ -505,9 +869,9 @@ function RulesetEditor({
             onChange={(checked) => onChange({ ...ruleset.current, preserve_atmos: checked })}
           />
         </div>
-      </CollapsibleSection>
+      </details>
 
-      <div className="section-card-actions">
+      <div className="settings-rules-action-footer">
         <button className="button button-secondary button-small" type="button" onClick={onUseDefaults} disabled={saving}>
           Use defaults
         </button>
@@ -552,13 +916,8 @@ function LanguageListField({
               key={language}
               className={`button button-small ${active ? "button-primary" : "button-secondary"}`}
               type="button"
-              onClick={() => {
-                if (active) {
-                  onChange(value.filter((item) => item !== language));
-                  return;
-                }
-                onChange([...value, language]);
-              }}
+              aria-pressed={active}
+              onClick={() => onChange(appendLanguage(value, language))}
             >
               {language}
             </button>
@@ -595,6 +954,11 @@ function parseLanguageList(raw: string) {
     .split(",")
     .map((item) => item.trim().toLowerCase())
     .filter(Boolean);
+}
+
+function appendLanguage(value: string[], language: string) {
+  const normalised = parseLanguageList([...value, language].join(", "));
+  return Array.from(new Set(normalised));
 }
 
 function clampPercentage(raw: string, fallback: number) {

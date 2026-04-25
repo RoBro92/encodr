@@ -11,14 +11,8 @@ export function PageHeader({
   description?: string;
   actions?: ReactNode;
 }) {
-  return (
-    <header className="page-header">
-      <div>
-        {eyebrow ? <p className="section-eyebrow">{eyebrow}</p> : null}
-        <h1>{title}</h1>
-        {description ? <p className="section-copy">{description}</p> : null}
-      </div>
-      {actions ? <div className="page-actions">{actions}</div> : null}
-    </header>
-  );
+  void eyebrow;
+  void description;
+  void actions;
+  return <h1 className="sr-only">{title}</h1>;
 }

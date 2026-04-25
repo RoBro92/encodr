@@ -98,6 +98,18 @@ def build_parser() -> argparse.ArgumentParser:
     dev_ui_parser = subparsers.add_parser("dev-ui", help="Run the UI in local development mode against the local API.")
     dev_ui_parser.set_defaults(func=command_dev_ui)
 
+    dev_seed_ui_parser = subparsers.add_parser(
+        "dev-seed-ui",
+        help="Seed local-only UI demo data for design testing.",
+    )
+    dev_seed_ui_parser.set_defaults(func=command_dev_seed_ui)
+
+    dev_clear_ui_seed_parser = subparsers.add_parser(
+        "dev-clear-ui-seed",
+        help="Remove local-only UI demo data and restore local worker settings.",
+    )
+    dev_clear_ui_seed_parser.set_defaults(func=command_dev_clear_ui_seed)
+
     update_parser = subparsers.add_parser("update", help="Check for updates and optionally apply one.")
     update_parser.add_argument("--apply", action="store_true", help="Download and apply the available update.")
     update_parser.add_argument("--yes", action="store_true", help="Skip the confirmation prompt when applying.")
@@ -247,6 +259,44 @@ def command_dev_ui(args: argparse.Namespace) -> int:
         subprocess.run(["npm", "install"], cwd=ui_root, env=env, check=True)
     print("Starting the UI development server on http://127.0.0.1:5173 ...")
     subprocess.run(["npm", "run", "dev", "--", "--host", "127.0.0.1", "--port", "5173"], cwd=ui_root, env=env, check=True)
+    return 0
+
+
+def command_dev_seed_ui(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bundle = load_bundle(project_root)
+    session_factory = create_local_cli_session_factory(bundle, project_root)
+    from encodr_db.dev_seed_ui import seed_ui_demo_data
+
+    summary = seed_ui_demo_data(session_factory, bundle)
+    print("Seeded Encodr UI demo data. This command is development/demo-only and never runs automatically.")
+    print(f"Worker: {summary.worker_display_name} ({summary.worker_key})")
+    print(f"Demo media root: {summary.demo_media_root}")
+    print(f"Tracked files: {summary.tracked_files_seeded}")
+    print(f"Jobs: {summary.jobs_seeded}")
+    print(f"Review items: {summary.review_items_seeded}")
+    print("Run './encodr dev-clear-ui-seed' to remove the demo records.")
+    return 0
+
+
+def command_dev_clear_ui_seed(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bundle = load_bundle(project_root)
+    session_factory = create_local_cli_session_factory(bundle, project_root)
+    from encodr_db.dev_seed_ui import clear_ui_demo_data
+
+    summary = clear_ui_demo_data(session_factory, bundle)
+    print("Cleared Encodr UI demo data.")
+    print(f"Demo media root: {summary.demo_media_root}")
+    print(f"Tracked files removed: {summary.tracked_files_removed}")
+    print(f"Jobs removed: {summary.jobs_removed}")
+    print(f"Review items removed: {summary.review_items_removed}")
+    if summary.worker_restored:
+        print("Local worker settings restored to their pre-demo values.")
+    elif summary.worker_removed:
+        print("Demo-created local worker removed.")
+    else:
+        print("No demo local worker settings were found.")
     return 0
 
 
@@ -617,6 +667,24 @@ def check_url(url: str) -> dict[str, str]:
 def create_session_factory(bundle: ConfigBundle) -> sessionmaker:
     engine = create_engine(bundle.app.database.dsn, future=True)
     return sessionmaker(engine, future=True, expire_on_commit=False)
+
+
+def create_local_cli_session_factory(bundle: ConfigBundle, project_root: Path) -> sessionmaker:
+    dsn = host_reachable_database_dsn(str(bundle.app.database.dsn), project_root)
+    engine = create_engine(dsn, future=True)
+    return sessionmaker(engine, future=True, expire_on_commit=False)
+
+
+def host_reachable_database_dsn(dsn: str, project_root: Path) -> str:
+    parsed = urlsplit(dsn)
+    if parsed.hostname != "postgres" or Path("/.dockerenv").exists():
+        return dsn
+
+    host_port = read_env_value(project_root / ".env", "POSTGRES_PORT") or str(parsed.port or 5432)
+    credentials = ""
+    if "@" in parsed.netloc:
+        credentials = f"{parsed.netloc.rsplit('@', maxsplit=1)[0]}@"
+    return parsed._replace(netloc=f"{credentials}127.0.0.1:{host_port}").geturl()
 
 
 def maybe_collect_dockerised_doctor_payload(project_root: Path) -> dict[str, object] | None:

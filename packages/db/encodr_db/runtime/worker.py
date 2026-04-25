@@ -850,10 +850,12 @@ class LocalWorkerLoop:
                     )
             finally:
                 self._clear_active_job(job.id)
+            jobs.apply_automatic_retry_policy(job, result)
             session.commit()
+            final_status = job.status.value
             self.status_tracker.record_processed_run(
                 job_id=job.id,
-                final_status=result.status,
+                final_status=final_status,
                 started_at=run_started_at,
                 completed_at=result.completed_at,
                 failure_message=result.failure_message,
@@ -861,7 +863,7 @@ class LocalWorkerLoop:
             return WorkerRunSummary(
                 processed_job=True,
                 job_id=job.id,
-                final_status=result.status,
+                final_status=final_status,
                 failure_message=result.failure_message,
                 started_at=run_started_at,
                 completed_at=result.completed_at,

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 from pathlib import Path
 
 from sqlalchemy import create_engine
@@ -26,11 +27,16 @@ def test_analytics_repository_summaries_are_derived_from_persisted_rows() -> Non
             source_path="/media/Movies/Analytics One (2024).mkv",
         )
         first_context.job.status = JobStatus.COMPLETED
+        first_context.job.completed_at = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
         first_context.job.input_size_bytes = 1_000
         first_context.job.output_size_bytes = 700
         first_context.job.space_saved_bytes = 300
         first_context.job.verification_status = VerificationStatus.PASSED
         first_context.job.replacement_status = ReplacementStatus.SUCCEEDED
+        first_context.job.analysis_payload = {
+            "audio_tracks_removed_count": 2,
+            "subtitle_tracks_removed_count": 1,
+        }
 
         second_context = create_job(
             session,
@@ -47,6 +53,7 @@ def test_analytics_repository_summaries_are_derived_from_persisted_rows() -> Non
         assert second_plan_snapshot is not None
         second_plan_snapshot.action = PlanAction.TRANSCODE
         second_context.job.status = JobStatus.FAILED
+        second_context.job.completed_at = datetime(2026, 4, 21, 10, 0, tzinfo=timezone.utc)
         second_context.job.failure_category = "verification_failed"
         second_context.job.failure_message = "Required subtitle intent is present in the output."
         second_context.job.input_size_bytes = 2_000
@@ -70,7 +77,14 @@ def test_analytics_repository_summaries_are_derived_from_persisted_rows() -> Non
         assert storage.total_space_saved_bytes == 1_100
         assert storage.measurable_job_count == 2
         assert storage.measurable_completed_job_count == 1
+        assert storage.average_space_saved_per_day_bytes == 300
         assert storage.savings_by_action["remux"]["space_saved_bytes"] == 300
+
+        processing = repository.summarise_processing_history()
+        assert processing.processed_file_count == 1
+        assert processing.average_processed_per_day == 1
+        assert processing.total_audio_tracks_removed == 2
+        assert processing.total_subtitle_tracks_removed == 1
 
         failures = repository.top_failure_categories()
         assert failures == [

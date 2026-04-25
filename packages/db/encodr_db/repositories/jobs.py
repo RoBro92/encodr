@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from math import floor
 
 from sqlalchemy import Select, asc, desc, func, or_, select
@@ -10,6 +10,7 @@ from encodr_core.execution import normalise_backend_preference
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
 from encodr_shared.scheduling import next_schedule_opening, schedule_windows_allow_now, schedule_windows_summary
 from encodr_db.models import (
+    ComplianceState,
     FileLifecycleState,
     Job,
     JobKind,
@@ -24,6 +25,10 @@ from encodr_db.models import (
 
 
 class JobRepository:
+    MAX_AUTOMATED_RETRIES = 3
+    RETRY_BACKOFF_BASE_SECONDS = 60
+    RETRY_BACKOFF_MAX_SECONDS = 15 * 60
+
     def __init__(self, session: Session) -> None:
         self.session = session
 
@@ -42,11 +47,17 @@ class JobRepository:
         job_kind: JobKind = JobKind.EXECUTION,
         analysis_payload: dict | None = None,
         ignore_worker_schedule: bool = False,
+        scheduled_for_at: datetime | None = None,
     ) -> Job:
         payload = plan_snapshot.payload
         replace_payload = payload["replace"]
-        scheduled_for_at = next_schedule_opening(schedule_windows)
-        starts_scheduled = bool(schedule_windows and not schedule_windows_allow_now(schedule_windows))
+        window_opening_at = next_schedule_opening(schedule_windows)
+        backoff_due_at = _normalise_datetime(scheduled_for_at) if scheduled_for_at is not None else None
+        starts_scheduled = bool(
+            backoff_due_at is not None
+            or (schedule_windows and not schedule_windows_allow_now(schedule_windows))
+        )
+        effective_scheduled_for_at = backoff_due_at or window_opening_at
         job = Job(
             tracked_file_id=tracked_file.id,
             plan_snapshot_id=plan_snapshot.id,
@@ -66,7 +77,7 @@ class JobRepository:
             requested_worker_type=None,
             input_size_bytes=tracked_file.last_observed_size,
             analysis_payload=analysis_payload,
-            scheduled_for_at=scheduled_for_at if starts_scheduled else None,
+            scheduled_for_at=effective_scheduled_for_at if starts_scheduled else None,
             verification_status=VerificationStatus.PENDING,
             replacement_status=ReplacementStatus.PENDING,
             replace_in_place=replace_payload["in_place"],
@@ -233,6 +244,7 @@ class JobRepository:
         return job
 
     def mark_result(self, job: Job, result: ExecutionResult) -> Job:
+        previous_status = job.status
         status_map = {
             "completed": JobStatus.COMPLETED,
             "failed": JobStatus.FAILED,
@@ -294,6 +306,85 @@ class JobRepository:
         job.progress_updated_at = result.completed_at
         job.assigned_worker_id = None
         job.scheduled_for_at = None
+        self.session.flush()
+        from encodr_db.repositories.telemetry import TelemetryAggregationRepository
+
+        TelemetryAggregationRepository(self.session).record_job_result(
+            job,
+            previous_status=previous_status,
+        )
+        return job
+
+    def apply_automatic_retry_policy(self, job: Job, result: ExecutionResult) -> Job | None:
+        if result.status != "failed" or job.job_kind != JobKind.EXECUTION:
+            return None
+
+        if job_requires_manual_review(job):
+            self.route_to_manual_review(
+                job,
+                reviewed_at=result.completed_at,
+                reason=result.failure_message
+                or "The failed job matches a manual-review rule and will not be retried automatically.",
+                category=result.failure_category or "manual_review_required",
+            )
+            return None
+
+        if job.attempt_count <= self.MAX_AUTOMATED_RETRIES:
+            next_attempt_count = job.attempt_count + 1
+            scheduled_for_at = result.completed_at + self.automatic_retry_delay(next_attempt_count)
+            return self.create_job_from_plan(
+                job.tracked_file,
+                job.plan_snapshot,
+                attempt_count=next_attempt_count,
+                preferred_worker_id=job.preferred_worker_id,
+                pinned_worker_id=job.pinned_worker_id,
+                preferred_backend_override=job.preferred_backend_override,
+                schedule_windows=job.schedule_windows,
+                watched_job_id=job.watched_job_id,
+                job_kind=job.job_kind,
+                analysis_payload=job.analysis_payload,
+                ignore_worker_schedule=job.ignore_worker_schedule,
+                scheduled_for_at=scheduled_for_at,
+            )
+
+        self.route_to_manual_review(
+            job,
+            reviewed_at=result.completed_at,
+            reason=(
+                result.failure_message
+                or "The job failed after its automated retry budget was exhausted."
+            ),
+            category=result.failure_category or "retry_limit_exceeded",
+        )
+        return None
+
+    def automatic_retry_delay(self, attempt_count: int) -> timedelta:
+        retry_index = max(0, attempt_count - 2)
+        seconds = min(
+            self.RETRY_BACKOFF_BASE_SECONDS * (2 ** retry_index),
+            self.RETRY_BACKOFF_MAX_SECONDS,
+        )
+        return timedelta(seconds=seconds)
+
+    def route_to_manual_review(
+        self,
+        job: Job,
+        *,
+        reviewed_at: datetime,
+        reason: str,
+        category: str,
+    ) -> Job:
+        job.status = JobStatus.MANUAL_REVIEW
+        job.completed_at = reviewed_at
+        job.failure_message = reason
+        job.failure_category = category
+        job.progress_stage = "manual_review"
+        job.progress_updated_at = reviewed_at
+        job.assigned_worker_id = None
+        job.scheduled_for_at = None
+        if job.tracked_file is not None:
+            job.tracked_file.lifecycle_state = FileLifecycleState.MANUAL_REVIEW
+            job.tracked_file.compliance_state = ComplianceState.MANUAL_REVIEW
         self.session.flush()
         return job
 
@@ -443,6 +534,7 @@ class JobRepository:
                     [
                         JobStatus.COMPLETED,
                         JobStatus.FAILED,
+                        JobStatus.INTERRUPTED,
                         JobStatus.MANUAL_REVIEW,
                         JobStatus.SKIPPED,
                     ]
@@ -487,6 +579,20 @@ def replacement_status_for_result(result: ExecutionResult) -> ReplacementStatus:
     return ReplacementStatus.NOT_REQUIRED
 
 
+def job_requires_manual_review(job: Job) -> bool:
+    tracked_file = job.tracked_file
+    plan_snapshot = job.plan_snapshot
+    return bool(
+        tracked_file is not None
+        and (
+            tracked_file.operator_protected
+            or tracked_file.is_protected
+            or plan_snapshot.action.value == "manual_review"
+            or plan_snapshot.should_treat_as_protected
+        )
+    )
+
+
 def calculate_space_saved(
     input_size_bytes: int | None,
     output_size_bytes: int | None,
@@ -494,3 +600,9 @@ def calculate_space_saved(
     if input_size_bytes is None or output_size_bytes is None:
         return None
     return input_size_bytes - output_size_bytes
+
+
+def _normalise_datetime(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value

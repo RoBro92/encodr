@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router-dom";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
@@ -24,6 +25,7 @@ import {
 import type {
   RemoteWorkerOnboardingPayload,
   RemoteWorkerOnboardingResponse,
+  WorkerInventorySummary,
   WorkerInventoryDetail,
   WorkerPreferencePayload,
   WorkerRemovalResponse,
@@ -55,6 +57,13 @@ type PathMappingDraft = {
   label?: string | null;
   server_path: string;
   worker_path: string;
+};
+
+type WorkerStatusRollupResult = {
+  badge: "healthy" | "degraded" | "failed" | string;
+  message: string;
+  compactMessage: string;
+  attentionMessage: string | null;
 };
 
 const EMPTY_PATH_MAPPING: PathMappingDraft = {
@@ -134,12 +143,13 @@ export function WorkersPage() {
     () =>
       (workerStatus?.hardware_probes ?? [])
         .filter((item) => item.backend !== "cpu")
+        .filter((item) => item.preference_key === localDraft.preferred_backend)
         .map((item) => ({
           backend: item.backend,
           usable: item.usable_by_ffmpeg,
           message: item.message,
         })),
-    [workerStatus?.hardware_probes],
+    [localDraft.preferred_backend, workerStatus?.hardware_probes],
   );
 
   useEffect(() => {
@@ -187,10 +197,21 @@ export function WorkersPage() {
     detailCurrentBackend === "cpu",
   );
   const localBackendProbes = localWorkerStatus?.hardware_probes ?? [];
-  const localRuntimeDevices = localWorkerStatus?.runtime_device_paths ?? [];
   const configuredBackendProbe = detail?.worker_type === "local"
     ? localBackendProbes.find((item) => item.preference_key === detail.preferred_backend)
     : null;
+  const detailStatusRollup = detail ? buildWorkerStatusRollup(detail, localWorkerStatus) : null;
+  const detailAttentionTitle = detailStatusRollup?.badge === "degraded"
+    ? "Backend Degraded"
+    : detailStatusRollup?.badge === "failed"
+      ? "Backend Failed"
+      : "Attention";
+  const detailAttentionMessage = detailStatusRollup?.attentionMessage
+    ?? (detailPrimaryIssues.length > 0 ? detailPrimaryIssues.join(" • ") : null);
+  const selectedHardwareBackendProbe = configuredBackendProbe && configuredBackendProbe.backend !== "cpu"
+    ? configuredBackendProbe
+    : null;
+  const selectedRuntimeDevices = selectedHardwareBackendProbe?.device_paths ?? [];
 
   return (
     <div className="page-stack">
@@ -242,16 +263,20 @@ export function WorkersPage() {
             message="Add this host as a worker or pair a remote worker when you are ready to give Encodr execution capacity."
           />
         ) : (
-          <div className="record-list" role="list" aria-label="Workers list">
+          <div className="record-list worker-inventory-list" role="list" aria-label="Workers list">
             {workers.map((item) => {
               const isActive = item.id === workerId;
+              const itemLocalWorkerStatus = item.worker_type === "local" && (!workerStatus.worker_id || workerStatus.worker_id === item.id)
+                ? workerStatus
+                : null;
+              const itemStatusRollup = buildWorkerStatusRollup(item, itemLocalWorkerStatus);
               return (
                 <Link
                   key={item.id}
-                  className={`record-list-item${isActive ? " record-list-item-active" : ""}`}
+                  className={`record-list-item worker-inventory-row${isActive ? " record-list-item-active" : ""}`}
                   to={APP_ROUTES.workerDetail(item.id)}
                 >
-                  <div className="record-list-main">
+                  <div className="worker-inventory-main">
                     <div className="record-list-heading">
                       <strong>{item.display_name}</strong>
                       <span>{item.worker_key}</span>
@@ -260,15 +285,19 @@ export function WorkersPage() {
                       <StatusBadge value={item.worker_type} />
                       <StatusBadge value={item.worker_state} />
                       <StatusBadge value={item.enabled ? "enabled" : "disabled"} />
-                      <StatusBadge value={item.health_status} />
+                      <StatusBadge value={itemStatusRollup.badge} />
                     </div>
                   </div>
-                  <div className="record-list-meta">
-                    <span className="record-list-kicker">{item.worker_type === "local" ? "This host" : "Remote worker"}</span>
-                    <span>{formatBackendLabel(item.preferred_backend)}</span>
-                    <span>{formatConcurrencyLabel(item)}</span>
-                    <span>{item.schedule_summary ?? "Any time"}</span>
-                    <span className="record-list-emphasis">{item.health_summary ?? "No health summary reported."}</span>
+                  <div className="worker-inventory-stats">
+                    <WorkerInventoryStat label="Worker" value={item.worker_type === "local" ? "This host" : "Remote"} />
+                    <WorkerInventoryStat label="Backend" value={formatBackendLabel(item.preferred_backend)} />
+                    <WorkerInventoryStat label="Concurrency" value={formatConcurrencyLabel(item)} />
+                    <WorkerInventoryStat label="Schedule" value={item.schedule_summary ?? "Any time"} />
+                    <WorkerInventoryStat
+                      label="Status message"
+                      value={<WorkerStatusRollupView rollup={itemStatusRollup} />}
+                      clamp
+                    />
                   </div>
                 </Link>
               );
@@ -298,7 +327,7 @@ export function WorkersPage() {
 
       {detail ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Worker detail">
-          <section className="modal-panel modal-panel-wide">
+          <section className="modal-panel modal-panel-worker-detail worker-detail-modal">
             <div className="section-card-header">
               <div>
                 <h2>Worker detail</h2>
@@ -342,15 +371,24 @@ export function WorkersPage() {
                 <StatusBadge value={detail.worker_type} />
                 <StatusBadge value={detail.worker_state} />
                 <StatusBadge value={detail.enabled ? "enabled" : "disabled"} />
-                <StatusBadge value={detail.health_status} />
+                <StatusBadge value={detailStatusRollup?.badge ?? detail.health_status} />
                 <StatusBadge value={formatBackendLabel(detail.preferred_backend)} />
                 {cpuFallbackActive ? <StatusBadge value="cpu fallback active" /> : null}
               </div>
 
-              {detailPrimaryIssues.length > 0 ? (
-                <div className="info-strip info-strip-warning" role="note">
-                  <strong>{detail.health_status === "healthy" ? "Attention" : "Why this worker is degraded"}</strong>
-                  <span>{detailPrimaryIssues.join(" • ")}</span>
+              {detailAttentionMessage ? (
+                <div className="worker-attention-banner" role="note">
+                  <span className="worker-attention-icon" aria-hidden="true">
+                    <svg viewBox="0 0 24 24" focusable="false">
+                      <path d="M10.3 4.2 2.7 17.4A2 2 0 0 0 4.4 20h15.2a2 2 0 0 0 1.7-2.6L13.7 4.2a2 2 0 0 0-3.4 0Z" />
+                      <path d="M12 9v4" />
+                      <path d="M12 17h.01" />
+                    </svg>
+                  </span>
+                  <div>
+                    <strong>{detailAttentionTitle}</strong>
+                    <span>{detailAttentionMessage}</span>
+                  </div>
                 </div>
               ) : null}
 
@@ -370,122 +408,123 @@ export function WorkersPage() {
                 </div>
               ) : null}
 
-              <section className="metric-grid metric-grid-compact">
-                <div className="metric-panel">
-                  <span className="metric-label">Health summary</span>
-                  <strong>{detail.health_summary ?? "No summary reported"}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Current activity</span>
-                  <strong>{detail.current_stage ?? detail.runtime_summary?.current_stage ?? detail.current_job_id ?? "Idle"}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Current backend</span>
-                  <strong>{formatBackendLabel(detailCurrentBackend)}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Concurrency</span>
-                  <strong>{formatConcurrencyLabel(detail)}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Pending assignments</span>
-                  <strong>{detail.pending_assignment_count}</strong>
-                </div>
-                <div className="metric-panel">
-                  <span className="metric-label">Schedule</span>
-                  <strong>{detail.schedule_summary ?? "Any time"}</strong>
-                </div>
+              <section className="worker-detail-metric-grid">
+                <WorkerDetailMetric
+                  label="Health summary"
+                  value={<WorkerStatusRollupView rollup={detailStatusRollup ?? buildWorkerStatusRollup(detail, localWorkerStatus)} compact />}
+                />
+                <WorkerDetailMetric
+                  label="Current activity"
+                  value={detail.current_stage ?? detail.runtime_summary?.current_stage ?? detail.current_job_id ?? "Idle"}
+                />
+                <WorkerDetailMetric label="Current backend" value={formatBackendLabel(detailCurrentBackend)} />
+                <WorkerDetailMetric label="Concurrency" value={formatConcurrencyLabel(detail)} />
+                <WorkerDetailMetric label="Pending assignments" value={String(detail.pending_assignment_count)} />
+                <WorkerDetailMetric label="Schedule" value={detail.schedule_summary ?? "Any time"} />
               </section>
 
               <SectionCard title="Health and execution">
-                <KeyValueList
+                <WorkerDetailInfoGrid
                   items={[
                     { label: "Worker key", value: detail.worker_key },
+                    { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
                     { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
                     { label: "Actual backend", value: formatBackendLabel(detailCurrentBackend) },
                     { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
+                    { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
                     { label: "Current job", value: detail.current_job_id ?? detail.runtime_summary?.current_job_id ?? "Idle" },
                     {
                       label: "Progress",
                       value: formatWorkerProgress(detail.current_progress_percent ?? detail.runtime_summary?.current_progress_percent, detail.current_stage ?? detail.runtime_summary?.current_stage),
                     },
-                    { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
-                    { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
-                    { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
                     { label: "Last seen", value: formatDateTime(detail.last_seen_at) },
+                    { label: "Last heartbeat", value: formatDateTime(detail.last_heartbeat_at) },
                   ]}
                 />
               </SectionCard>
 
-              {detail.worker_type === "local" ? (
-                <SectionCard title="Local backend diagnostics" subtitle="Runtime truth for the current host worker.">
-                  <div className="card-stack">
-                    <KeyValueList
+              <div className="worker-detail-mid-grid">
+                {detail.worker_type === "local" ? (
+                  <SectionCard title="Local backend diagnostics" subtitle="Runtime truth for the current host worker.">
+                    <div className="card-stack">
+                      <WorkerDetailDenseGrid
+                        compact
+                        items={[
+                          {
+                            label: "Dependencies",
+                            value: (
+                              <span className="worker-inline-badges">
+                                {localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffmpeg.status} /> : <span>FFmpeg unknown</span>}
+                                {localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffprobe.status} /> : <span>FFprobe unknown</span>}
+                              </span>
+                            ),
+                            span: "full",
+                          },
+                          { label: "Eligibility", value: localWorkerStatus?.eligibility_summary ?? "Not reported" },
+                          {
+                            label: "Configured backend health",
+                            value: configuredBackendProbe ? <StatusBadge value={configuredBackendProbe.status} /> : "No probe available",
+                          },
+                        ]}
+                      />
+                      {selectedHardwareBackendProbe ? (
+                        <CapabilityStrip
+                          title="Selected backend diagnostic"
+                          description={formatSelectedBackendDiagnosticMessage(
+                            formatBackendLabel(detail.preferred_backend),
+                            selectedHardwareBackendProbe.status,
+                            selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
+                          )}
+                          tone={selectedHardwareBackendProbe.status === "failed" ? "danger" : "default"}
+                          status={selectedHardwareBackendProbe.status}
+                        />
+                      ) : null}
+                      {selectedRuntimeDevices.length > 0 ? (
+                        <div className="list-stack">
+                          {selectedRuntimeDevices.map((device) => (
+                            <div key={device.path} className="list-row">
+                              <div>
+                                <strong>{device.path}</strong>
+                                <p>
+                                  {device.vendor_name ?? "Unknown vendor"}{device.vendor_id ? ` • ${device.vendor_id}` : ""}
+                                </p>
+                                <p>{device.message}</p>
+                              </div>
+                              <StatusBadge value={device.status} />
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </div>
+                  </SectionCard>
+                ) : (
+                  <SectionCard title="Worker capability summary" subtitle="What the worker has actually reported.">
+                    <WorkerDetailDenseGrid
                       items={[
-                        { label: "Eligibility", value: localWorkerStatus?.eligibility_summary ?? "Not reported" },
-                        { label: "FFmpeg", value: localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffmpeg.status} /> : "Unknown" },
-                        { label: "FFprobe", value: localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffprobe.status} /> : "Unknown" },
                         {
-                          label: "Configured backend health",
-                          value: configuredBackendProbe ? <StatusBadge value={configuredBackendProbe.status} /> : "No probe available",
+                          label: "Execution modes",
+                          value: detail.capability_summary.execution_modes.length > 0
+                            ? detail.capability_summary.execution_modes.join(" • ")
+                            : "Not reported",
                         },
                         {
-                          label: "Configured backend reason",
-                          value: configuredBackendProbe?.reason_unavailable ?? configuredBackendProbe?.message ?? "No specific issue reported",
+                          label: "Selected hardware",
+                          value: formatSelectedHardwareHint(detail.capability_summary.hardware_hints, detail.preferred_backend),
+                        },
+                        {
+                          label: "Recommended concurrency",
+                          value: detail.capability_summary.recommended_concurrency != null
+                            ? `${detail.capability_summary.recommended_concurrency} • ${detail.capability_summary.recommended_concurrency_reason ?? "Worker reported recommendation"}`
+                            : "Not reported",
+                          span: "full",
                         },
                       ]}
                     />
-                    <CapabilityStrip
-                      title="Validated execution backends"
-                      items={localBackendProbes.map((item) => ({
-                        label: formatBackendLabel(item.backend),
-                        status: item.status,
-                        message: item.reason_unavailable ?? item.message,
-                      }))}
-                    />
-                    <div className="list-stack">
-                      {localRuntimeDevices.map((device) => (
-                        <div key={device.path} className="list-row">
-                          <div>
-                            <strong>{device.path}</strong>
-                            <p>{device.message}</p>
-                          </div>
-                          <StatusBadge value={device.status} />
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                </SectionCard>
-              ) : (
-                <SectionCard title="Worker capability summary" subtitle="What the worker has actually reported.">
-                  <KeyValueList
-                    items={[
-                      {
-                        label: "Execution modes",
-                        value: detail.capability_summary.execution_modes.length > 0
-                          ? detail.capability_summary.execution_modes.join(" • ")
-                          : "Not reported",
-                      },
-                      {
-                        label: "Hardware hints",
-                        value: detail.capability_summary.hardware_hints.length > 0
-                          ? detail.capability_summary.hardware_hints.join(" • ")
-                          : "Not reported",
-                      },
-                      {
-                        label: "Recommended concurrency",
-                        value: detail.capability_summary.recommended_concurrency != null
-                          ? `${detail.capability_summary.recommended_concurrency} • ${detail.capability_summary.recommended_concurrency_reason ?? "Worker reported recommendation"}`
-                          : "Not reported",
-                      },
-                    ]}
-                  />
-                </SectionCard>
-              )}
+                  </SectionCard>
+                )}
 
-              <SectionCard title="Storage and path access">
-                <div className="card-stack">
-                  <KeyValueList
+                <SectionCard title="Storage and path access" className="worker-storage-card">
+                  <WorkerDetailDenseGrid
                     items={[
                       {
                         label: "Scratch validation",
@@ -500,28 +539,29 @@ export function WorkersPage() {
                         value: detailPathMappings.length > 0 ? `${detailPathMappings.length} configured` : "Not configured",
                       },
                     ]}
-                  />
-                  {detailPathMappings.length > 0 ? (
-                    <div className="list-stack">
-                      {detailPathMappings.map((mapping) => (
-                        <div key={`${mapping.server_path}:${mapping.worker_path}`} className="list-row">
-                          <div>
-                            <strong>{mapping.label ?? mapping.server_path}</strong>
-                            <p>{mapping.server_path} → {mapping.worker_path}</p>
-                            <p>{mapping.validation_message ?? "Validation not reported."}</p>
+                  >
+                    {detailPathMappings.length > 0 ? (
+                      <div className="list-stack worker-detail-grid-span">
+                        {detailPathMappings.map((mapping) => (
+                          <div key={`${mapping.server_path}:${mapping.worker_path}`} className="list-row">
+                            <div>
+                              <strong>{mapping.label ?? mapping.server_path}</strong>
+                              <p>{mapping.server_path} → {mapping.worker_path}</p>
+                              <p>{mapping.validation_message ?? "Validation not reported."}</p>
+                            </div>
+                            <StatusBadge value={mapping.validation_status ?? "unknown"} />
                           </div>
-                          <StatusBadge value={mapping.validation_status ?? "unknown"} />
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="info-strip" role="note">
-                      <strong>Direct shared path mode</strong>
-                      <span>No explicit mappings are configured. This worker will rely on the same visible media paths unless you add mappings.</span>
-                    </div>
-                  )}
-                </div>
-              </SectionCard>
+                        ))}
+                      </div>
+                    ) : (
+                      <div className="info-strip worker-detail-grid-span worker-storage-banner" role="note">
+                        <strong>Direct shared path mode</strong>
+                        <span>No explicit mappings are configured. This worker will rely on the same visible media paths unless you add mappings.</span>
+                      </div>
+                    )}
+                  </WorkerDetailDenseGrid>
+                </SectionCard>
+              </div>
 
               {(detail.runtime_summary?.telemetry ?? localWorkerStatus?.telemetry) ? (
                 <SectionCard title="Current telemetry">
@@ -573,7 +613,7 @@ export function WorkersPage() {
 
       {isAddWorkerOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Add worker">
-          <section className="modal-panel">
+          <section className="modal-panel modal-panel-wide">
             <div className="section-card-header">
               <div>
                 <h2>Add worker</h2>
@@ -607,7 +647,7 @@ export function WorkersPage() {
 
             {addWorkerMode === "local" ? (
               <div className="card-stack">
-                <div className="info-strip" role="note">
+                <div className="worker-local-callout" role="note">
                   <strong>Same host runtime</strong>
                   <span>The local worker runs inside the same Encodr stack and uses the current runtime mounts and scratch path.</span>
                 </div>
@@ -618,15 +658,18 @@ export function WorkersPage() {
                   recommendationReason="Recommended from the detected local runtime capabilities."
                   showPathMappings={false}
                 />
-                <CapabilityStrip
-                  title="Detected local backends"
-                  items={localCapabilities.map((item) => ({
-                    label: formatBackendLabel(item.backend),
-                    status: item.usable ? "healthy" : "degraded",
-                    message: item.message,
-                  }))}
-                />
-                <div className="section-card-actions">
+                {localDraft.preferred_backend !== "cpu_only" ? (
+                  <CapabilityStrip
+                    title="Selected local backend"
+                    description={`${formatBackendLabel(localDraft.preferred_backend)} is selected as the primary backend for this worker.`}
+                    items={localCapabilities.map((item) => ({
+                      label: formatBackendLabel(item.backend),
+                      status: item.usable ? "healthy" : "degraded",
+                      message: item.message,
+                    }))}
+                  />
+                ) : null}
+                <div className="section-card-actions worker-modal-actions">
                   <button className="button button-secondary button-small" type="button" onClick={() => setAddWorkerMode("choose")}>
                     Back
                   </button>
@@ -659,7 +702,7 @@ export function WorkersPage() {
                   showPlatform
                   showPathMappings
                 />
-                <div className="section-card-actions">
+                <div className="section-card-actions worker-modal-actions">
                   <button className="button button-secondary button-small" type="button" onClick={() => setAddWorkerMode("choose")}>
                     Back
                   </button>
@@ -688,7 +731,7 @@ export function WorkersPage() {
 
       {editingWorker && editDraft ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Edit worker">
-          <section className="modal-panel">
+          <section className="modal-panel modal-panel-wide worker-edit-modal">
             <div className="section-card-header">
               <div>
                 <h2>Edit worker</h2>
@@ -716,7 +759,7 @@ export function WorkersPage() {
               </div>
             ) : null}
 
-            <div className="section-card-actions">
+            <div className="section-card-actions worker-modal-actions">
               <button
                 className="button button-primary button-small"
                 type="button"
@@ -732,42 +775,21 @@ export function WorkersPage() {
               >
                 {updateWorkerPreferencesMutation.isPending ? "Saving…" : "Save worker"}
               </button>
-              {editingWorker.enabled ? (
-                <button
-                  className="button button-secondary button-small"
-                  type="button"
-                  onClick={() => disableMutation.mutate(editingWorker.id)}
-                  disabled={disableMutation.isPending}
-                >
-                  {disableMutation.isPending ? "Disabling…" : "Disable"}
-                </button>
-              ) : (
-                <button
-                  className="button button-secondary button-small"
-                  type="button"
-                  onClick={() => enableMutation.mutate(editingWorker.id)}
-                  disabled={enableMutation.isPending}
-                >
-                  {enableMutation.isPending ? "Enabling…" : "Enable"}
-                </button>
-              )}
-              {editingWorker.worker_type === "remote" ? (
-                <button
-                  className="button button-danger button-small"
-                  type="button"
-                  onClick={() => {
-                    deleteWorkerMutation.mutate(editingWorker.id, {
-                      onSuccess: (result) => {
-                        setRemovalResult(result);
-                        setEditingWorker(null);
-                      },
-                    });
-                  }}
-                  disabled={deleteWorkerMutation.isPending}
-                >
-                  {deleteWorkerMutation.isPending ? "Removing…" : "Delete worker"}
-                </button>
-              ) : null}
+              <button
+                className="button button-danger button-small"
+                type="button"
+                onClick={() => {
+                  deleteWorkerMutation.mutate(editingWorker.id, {
+                    onSuccess: (result) => {
+                      setRemovalResult(result);
+                      setEditingWorker(null);
+                    },
+                  });
+                }}
+                disabled={deleteWorkerMutation.isPending}
+              >
+                {deleteWorkerMutation.isPending ? "Removing…" : "Delete worker"}
+              </button>
             </div>
           </section>
         </div>
@@ -823,88 +845,93 @@ function WorkerPreferenceFields({
   const mappings = draft.path_mappings ?? [];
 
   return (
-    <div className="settings-rules-fields settings-rules-fields-compact">
-      <label className="field">
-        <span>Worker label</span>
-        <input
-          aria-label="Worker label"
-          value={draft.display_name ?? ""}
-          onChange={(event) => onChange({ ...draft, display_name: event.target.value })}
-        />
-      </label>
-
-      {showPlatform && "platform" in draft ? (
+    <div className="worker-preference-form">
+      <div className="worker-preference-column">
         <label className="field">
-          <span>Platform</span>
+          <span>Worker label</span>
+          <input
+            aria-label="Worker label"
+            value={draft.display_name ?? ""}
+            onChange={(event) => onChange({ ...draft, display_name: event.target.value })}
+          />
+        </label>
+        <label className="field">
+          <span>Preferred backend</span>
           <select
-            aria-label="Worker platform"
-            value={draft.platform}
-            onChange={(event) => onChange({ ...draft, platform: event.target.value as "windows" | "linux" | "macos" })}
+            aria-label="Worker preferred backend"
+            value={draft.preferred_backend}
+            onChange={(event) => onChange({ ...draft, preferred_backend: event.target.value })}
           >
-            {PLATFORM_OPTIONS.map((option) => (
+            {BACKEND_OPTIONS.map((option) => (
               <option key={option.value} value={option.value}>{option.label}</option>
             ))}
           </select>
         </label>
-      ) : null}
 
-      <label className="field">
-        <span>Preferred backend</span>
-        <select
-          aria-label="Worker preferred backend"
-          value={draft.preferred_backend}
-          onChange={(event) => onChange({ ...draft, preferred_backend: event.target.value })}
-        >
-          {BACKEND_OPTIONS.map((option) => (
-            <option key={option.value} value={option.value}>{option.label}</option>
-          ))}
-        </select>
-      </label>
-
-      <label className="field field-checkbox">
-        <span>Allow CPU fallback</span>
-        <input
-          aria-label="Worker CPU fallback"
-          type="checkbox"
-          checked={draft.allow_cpu_fallback}
-          onChange={(event) => onChange({ ...draft, allow_cpu_fallback: event.target.checked })}
-        />
-      </label>
-
-      <label className="field">
-        <span>Concurrency</span>
-        <input
-          aria-label="Worker concurrency"
-          type="number"
-          min={1}
-          max={8}
-          value={draft.max_concurrent_jobs ?? recommendedConcurrency}
-          onChange={(event) => onChange({ ...draft, max_concurrent_jobs: Number(event.target.value) || 1 })}
-        />
-      </label>
-
-      <div className="info-strip" role="note">
-        <strong>Recommendation</strong>
-        <span>{recommendedConcurrency} concurrent job{recommendedConcurrency === 1 ? "" : "s"} • {recommendationReason}</span>
+        <label className="field">
+          <span>Scratch path</span>
+          <input
+            aria-label="Worker scratch path"
+            value={draft.scratch_path ?? ""}
+            onChange={(event) => onChange({ ...draft, scratch_path: event.target.value })}
+          />
+        </label>
       </div>
 
-      <label className="field">
-        <span>Scratch path</span>
-        <input
-          aria-label="Worker scratch path"
-          value={draft.scratch_path ?? ""}
-          onChange={(event) => onChange({ ...draft, scratch_path: event.target.value })}
-        />
-      </label>
+      <div className="worker-preference-column">
+        <label className="field">
+          <span>Concurrency</span>
+          <input
+            aria-label="Worker concurrency"
+            type="number"
+            min={1}
+            max={8}
+            value={draft.max_concurrent_jobs ?? recommendedConcurrency}
+            onChange={(event) => onChange({ ...draft, max_concurrent_jobs: Number(event.target.value) || 1 })}
+          />
+          <span className="worker-field-helper">
+            Recommendation: {recommendedConcurrency} concurrent job{recommendedConcurrency === 1 ? "" : "s"} • {recommendationReason}
+          </span>
+        </label>
 
-      <ScheduleWindowsEditor
-        label="Schedule windows"
-        value={draft.schedule_windows ?? []}
-        onChange={(value) => onChange({ ...draft, schedule_windows: value })}
-      />
+        <label className="worker-checkbox-row">
+          <input
+            aria-label="Worker CPU fallback"
+            type="checkbox"
+            checked={draft.allow_cpu_fallback}
+            onChange={(event) => onChange({ ...draft, allow_cpu_fallback: event.target.checked })}
+          />
+          <span>Allow CPU fallback</span>
+        </label>
+
+        {showPlatform && "platform" in draft ? (
+          <label className="field">
+            <span>Platform</span>
+            <select
+              aria-label="Worker platform"
+              value={draft.platform}
+              onChange={(event) => onChange({ ...draft, platform: event.target.value as "windows" | "linux" | "macos" })}
+            >
+              {PLATFORM_OPTIONS.map((option) => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          </label>
+        ) : null}
+      </div>
+
+      <div className="worker-preference-full">
+        <ScheduleWindowsEditor
+          label="Schedule windows"
+          value={draft.schedule_windows ?? []}
+          onChange={(value) => onChange({ ...draft, schedule_windows: value })}
+          concurrencyValue={draft.max_concurrent_jobs ?? recommendedConcurrency}
+          onConcurrencyChange={(value) => onChange({ ...draft, max_concurrent_jobs: Math.max(1, Math.min(8, value)) })}
+        />
+      </div>
 
       {showPathMappings ? (
-        <div className="field">
+        <div className="field worker-preference-full">
           <span>Path mappings</span>
           <PathMappingsEditor
             mappings={mappings}
@@ -912,6 +939,89 @@ function WorkerPreferenceFields({
           />
         </div>
       ) : null}
+    </div>
+  );
+}
+
+function WorkerInventoryStat({
+  label,
+  value,
+  clamp = false,
+}: {
+  label: string;
+  value: ReactNode;
+  clamp?: boolean;
+}) {
+  return (
+    <div className="worker-stat">
+      <span>{label}</span>
+      <div className={`worker-stat-value${clamp ? " worker-stat-clamped" : ""}`}>{value}</div>
+    </div>
+  );
+}
+
+function WorkerDetailMetric({
+  label,
+  value,
+}: {
+  label: string;
+  value: ReactNode;
+}) {
+  return (
+    <div className="worker-detail-metric">
+      <span>{label}</span>
+      <div className="worker-detail-metric-value">{value}</div>
+    </div>
+  );
+}
+
+function WorkerStatusRollupView({ rollup, compact = false }: { rollup: WorkerStatusRollupResult; compact?: boolean }) {
+  return (
+    <div className="worker-status-rollup">
+      <StatusBadge value={rollup.badge} />
+      <span className="worker-status-rollup-message">{compact ? rollup.compactMessage : rollup.message}</span>
+    </div>
+  );
+}
+
+function WorkerDetailInfoGrid({
+  items,
+}: {
+  items: Array<{ label: string; value: ReactNode }>;
+}) {
+  return (
+    <div className="worker-detail-info-grid">
+      {items.map((item) => (
+        <div key={item.label} className="worker-detail-info-item">
+          <span>{item.label}</span>
+          <strong>{item.value}</strong>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function WorkerDetailDenseGrid({
+  items,
+  children,
+  compact = false,
+}: {
+  items: Array<{ label: string; value: ReactNode; span?: "full" }>;
+  children?: ReactNode;
+  compact?: boolean;
+}) {
+  return (
+    <div className={`worker-detail-dense-grid${compact ? " worker-detail-dense-grid-compact" : ""}`}>
+      {items.map((item) => (
+        <div
+          key={item.label}
+          className={`worker-detail-dense-item${item.span === "full" ? " worker-detail-grid-span" : ""}`}
+        >
+          <span>{item.label}</span>
+          <div className="worker-detail-dense-value">{item.value}</div>
+        </div>
+      ))}
+      {children}
     </div>
   );
 }
@@ -995,36 +1105,34 @@ function PathMappingsEditor({
 
 function CapabilityStrip({
   title,
-  items,
+  description = "Backend diagnostics are scoped to the worker's selected primary backend.",
+  tone = "default",
+  status,
+  items = [],
 }: {
   title: string;
-  items: Array<{ label: string; status: string; message: string }>;
+  description?: string;
+  tone?: "default" | "danger";
+  status?: string;
+  items?: Array<{ label: string; status: string; message: string }>;
 }) {
   if (items.length === 0) {
     return (
-      <div className="info-strip" role="note">
+      <div className={`capability-strip capability-strip-${tone}`} role="note">
         <strong>{title}</strong>
-        <span>CPU execution is available. No hardware backend is currently usable.</span>
+        <span>No diagnostic payload is available for the selected backend yet.</span>
       </div>
     );
   }
 
   return (
-    <div className="card-stack">
-      <div className="info-strip">
-        <strong>{title}</strong>
-        <span>Encodr only offers the backends that the current runtime can actually validate.</span>
-      </div>
-      <div className="list-stack">
-        {items.map((item) => (
-          <div key={item.label} className="list-row">
-            <div>
-              <strong>{item.label}</strong>
-              <p>{item.message}</p>
-            </div>
-            <StatusBadge value={item.status} />
-          </div>
-        ))}
+    <div className={`capability-strip capability-strip-${tone}`}>
+      <div className="capability-strip-copy">
+        <div className="capability-strip-heading">
+          <strong>{title}</strong>
+          {status ? <StatusBadge value={status} /> : null}
+        </div>
+        <p>{description}</p>
       </div>
     </div>
   );
@@ -1059,31 +1167,26 @@ function BootstrapResultPanel({ result }: { result: RemoteWorkerOnboardingRespon
 function TelemetrySummary({ telemetry }: { telemetry: Record<string, unknown> }) {
   const gpu = telemetry.gpu as Record<string, unknown> | null | undefined;
   return (
-    <div className="metric-grid metric-grid-compact">
-      <div className="metric-panel">
-        <span className="metric-label">CPU</span>
-        <strong>{formatPercentValue(telemetry.cpu_usage_percent)}</strong>
-      </div>
-      <div className="metric-panel">
-        <span className="metric-label">Process CPU</span>
-        <strong>{formatPercentValue(telemetry.process_cpu_usage_percent)}</strong>
-      </div>
-      <div className="metric-panel">
-        <span className="metric-label">Memory</span>
-        <strong>{formatPercentValue(telemetry.memory_usage_percent)}</strong>
-      </div>
-      <div className="metric-panel">
-        <span className="metric-label">Process memory</span>
-        <strong>{formatBytes(readNumber(telemetry.process_memory_bytes))}</strong>
-      </div>
-      <div className="metric-panel">
-        <span className="metric-label">CPU temp</span>
-        <strong>{formatTemperature(telemetry.cpu_temperature_c)}</strong>
-      </div>
-      <div className="metric-panel">
-        <span className="metric-label">GPU</span>
-        <strong>{formatGpuMetric(gpu)}</strong>
-      </div>
+    <div className="worker-telemetry-grid">
+      <TelemetryMetric label="CPU" value={formatPercentValue(telemetry.cpu_usage_percent)} />
+      <TelemetryMetric label="Process CPU" value={formatPercentValue(telemetry.process_cpu_usage_percent)} />
+      <TelemetryMetric label="Memory" value={formatPercentValue(telemetry.memory_usage_percent)} />
+      <TelemetryMetric label="Process memory" value={formatBytes(readNumber(telemetry.process_memory_bytes))} />
+      <TelemetryMetric label="CPU temp" value={formatTemperature(telemetry.cpu_temperature_c)} />
+      <TelemetryMetric label="GPU" value={formatGpuMetric(gpu)} />
+    </div>
+  );
+}
+
+function TelemetryMetric({ label, value }: { label: string; value: string }) {
+  const unavailable = isUnavailableMetric(value);
+
+  return (
+    <div className="worker-telemetry-item">
+      <span>{label}</span>
+      <strong className={unavailable ? "worker-telemetry-unavailable" : undefined}>
+        {unavailable ? "—" : value}
+      </strong>
     </div>
   );
 }
@@ -1175,8 +1278,78 @@ function formatGpuMetric(gpu: Record<string, unknown> | null | undefined) {
   return typeof gpu.message === "string" ? gpu.message : vendor;
 }
 
+function formatSelectedBackendDiagnosticMessage(backendLabel: string, status: string, reason: string | null | undefined) {
+  const reasonText = reason ? trimSentencePunctuation(reason) : "No specific issue reported";
+  if (status === "failed") {
+    return `${backendLabel} is selected as the primary backend, but failed to initialize. Reason: ${reasonText}.`;
+  }
+  return `${backendLabel} is selected as the primary backend. Reason: ${reasonText}.`;
+}
+
+function isUnavailableMetric(value: string) {
+  const normalized = value.trim().toLowerCase();
+  return normalized === "unavailable" || normalized === "not available";
+}
+
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function buildWorkerStatusRollup(
+  worker: Pick<WorkerInventorySummary, "worker_type" | "preferred_backend" | "allow_cpu_fallback" | "health_status" | "health_summary">,
+  localWorkerStatus: WorkerStatus | null,
+): WorkerStatusRollupResult {
+  const configuredBackendProbe = worker.worker_type === "local"
+    ? localWorkerStatus?.hardware_probes.find((item) => item.preference_key === worker.preferred_backend)
+    : null;
+
+  if (configuredBackendProbe) {
+    const backendHealth = configuredBackendProbe.status.toLowerCase();
+    const backendReason = configuredBackendProbe.reason_unavailable ?? configuredBackendProbe.message;
+    const attentionReason = backendReason ? trimSentencePunctuation(backendReason) : null;
+
+    if (backendHealth === "healthy") {
+      return {
+        badge: "healthy",
+        message: "The local worker is healthy and available.",
+        compactMessage: "Available",
+        attentionMessage: null,
+      };
+    }
+
+    if (backendHealth === "failed" || !configuredBackendProbe.usable_by_ffmpeg) {
+      if (worker.allow_cpu_fallback) {
+        return {
+          badge: "degraded",
+          message: `Primary backend failed. Falling back to CPU execution.${backendReason ? ` Reason: ${backendReason}` : ""}`,
+          compactMessage: "CPU fallback active",
+          attentionMessage: attentionReason
+            ? `Primary backend failed (Reason: ${attentionReason}). Worker is safely falling back to CPU execution.`
+            : "Primary backend failed. Worker is safely falling back to CPU execution.",
+        };
+      }
+
+      return {
+        badge: "failed",
+        message: "Primary backend failed and CPU fallback is disabled. Worker cannot execute jobs.",
+        compactMessage: "Cannot execute jobs",
+        attentionMessage: attentionReason
+          ? `Primary backend failed (Reason: ${attentionReason}). CPU fallback is disabled. Worker cannot execute jobs.`
+          : "Primary backend failed. CPU fallback is disabled. Worker cannot execute jobs.",
+      };
+    }
+  }
+
+  return {
+    badge: worker.health_status ?? "unknown",
+    message: worker.health_summary ?? "No health summary reported.",
+    compactMessage: worker.health_summary ?? "No summary reported",
+    attentionMessage: null,
+  };
+}
+
+function trimSentencePunctuation(value: string) {
+  return value.trim().replace(/[.!?]+$/, "");
 }
 
 function buildWorkerPrimaryIssues(detail: WorkerInventoryDetail, localWorkerStatus: WorkerStatus | null) {
@@ -1196,12 +1369,6 @@ function buildWorkerPrimaryIssues(detail: WorkerInventoryDetail, localWorkerStat
     );
     if (preferredProbe && !preferredProbe.usable_by_ffmpeg) {
       issues.add(preferredProbe.reason_unavailable ?? preferredProbe.message);
-    }
-    const missingRenderNode = localWorkerStatus.runtime_device_paths.find(
-      (item) => item.path.includes("/dev/dri/render") && item.status !== "healthy",
-    );
-    if (missingRenderNode) {
-      issues.add(missingRenderNode.message);
     }
   }
   return [...issues];
@@ -1231,4 +1398,30 @@ function formatBackendLabel(value: string | null | undefined) {
     amd_gpu: "AMD",
     prefer_amd_gpu: "AMD",
   }[value] ?? titleCase(value.replace(/_/g, " "));
+}
+
+function formatSelectedHardwareHint(hardwareHints: string[], preferredBackend: string | null | undefined) {
+  if (!preferredBackend || preferredBackend === "cpu_only" || preferredBackend === "cpu") {
+    return "CPU selected";
+  }
+  const selectedBackend = backendKeyForPreference(preferredBackend);
+  if (!selectedBackend) {
+    return formatBackendLabel(preferredBackend);
+  }
+  return hardwareHints.includes(selectedBackend)
+    ? formatBackendLabel(selectedBackend)
+    : `${formatBackendLabel(preferredBackend)} not reported`;
+}
+
+function backendKeyForPreference(value: string) {
+  switch (value) {
+    case "prefer_intel_igpu":
+      return "intel_igpu";
+    case "prefer_nvidia_gpu":
+      return "nvidia_gpu";
+    case "prefer_amd_gpu":
+      return "amd_gpu";
+    default:
+      return undefined;
+  }
 }

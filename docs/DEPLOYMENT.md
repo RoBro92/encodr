@@ -10,6 +10,19 @@
 - `install.sh` for a conservative fresh-LXC bootstrap path
 - `encodr` root/operator CLI for local health, update, admin reset, and mount validation
 
+## Release artifacts
+
+Live release tags publish two artifact types:
+
+- the GitHub release archive used by the installer and `encodr update --apply`
+- GHCR images for operators who want pinned images:
+  - `ghcr.io/robro92/encodr-api:<tag>`
+  - `ghcr.io/robro92/encodr-ui:<tag>`
+  - `ghcr.io/robro92/encodr-worker:<tag>`
+  - `ghcr.io/robro92/encodr-worker-agent:<tag>`
+
+Stable tags also publish `latest`. Production-like installs should prefer explicit tags such as `v0.3.5`.
+
 ## Storage assumptions
 
 - preferred model: mount NFS/SMB on the Proxmox host, then bind-mount into the LXC

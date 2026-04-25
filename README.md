@@ -32,6 +32,17 @@ The installer:
 
 You do not need to edit config files before first use.
 
+## Container Images
+
+Tagged release images are published to GitHub Container Registry for operators who want pinned container artifacts instead of local Compose builds:
+
+- `ghcr.io/robro92/encodr-api:<tag>`
+- `ghcr.io/robro92/encodr-ui:<tag>`
+- `ghcr.io/robro92/encodr-worker:<tag>`
+- `ghcr.io/robro92/encodr-worker-agent:<tag>`
+
+Stable releases also publish `latest`. Prefer an explicit version tag such as `v0.3.5` for live installs.
+
 ## Manual Install
 
 If you prefer to clone the repository first:

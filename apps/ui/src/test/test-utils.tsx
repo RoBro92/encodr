@@ -87,6 +87,15 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       );
     }
 
+    if (!route && method === "GET" && url.includes("/api/jobs/progress-stream")) {
+      return new Response("", {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+        },
+      });
+    }
+
     if (!route) {
       throw new Error(`Unhandled fetch request: ${method} ${url}`);
     }

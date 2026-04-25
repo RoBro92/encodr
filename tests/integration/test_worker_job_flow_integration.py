@@ -89,7 +89,11 @@ def test_worker_job_flow_fails_on_verification_and_preserves_original(
 
     assert loop.run_once() is True
     with session_factory() as session:
-        job = session.query(Job).one()
-        assert job.status == JobStatus.FAILED
-        assert job.tracked_file.lifecycle_state == FileLifecycleState.FAILED
+        jobs = session.query(Job).order_by(Job.created_at.asc()).all()
+        assert len(jobs) == 2
+        assert jobs[0].status == JobStatus.FAILED
+        assert jobs[1].status == JobStatus.SCHEDULED
+        assert jobs[1].attempt_count == 2
+        assert jobs[1].scheduled_for_at is not None
+        assert jobs[1].tracked_file.lifecycle_state == FileLifecycleState.QUEUED
     assert source_path.read_text(encoding="utf-8") == "original"

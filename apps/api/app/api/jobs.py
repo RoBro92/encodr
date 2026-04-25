@@ -1,12 +1,14 @@
 from __future__ import annotations
 
+import asyncio
+import json
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_config_bundle, get_local_worker_loop, get_session, require_admin_user
+from app.core.dependencies import get_config_bundle, get_local_worker_loop, get_session, get_session_factory, require_admin_user
 from app.schemas.jobs import (
     BatchJobCreateResponse,
     BatchJobItemResponse,
@@ -102,6 +104,43 @@ def list_jobs(
     )
 
 
+@router.get("/progress-stream")
+async def stream_job_progress(
+    request: Request,
+    session_factory=Depends(get_session_factory),
+    current_user: User = Depends(require_admin_user),
+) -> StreamingResponse:
+    del current_user
+
+    async def event_stream():
+        last_digest: str | None = None
+        while not await request.is_disconnected():
+            with session_factory() as session:
+                jobs = JobsService().list_jobs(session, limit=100)
+                payload = {
+                    "items": [
+                        json.loads(JobSummaryResponse.from_model(job).model_dump_json())
+                        for job in jobs
+                        if _is_progress_stream_candidate(job)
+                    ],
+                }
+            digest = json.dumps(payload, sort_keys=True)
+            if digest != last_digest:
+                last_digest = digest
+                yield f"event: jobs\ndata: {digest}\n\n"
+            await asyncio.sleep(1)
+
+    return StreamingResponse(
+        event_stream(),
+        media_type="text/event-stream",
+        headers={
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+
+
 @router.get("/{job_id}", response_model=JobDetailResponse)
 def get_job_detail(
     job_id: str,
@@ -123,6 +162,19 @@ def get_job_detail(
         return JobDetailResponse(**detail)
     except ApiServiceError as error:
         _raise_service_error(error)
+
+
+def _is_progress_stream_candidate(job) -> bool:
+    return job.status in {
+        JobStatus.PENDING,
+        JobStatus.SCHEDULED,
+        JobStatus.RUNNING,
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.INTERRUPTED,
+        JobStatus.MANUAL_REVIEW,
+        JobStatus.SKIPPED,
+    }
 
 
 @router.get("/{job_id}/artwork")

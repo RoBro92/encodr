@@ -26,11 +26,14 @@ class AnalyticsService:
 
     def overview(self, session: Session) -> AnalyticsOverviewResponse:
         repository = AnalyticsRepository(session)
+        processing = repository.summarise_processing_history()
         return AnalyticsOverviewResponse(
             total_tracked_files=repository.count_tracked_files(),
             files_by_lifecycle=self._count_items(repository.count_files_by_lifecycle()),
             files_by_compliance=self._count_items(repository.count_files_by_compliance()),
             total_jobs=repository.count_jobs(),
+            processed_file_count=processing.processed_file_count,
+            average_processed_per_day=processing.average_processed_per_day,
             jobs_by_status=self._count_items(repository.count_jobs_by_status()),
             plans_by_action=self._count_items(repository.count_plans_by_action()),
             verification_outcomes=self._count_items(repository.count_verification_outcomes()),
@@ -49,6 +52,7 @@ class AnalyticsService:
             total_output_size_bytes=summary.total_output_size_bytes,
             total_space_saved_bytes=summary.total_space_saved_bytes,
             average_space_saved_bytes=summary.average_space_saved_bytes,
+            average_space_saved_per_day_bytes=summary.average_space_saved_per_day_bytes,
             measurable_job_count=summary.measurable_job_count,
             measurable_completed_job_count=summary.measurable_completed_job_count,
             savings_by_action=[
@@ -81,6 +85,7 @@ class AnalyticsService:
 
     def media(self, session: Session) -> AnalyticsMediaResponse:
         repository = AnalyticsRepository(session)
+        processing = repository.summarise_processing_history()
         latest_probes = repository.list_latest_probe_snapshots()
         latest_plans = repository.list_latest_plan_snapshots()
 
@@ -127,6 +132,8 @@ class AnalyticsService:
         return AnalyticsMediaResponse(
             latest_probe_count=len(latest_probes),
             latest_plan_count=len(latest_plans),
+            total_audio_tracks_removed=processing.total_audio_tracks_removed,
+            total_subtitle_tracks_removed=processing.total_subtitle_tracks_removed,
             latest_probe_english_audio_count=english_audio_count,
             latest_probe_forced_english_subtitle_count=forced_subtitle_count,
             latest_plan_forced_subtitle_intent_count=forced_intent_count,
@@ -159,8 +166,26 @@ class AnalyticsService:
             overview=self.overview(session),
             storage=self.storage(session),
             outcomes=self.outcomes(session),
-            media=self.media(session),
+            media=self._dashboard_media(session),
             recent=self.recent(session),
+        )
+
+    def _dashboard_media(self, session: Session) -> AnalyticsMediaResponse:
+        repository = AnalyticsRepository(session)
+        processing = repository.summarise_processing_history()
+        return AnalyticsMediaResponse(
+            latest_probe_count=0,
+            latest_plan_count=0,
+            total_audio_tracks_removed=processing.total_audio_tracks_removed,
+            total_subtitle_tracks_removed=processing.total_subtitle_tracks_removed,
+            latest_probe_english_audio_count=0,
+            latest_probe_forced_english_subtitle_count=0,
+            latest_plan_forced_subtitle_intent_count=0,
+            latest_plan_surround_preservation_intent_count=0,
+            latest_plan_atmos_preservation_intent_count=0,
+            action_breakdown_by_resolution=[],
+            container_distribution=[],
+            video_codec_distribution=[],
         )
 
     def _count_items(self, counts: dict[str, int]) -> list[CountByValueResponse]:
