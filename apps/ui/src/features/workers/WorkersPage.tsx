@@ -128,6 +128,7 @@ export function WorkersPage() {
   const deleteWorkerMutation = useDeleteWorkerMutation();
 
   const [isAddWorkerOpen, setIsAddWorkerOpen] = useState(false);
+  const [isAddWorkerMenuOpen, setIsAddWorkerMenuOpen] = useState(false);
   const [addWorkerMode, setAddWorkerMode] = useState<AddWorkerMode>("choose");
   const [localDraft, setLocalDraft] = useState<WorkerPreferencePayload>(blankLocalDraft("This host"));
   const [remoteDraft, setRemoteDraft] = useState<RemoteWorkerOnboardingPayload>(blankRemoteDraft());
@@ -213,25 +214,19 @@ export function WorkersPage() {
     : null;
   const selectedRuntimeDevices = selectedHardwareBackendProbe?.device_paths ?? [];
 
+  function openAddWorker(mode: Exclude<AddWorkerMode, "choose">) {
+    setIsAddWorkerMenuOpen(false);
+    setIsAddWorkerOpen(true);
+    setAddWorkerMode(mode);
+    setOnboardingResult(null);
+  }
+
   return (
     <div className="page-stack">
       <PageHeader
         eyebrow="Workers"
         title="Workers"
         description="Add execution nodes, pair remote agents, and manage backend, concurrency, schedule, and storage access per worker."
-        actions={(
-          <button
-            className="button button-primary"
-            type="button"
-            onClick={() => {
-              setIsAddWorkerOpen(true);
-              setAddWorkerMode("choose");
-              setOnboardingResult(null);
-            }}
-          >
-            Add worker
-          </button>
-        )}
       />
 
       {enableMutation.error instanceof Error ? (
@@ -256,6 +251,29 @@ export function WorkersPage() {
       <SectionCard
         title="Worker inventory"
         subtitle={noWorkersConfigured ? "No workers configured yet." : `${workers.length} worker${workers.length === 1 ? "" : "s"} configured`}
+        actions={(
+          <div className="worker-add-menu">
+            <button
+              className="button button-primary button-small"
+              type="button"
+              aria-haspopup="menu"
+              aria-expanded={isAddWorkerMenuOpen}
+              onClick={() => setIsAddWorkerMenuOpen((current) => !current)}
+            >
+              + Add Worker
+            </button>
+            {isAddWorkerMenuOpen ? (
+              <div className="worker-add-menu-panel" role="menu">
+                <button type="button" role="menuitem" onClick={() => openAddWorker("local")}>
+                  Add Local Worker
+                </button>
+                <button type="button" role="menuitem" onClick={() => openAddWorker("remote")}>
+                  Add Remote Worker
+                </button>
+              </div>
+            ) : null}
+          </div>
+        )}
       >
         {noWorkersConfigured ? (
           <EmptyState

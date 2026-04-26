@@ -15,6 +15,7 @@ import {
   useCreateBatchJobsMutation,
   useCreateDryRunJobsMutation,
   useCreateWatchedJobMutation,
+  useFilesQuery,
   useJobsQuery,
   useLibraryRootsQuery,
   useScanFolderMutation,
@@ -307,7 +308,9 @@ export function FilesPage() {
   const activeRootWatcher = activeLibrary.kind === "root" ? activeLibrary.watcher : null;
   const activeLibraryPath = activeLibrary.path;
   const activeLibrarySavedPath = activeLibrary.savedPath;
+  const activeLibraryScopePath = activeLibraryPath.trim() || activeLibrarySavedPath || undefined;
   const activeLibraryWatcher = activeLibrary.kind === "watcher" ? activeLibrary.watcher : activeRootWatcher;
+  const activeFileCountQuery = useFilesQuery({ path_prefix: activeLibraryScopePath, limit: 0 });
   const activeLibraryMonitoringEnabled = activeLibrary.kind === "root" ? rootMonitoringEnabled : activeLibrary.draft.enabled;
   const activeLibraryPollingSchedule =
     activeLibrary.kind === "root"
@@ -362,6 +365,7 @@ export function FilesPage() {
     () => new Set(scopedScans.flatMap((scan) => scan.files.map((file) => file.path))).size,
     [scopedScans],
   );
+  const persistedDiscoveredFileCount = Math.max(activeFileCountQuery.data?.total ?? 0, discoveredFileCount);
   const processedJobCount = scopedJobs.filter((job) => ["completed", "skipped"].includes(job.status)).length;
   const pendingProcessingCount = scopedJobs.filter((job) =>
     ["pending", "scheduled", "running"].includes(job.status),
@@ -700,7 +704,19 @@ export function FilesPage() {
     }
   }
 
-  async function startInitialProcessing() {
+  async function scanLibrary() {
+    const path = activeLibraryPath.trim() || activeLibrarySavedPath;
+    if (!path) {
+      return;
+    }
+    setSelectedFolder(path);
+    setSelectedPaths([]);
+    setActiveTab("scan");
+    const scan = await scanMutation.mutateAsync({ source_path: path });
+    setActiveScanDraft(scan);
+  }
+
+  async function processQueue() {
     const path = activeLibraryPath.trim() || activeLibrarySavedPath;
     if (!path) {
       return;
@@ -708,9 +724,7 @@ export function FilesPage() {
     setSelectedFolder(path);
     setSelectedPaths([]);
     setActiveTab("batch-plan");
-    const scan = await scanMutation.mutateAsync({ source_path: path });
-    setActiveScanDraft(scan);
-    await batchJobsMutation.mutateAsync({ folder_path: path });
+    await batchJobsMutation.mutateAsync({ folder_path: path, summary_only: true });
   }
 
   function openWatcherDraft(item?: WatchedJob) {
@@ -969,17 +983,27 @@ export function FilesPage() {
               <button
                 className="button button-primary"
                 type="button"
-                onClick={() => void startInitialProcessing()}
-                disabled={!activeLibraryPath.trim() || scanMutation.isPending || batchJobsMutation.isPending}
+                onClick={() => void scanLibrary()}
+                disabled={!activeLibraryPath.trim() || scanMutation.isPending}
               >
-                {scanMutation.isPending || batchJobsMutation.isPending ? "Starting…" : "Start Initial Processing"}
+                {scanMutation.isPending ? "Scanning…" : "Scan Library"}
               </button>
+              {persistedDiscoveredFileCount > 0 ? (
+                <button
+                  className="button button-secondary"
+                  type="button"
+                  onClick={() => void processQueue()}
+                  disabled={!activeLibraryPath.trim() || batchJobsMutation.isPending}
+                >
+                  {batchJobsMutation.isPending ? "Queueing…" : "Process Queue"}
+                </button>
+              ) : null}
             </div>
 
             <div className="library-processing-stats">
               <div className="library-processing-stat">
                 <span className="metric-label">Total Files Discovered</span>
-                <strong>{discoveredFileCount}</strong>
+                <strong>{persistedDiscoveredFileCount}</strong>
               </div>
               <div className="library-processing-stat">
                 <span className="metric-label">Successfully Processed</span>

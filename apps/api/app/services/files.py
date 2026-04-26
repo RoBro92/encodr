@@ -48,6 +48,26 @@ class FilesService:
             offset=offset,
         )
 
+    def count_files(
+        self,
+        session: Session,
+        *,
+        lifecycle_state: FileLifecycleState | None = None,
+        compliance_state: ComplianceState | None = None,
+        protected_only: bool | None = None,
+        path_prefix: str | None = None,
+        path_search: str | None = None,
+        is_4k: bool | None = None,
+    ) -> int:
+        return TrackedFileRepository(session).count_files(
+            lifecycle_state=lifecycle_state,
+            compliance_state=compliance_state,
+            protected_only=protected_only,
+            path_prefix=path_prefix,
+            path_search=path_search,
+            is_4k=is_4k,
+        )
+
     def get_file(self, session: Session, *, file_id: str) -> TrackedFile:
         tracked_file = TrackedFileRepository(session).get_by_id(file_id)
         if tracked_file is None:
