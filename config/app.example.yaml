@@ -22,7 +22,7 @@ app:
     password_hash_scheme: argon2id
     access_token_algorithm: HS256
   database:
-    dsn: postgresql+psycopg://encodr:encodr-dev-password@postgres:5432/encodr
+    dsn: postgresql+psycopg://encodr:change-me-before-production@postgres:5432/encodr
   redis:
     url: redis://redis:6379/0
   media:

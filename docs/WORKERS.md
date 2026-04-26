@@ -1,126 +1,84 @@
 # Workers
 
-Encodr is the control plane. Workers are execution nodes.
+Encodr is the control plane. Workers are execution nodes that run dry-run analysis and processing jobs.
 
-There are two worker categories:
+Worker types:
 
-- local worker: the same LXC/VM and Docker stack as the Encodr server
-- remote workers: separate external machines paired back to Encodr
+- local worker: runs in the same Docker stack as Encodr
+- remote worker: runs as a paired background agent on another host
 
-Remote workers run as service/agent processes. Encodr does not require desktop applications for worker hosts.
+## Local Worker
 
-## Local worker
+The local worker is not assumed to be ready just because Encodr is installed. Add it from the Workers page with `Add this host as worker`.
 
-The local worker is optional.
+The local worker uses the stack's `/media` and `/temp` paths. Configure its backend preference, CPU fallback, concurrency, and schedule in Workers.
 
-Encodr does not treat the current host as a ready worker by default. An operator must explicitly enable it from the Workers page with:
+For Intel iGPU/VAAPI, the host and worker container must both see `/dev/dri`. Encodr validates the actual worker runtime with `vainfo` and an FFmpeg VAAPI smoke test before marking the Intel path usable.
 
-- `Add this host as worker`
+## Remote Workers
 
-When enabled, the local worker:
-
-- runs inside the same Encodr stack/runtime as the server
-- uses the same mounted media and scratch paths
-- can be enabled or disabled without being forgotten
-- has its own preferred backend and CPU fallback policy
-
-### Intel iGPU requirements
-
-Intel iGPU support is now validated conservatively through the worker runtime, not just by checking whether FFmpeg lists encoders.
-
-For Intel VAAPI to be considered usable:
-
-- the LXC or VM must expose `/dev/dri`
-- the worker container must also see `/dev/dri`
-- the worker image must include the Intel VAAPI userspace runtime packages on Intel-capable Debian targets:
-  - `vainfo`
-  - `intel-media-va-driver`
-  - `libva2`
-  - `libva-drm2`
-  - `mesa-va-drivers`
-- `LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128` must succeed inside the worker runtime
-- a short FFmpeg VAAPI encode smoke test must also succeed inside the worker runtime
-
-Encodr does not depend on `intel-media-va-driver-non-free`.
-
-Expected validation commands inside the worker container:
-
-```bash
-encodr compose-config | grep /dev/dri
-docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml exec worker sh -lc \
-  'LIBVA_DRIVER_NAME=iHD vainfo --display drm --device /dev/dri/renderD128'
-docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml exec worker sh -lc \
-  'LIBVA_DRIVER_NAME=iHD ffmpeg -hide_banner -vaapi_device /dev/dri/renderD128 -f lavfi -i testsrc2=size=1280x720:rate=30 -t 3 -vf "format=nv12,hwupload" -c:v h264_vaapi -f null -'
-```
-
-If Intel VAAPI is not usable, Encodr now surfaces a specific reason such as:
-
-- device missing
-- permission denied
-- Intel driver missing
-- `vainfo` missing
-- VAAPI init failed
-- FFmpeg VAAPI encode test failed
-
-If the local worker is not configured, the Workers page shows that clearly and the local execution loop does not take jobs.
-
-## Remote workers
-
-Remote workers only appear when they are real:
-
-- pending pairing
-- registered
-- healthy/degraded/offline
-- disabled
-
-Encodr does not create fake remote placeholders.
-
-Use the Workers page action:
-
-- `Add remote worker`
-
-This generates a platform-specific bootstrap command for:
+Remote workers pair from the Workers page with `Add remote worker`. Encodr generates a platform-specific bootstrap command for:
 
 - Windows
 - Linux
 - macOS
 
-The bootstrap command installs the worker agent, stores the server URL and pairing token, and starts the background service/agent.
+The bootstrap command installs the worker agent, stores the server URL and pairing token, registers the worker, validates its first heartbeat, and starts a background service.
 
-## Per-worker backend preference
+Default install locations:
 
-Backend preference is configured per worker, not as a system-wide worker setting.
+- Windows: `C:\ProgramData\EncodrWorker`
+- Linux/macOS: `/opt/encodr-worker`
+
+Windows uses a Scheduled Task. Linux uses `systemd`. macOS uses `launchd`.
+
+## Shared Storage And Path Mappings
+
+Remote execution assumes the worker can access the same media through shared storage. If the server sees a file as `/media/Movies/File.mkv` but the worker sees it as `M:\Movies\File.mkv` or `/mnt/media/Movies/File.mkv`, configure a path mapping on that worker.
+
+Each mapping has:
+
+- server path
+- worker path
+- optional label
+- validation status and message once the worker reports runtime data
+
+Encodr uses these mappings for assignment and execution assumptions. It does not copy full media files to remote workers.
+
+## Backend Preferences
 
 Each worker can set:
 
 - preferred backend
 - CPU fallback allowed
-- enabled/disabled
+- concurrency
+- schedule windows
+- scratch path
+- enabled/disabled state
 - display label
 
-Supported backend preferences are:
+Supported backend preferences:
 
 - `cpu_only`
 - `prefer_intel_igpu`
 - `prefer_nvidia_gpu`
 - `prefer_amd_gpu`
 
-Encodr only advertises and uses hardware paths that are actually present and usable by FFmpeg in that worker's runtime.
+Encodr only assigns jobs to workers that are enabled, compatible, and within schedule unless the operator explicitly overrides scheduling for a dry run.
 
-For Intel in this release line:
+## Dry Runs And Scheduling
 
-- VAAPI is the validated Intel path
-- QSV remains deliberately unverified unless a separate production-grade QSV smoke test is introduced
+Dry runs are background worker jobs. They can be queued, assigned, scheduled, and reviewed like other jobs, but they do not modify media.
 
-## Worker states
+Watched jobs can scan source paths, stage or queue new work, and respect ruleset, worker, backend, and schedule preferences. Duplicate prevention is conservative so watched folders do not repeatedly queue the same file.
 
-The UI and API use explicit, truthful worker states. Examples include:
+## Worker States
 
-- `local_not_configured`
+Worker inventory uses explicit states such as:
+
 - `local_configured_disabled`
 - `local_healthy`
 - `local_degraded`
-- `local_unavailable`
 - `remote_pending_pairing`
 - `remote_registered`
 - `remote_healthy`
@@ -128,16 +86,26 @@ The UI and API use explicit, truthful worker states. Examples include:
 - `remote_offline`
 - `remote_disabled`
 
-These states are intended to answer:
+The state should tell you whether the worker exists, whether it is enabled, whether it can take work, and why not.
 
-- is this worker real?
-- is it configured?
-- can it actually take work?
-- if not, why not?
+## Uninstall
+
+Deleting a remote worker in Encodr revokes its server-side token and shows a standalone uninstall command for the target host.
+
+Default uninstall commands:
+
+```bash
+sudo /opt/encodr-worker/uninstall-worker-agent.sh
+```
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File "C:\ProgramData\EncodrWorker\uninstall-worker-agent.ps1"
+```
+
+Run the command on the worker host to remove the local service and files.
 
 ## Notes
 
-- Dry runs remain planning only. They are not worker execution.
-- Protected files and manual-review items still follow the same safety rules.
-- Assignment remains conservative: only enabled and compatible workers receive work.
-- Windows is the first documented remote worker target. Linux/macOS bootstrap generation exists, but wider packaging remains follow-on work.
+- Protected files and manual-review items still require explicit operator action.
+- Remote workers need reliable network access to the API and shared storage.
+- Windows is the most documented remote target; Linux and macOS bootstrap exists, but real-host validation should still be done before relying on them.

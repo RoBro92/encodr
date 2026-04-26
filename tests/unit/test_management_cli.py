@@ -349,14 +349,14 @@ def test_command_addhost_updates_env_and_recreates_stack(
     monkeypatch.setattr(subprocess, "run", fake_run)
 
     result = encodr_cli.command_addhost(
-        argparse.Namespace(project_root=str(project_root), host="encodr.stonewallmedia.co.uk"),
+        argparse.Namespace(project_root=str(project_root), host="encodr.example.test"),
     )
 
     output = capsys.readouterr().out
     assert result == 0
-    assert "Added encodr.stonewallmedia.co.uk to ENCODR_UI_ALLOWED_HOSTS." in output
+    assert "Added encodr.example.test to ENCODR_UI_ALLOWED_HOSTS." in output
     env_contents = (project_root / ".env").read_text(encoding="utf-8")
-    assert "ENCODR_UI_ALLOWED_HOSTS=localhost,127.0.0.1,encodr.stonewallmedia.co.uk" in env_contents
+    assert "ENCODR_UI_ALLOWED_HOSTS=localhost,127.0.0.1,encodr.example.test" in env_contents
     assert recorded == [["docker", "compose", "-f", "docker-compose.yml", "up", "-d", "--force-recreate"]]
 
 
@@ -661,10 +661,9 @@ def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:
     readme = (repo_root / "README.md").read_text(encoding="utf-8")
 
     assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash" in readme
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair" in readme
-    assert "curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh" in readme
-    assert "latest tagged release by default" in readme
-    assert "encodr update" in readme
+    assert "[docs/INSTALL.md](docs/INSTALL.md)" in readme
+    assert "encodr update-check" in readme
+    assert "encodr update --apply" in readme
 
 
 def test_install_docs_match_root_friendly_installer_command(repo_root: Path) -> None:
@@ -703,6 +702,40 @@ def test_install_script_normalises_host_config_paths_in_env(
     assert f"ENCODR_APP_CONFIG_FILE={tmp_path}/config/app.yaml" in result.stdout
     assert f"ENCODR_POLICY_CONFIG_FILE={tmp_path}/config/policy.yaml" in result.stdout
     assert f"ENCODR_WORKERS_CONFIG_FILE={tmp_path}/config/workers.yaml" in result.stdout
+
+
+def test_install_script_syncs_generated_postgres_password_to_app_config(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    env_file = tmp_path / ".env"
+    config_dir = tmp_path / "config"
+    app_config = config_dir / "app.yaml"
+    config_dir.mkdir(parents=True)
+    env_file.write_text(
+        "POSTGRES_DB=encodr\n"
+        "POSTGRES_USER=encodr\n"
+        "POSTGRES_PASSWORD=strong-generated-password\n",
+        encoding="utf-8",
+    )
+    app_config.write_text(
+        "app:\n"
+        "  database:\n"
+        "    dsn: postgresql+psycopg://encodr:change-me-before-production@postgres:5432/encodr\n",
+        encoding="utf-8",
+    )
+
+    result = run_install_shell(
+        repo_root,
+        (
+            f"INSTALL_ROOT='{tmp_path}'; "
+            "sync_database_dsn_with_env; "
+            f"cat '{app_config}'"
+        ),
+    )
+
+    assert result.returncode == 0
+    assert "postgresql+psycopg://encodr:strong-generated-password@postgres:5432/encodr" in result.stdout
 
 
 def test_install_script_adds_detected_network_ips_to_ui_allowlist(

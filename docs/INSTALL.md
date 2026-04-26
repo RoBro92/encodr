@@ -1,37 +1,38 @@
 # Install
 
-## Recommended one-command install
+## One-Command Install
 
-For a Debian LXC or Linux VM, run:
+Run the installer as root on a Debian LXC or Linux VM:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash
 ```
 
+The remote installer installs the latest tagged release by default.
+
 The installer will:
 
 - install required system packages, Docker, and the Docker Compose plugin if missing
 - install Encodr into `/opt/encodr`
-- create `.env` and default config automatically
-- generate local secrets if they are still placeholders
-- start the stack
-- verify health with `encodr doctor`
-- print the local URL, detected IP addresses, and next steps
-- install the latest tagged release by default
+- create `.env` and default config from examples
+- generate local auth, worker-registration, and database secrets when placeholders are present
 - create `/media` and `/temp` if they do not already exist
-- leave the local worker disabled until you explicitly enable it
+- generate runtime Docker Compose overrides for detected hardware
+- start the stack
+- run `encodr doctor`
+- print the local UI URL and next steps
 
-No manual config editing is required before first use.
+No config editing is required before the first start.
 
-To install a specific release instead:
+To install a specific release:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --version <tag>
 ```
 
-## Manual install
+## Manual Checkout
 
-If you want to inspect the checkout first:
+To inspect the release first:
 
 ```bash
 git clone https://github.com/RoBro92/encodr.git
@@ -39,69 +40,70 @@ cd encodr
 ./install.sh
 ```
 
-## After install
+## First Run
 
-1. open the web UI
-2. create the first admin user if prompted
-3. confirm storage access on the System page
-4. run `encodr mount-setup --validate-only`
-5. run `encodr doctor` or `encodr status`
-6. probe and plan a test file before touching a real library
-7. if you want this host to execute jobs, open Workers and choose `Add this host as worker`
-8. if you want external execution nodes, generate a remote bootstrap command from Workers
+1. Open the web UI.
+2. Create the first admin user.
+3. Confirm `/media` and `/temp` on the System page.
+4. Run `encodr mount-setup --validate-only`.
+5. Run `encodr doctor` or `encodr status`.
+6. Add a local or remote worker from Workers.
+7. Run a dry run against disposable or representative media before queueing real work.
 
-If you are enabling Intel iGPU acceleration for the local worker:
+## Storage
 
-- the LXC or VM must expose `/dev/dri`
-- the worker container must also see `/dev/dri`
-- Encodr will validate Intel VAAPI inside the worker runtime with `vainfo` and an FFmpeg VAAPI smoke test before treating the Intel path as usable
-- Encodr-managed compose commands include `.runtime/compose.runtime.yml` automatically when it exists
+Encodr uses `/media` as the standard in-stack media root and `/temp` as the standard scratch workspace. The installer creates both paths if missing, but real processing should wait until `/media` is mounted and writable and `/temp` points at suitable scratch storage.
 
-Encodr expects:
-
-- `/media` as the standard library mount
-- `/temp` as the transcode scratch workspace inside the containers
-
-If `/media` or `/temp` exist but do not look like the mounts you expected, the System page and `encodr doctor` will warn clearly.
-
-To verify what Compose sees after runtime hardware detection:
+Validation:
 
 ```bash
-encodr compose-config | grep /dev/dri
+encodr mount-setup --validate-only
 ```
 
-If you are debugging by hand instead of using the Encodr CLI, include the runtime override explicitly:
+Host-side guidance examples:
 
 ```bash
-docker compose -f docker-compose.yml -f .runtime/compose.runtime.yml config | grep /dev/dri
+encodr mount-setup --type nfs --host-source nfs-server.example:/share
+encodr mount-setup --type smb --host-source //fileserver.example/share
 ```
 
-## Re-running the installer
+## Repair Or Reinstall
 
-If an existing install is found, the installer will stop and ask what to do. It will not repair automatically.
+If an existing install is found, the installer stops and asks what to do.
 
-For a non-interactive repair run:
+Repair in place:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --repair
 ```
 
-For a destructive fresh reinstall:
+Destructive fresh reinstall:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/RoBro92/encodr/main/install.sh | bash -s -- --fresh --force-fresh
 ```
 
-Fresh reinstall removes the Encodr install tree, generated config, runtime state, and local database volumes before reinstalling.
+Fresh reinstall removes the install tree, generated config, runtime state, and local database volumes before reinstalling.
 
-For normal upgrades after install, prefer:
+## Updates
+
+Check for updates:
 
 ```bash
-encodr update
+encodr update-check
+```
+
+Apply an update:
+
+```bash
 encodr update --apply
 ```
 
-See also:
+Updates preserve local runtime files such as `.env`, `.runtime`, config, and live database volumes, then rebuild/restart the Docker stack and run health checks. Automatic rollback is not implemented, so run `encodr doctor` after updates if you want an extra manual check.
 
+## Links
+
+- [Deployment](./DEPLOYMENT.md)
 - [Workers](./WORKERS.md)
-- [Windows Worker Setup](./WINDOWS_WORKER_SETUP.md)
+- [Security](./SECURITY.md)
+- [Known limitations](./KNOWN_LIMITATIONS.md)

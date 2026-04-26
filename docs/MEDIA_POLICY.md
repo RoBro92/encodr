@@ -1,58 +1,65 @@
 # Media Policy
 
-## Intent
+Encodr uses explicit processing rules to decide what should happen to a file. Rules are deterministic and operator-visible, so the same file and ruleset should produce the same plan.
 
-Policy is YAML-driven, explicit, and deterministic. The same file under the same policy version and profile context should always produce the same planning result.
+## Rulesets
 
-## Non-4K behaviour
+Current user-facing rulesets:
 
-- non-4K files may be skipped, remuxed, transcoded, or sent to manual review
-- `skip` is used only when the file already appears compliant
-- `remux` is used when container or stream clean-up is sufficient
-- `transcode` is used when codec/video policy requires it
-- ambiguous or low-confidence cases fall back to manual review
+- Movies
+- Movies 4K
+- TV
+- TV 4K
 
-## 4K behaviour
+Rules cover languages, subtitle handling, surround/Atmos preservation, codecs, containers, 4K handling, compression safety, and output behaviour.
 
-- 4K defaults are conservative
+## Decisions
+
+Plans can result in:
+
+- `skip`
+- `remux`
+- `transcode`
+- `manual_review`
+
+Low-confidence, ambiguous, protected, or unsafe cases should go to manual review rather than being processed automatically.
+
+## Non-4K Defaults
+
+Non-4K files may be skipped, remuxed, transcoded, or sent to manual review. `skip` is used only when the file already appears compliant. `remux` is used when container or stream cleanup is enough. `transcode` is used when video policy requires it.
+
+Compression safety is based on video-size reduction, not savings produced only by stripping audio or subtitles.
+
+## 4K Defaults
+
+4K defaults are conservative:
+
 - preserve original video
-- preserve remaining selected English audio
-- preserve selected English subtitles
-- strip non-English audio/subtitles where policy says so
+- preserve selected English audio and subtitles
+- strip non-English audio/subtitles where rules allow
 - do not transcode 4K under the default strip-only mode
-- if 4K expectations cannot be satisfied confidently, require manual review
+- require manual review when expectations cannot be satisfied confidently
 
-## Audio rules
+HDR, Dolby Vision-like, Atmos-capable, and preserve-oriented files may be marked protected.
 
-- keep preferred-language audio, currently English by default
-- preserve the best surround-capable English track where possible
-- preserve Atmos-capable English audio where visible
-- preserve 7.1 over 5.1 where practical
-- remove commentary-ish tracks by default unless policy says otherwise
-- if no acceptable English audio exists, route to manual review
+## Audio And Subtitles
 
-## Subtitle rules
+Defaults prefer English audio and subtitles. Encodr preserves forced English subtitles, keeps preferred-language tracks according to policy, and preserves stronger surround/Atmos-capable audio where visible.
 
-- keep forced English subtitles
-- keep one main English subtitle when policy says so
-- keep English hearing-impaired subtitles only when policy says so
-- remove non-English subtitles by default
-- ambiguous forced-subtitle cases can trigger warnings or manual review
+Commentary, hearing-impaired subtitles, undetermined languages, and ambiguous forced-subtitle metadata are handled conservatively and may create warnings or manual review.
 
-## Output and replacement
+## Dry Runs
 
-- MKV is the default output container
-- output is staged to scratch first
-- ffmpeg success is not final success
-- final success requires verification plus successful placement back into the source directory
-- original deletion remains conservative and policy-driven
+Dry runs analyse files through the planning path without modifying media. Use dry runs before enabling watched jobs or queueing work across a real library.
 
-## Manual review and protection
+## Output And Replacement
 
-- files with missing acceptable English audio, ambiguous subtitle metadata, low confidence, or planner protection flags enter manual review
-- 4K/HDR/DV-like/Atmos-capable or preserve-oriented files can be marked protected
-- protected/manual-review items require explicit operator action before processing continues
+Processing writes to scratch first. FFmpeg success is not final success. A job is only successful after staged output is verified and placement/replacement succeeds.
 
-## Current limitation
+Original deletion remains conservative and policy-driven.
 
-The policy model includes rename templates, but advanced rich rename generation is still limited. Current placement remains conservative and source-name oriented unless later milestones extend naming further.
+## Current Caveats
+
+- rich rename execution is still limited even though rename templates exist
+- external artwork integration is not a full metadata/artwork system
+- hardware-specific processing should be validated on the real worker host before relying on it
