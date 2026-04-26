@@ -96,7 +96,8 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       });
     }
 
-    if (!route && method === "GET" && url.includes("/api/files")) {
+    const parsedUrl = new URL(url, "http://localhost");
+    if (!route && method === "GET" && parsedUrl.pathname === "/api/files") {
       return new Response(JSON.stringify({ items: [], limit: 0, offset: 0, total: 0 }), {
         status: 200,
         headers: {

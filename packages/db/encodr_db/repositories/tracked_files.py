@@ -13,6 +13,23 @@ from encodr_core.planning.enums import PlanAction
 from encodr_db.models import ComplianceState, FileLifecycleState, Job, JobStatus, PlanSnapshot, ProbeSnapshot, TrackedFile
 
 
+def _normalize_path_prefix(path_prefix: str) -> str:
+    cleaned = Path(path_prefix.strip().replace("\\", "/")).as_posix()
+    while len(cleaned) > 1 and cleaned.endswith("/"):
+        cleaned = cleaned[:-1]
+    return cleaned
+
+
+def _source_path_within_prefix(path_prefix: str):
+    cleaned = _normalize_path_prefix(path_prefix)
+    if cleaned == "/":
+        return TrackedFile.source_path.startswith("/")
+    return or_(
+        TrackedFile.source_path == cleaned,
+        TrackedFile.source_path.startswith(f"{cleaned}/"),
+    )
+
+
 class TrackedFileRepository:
     def __init__(self, session: Session) -> None:
         self.session = session
@@ -84,7 +101,7 @@ class TrackedFileRepository:
         if protected_only is False:
             query = query.where(TrackedFile.is_protected.is_(False))
         if path_prefix:
-            query = query.where(TrackedFile.source_path.startswith(path_prefix))
+            query = query.where(_source_path_within_prefix(path_prefix))
         if path_search:
             query = query.where(TrackedFile.source_path.ilike(f"%{path_search}%"))
         if is_4k is not None:
@@ -115,7 +132,7 @@ class TrackedFileRepository:
         if protected_only is False:
             query = query.where(TrackedFile.is_protected.is_(False))
         if path_prefix:
-            query = query.where(TrackedFile.source_path.startswith(path_prefix))
+            query = query.where(_source_path_within_prefix(path_prefix))
         if path_search:
             query = query.where(TrackedFile.source_path.ilike(f"%{path_search}%"))
         if is_4k is not None:
