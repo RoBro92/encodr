@@ -33,6 +33,7 @@ class CreateBatchJobsRequest(BaseModel):
     pinned_worker_id: str | None = None
     preferred_backend_override: str | None = None
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
+    summary_only: bool = False
 
     @model_validator(mode="after")
     def validate_scope(self) -> "CreateBatchJobsRequest":

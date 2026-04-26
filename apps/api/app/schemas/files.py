@@ -245,6 +245,7 @@ class FileListResponse(BaseModel):
     items: list[TrackedFileSummaryResponse]
     limit: int | None = None
     offset: int = 0
+    total: int = 0
 
 
 class ProbeFileResponse(BaseModel):

@@ -753,6 +753,7 @@ export function useScanFolderMutation() {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["library", "scans"] }),
         queryClient.invalidateQueries({ queryKey: ["library", "watchers"] }),
+        queryClient.invalidateQueries({ queryKey: ["files"] }),
       ]);
     },
   });

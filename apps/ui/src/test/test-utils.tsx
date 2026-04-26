@@ -96,6 +96,15 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       });
     }
 
+    if (!route && method === "GET" && url.includes("/api/files")) {
+      return new Response(JSON.stringify({ items: [], limit: 0, offset: 0, total: 0 }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     if (!route) {
       throw new Error(`Unhandled fetch request: ${method} ${url}`);
     }

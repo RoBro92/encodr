@@ -98,6 +98,7 @@ export type FileListResponse = {
   items: FileSummary[];
   limit: number | null;
   offset: number;
+  total: number;
 };
 
 export type ProbeFileResponse = {
@@ -928,6 +929,7 @@ export type CreateBatchJobsPayload = FileSelectionPayload & {
   pinned_worker_id?: string | null;
   preferred_backend_override?: string | null;
   schedule_windows?: ScheduleWindow[];
+  summary_only?: boolean;
 };
 
 export type CountByValue = {

@@ -105,6 +105,15 @@ def list_files(
         items=[TrackedFileSummaryResponse.from_model(item) for item in tracked_files],
         limit=limit,
         offset=offset,
+        total=files_service.count_files(
+            session,
+            lifecycle_state=lifecycle_state,
+            compliance_state=compliance_state,
+            protected_only=protected_only,
+            path_prefix=path_prefix,
+            path_search=path_search,
+            is_4k=is_4k,
+        ),
     )
 
 

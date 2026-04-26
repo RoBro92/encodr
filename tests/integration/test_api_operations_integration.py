@@ -747,6 +747,17 @@ def test_scan_and_dry_run_folder_workflows_return_clear_summary_data(
     assert scan_payload["likely_episode_count"] == 1
     assert {item["path"] for item in scan_payload["files"]} == {episode_path.as_posix(), film_path.as_posix()}
 
+    files_response = context.client.get(
+        "/api/files",
+        params={"path_prefix": (layout.source_dir / "TV").as_posix(), "limit": 0},
+        headers=auth.headers,
+    )
+
+    assert files_response.status_code == 200
+    files_payload = files_response.json()
+    assert files_payload["total"] == 2
+    assert files_payload["items"] == []
+
     dry_run_response = context.client.post(
         "/api/files/dry-run",
         json={"folder_path": (layout.source_dir / "TV").as_posix()},
@@ -761,9 +772,26 @@ def test_scan_and_dry_run_folder_workflows_return_clear_summary_data(
     assert all(item["action"] == "skip" for item in dry_run_payload["items"])
 
     with session_factory() as session:
-        assert session.query(TrackedFile).count() == 0
+        assert session.query(TrackedFile).count() == 2
         assert session.query(ProbeSnapshot).count() == 0
         assert session.query(PlanSnapshot).count() == 0
+
+
+def test_fresh_setup_state_does_not_auto_register_local_worker(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, _layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+    bundle.app.data_dir.mkdir(parents=True, exist_ok=True)
+    (bundle.app.data_dir / "setup-state.json").write_text(json.dumps({"setup": "complete"}), encoding="utf-8")
+
+    response = context.client.get("/api/worker/status", headers=auth.headers)
+
+    assert response.status_code == 200
+    with session_factory() as session:
+        assert WorkerRepository(session).list_workers() == []
 
 
 def test_folder_browse_uses_the_active_media_root_for_parent_navigation(

@@ -17,7 +17,7 @@ from app.services.library import LibraryService
 from app.services.plans import PlansService
 from encodr_core.config import ConfigBundle
 from encodr_db.models import JobStatus, WorkerType
-from encodr_db.repositories import JobRepository, ScanRecordRepository, WatchedJobRepository, WorkerRepository
+from encodr_db.repositories import JobRepository, ScanRecordRepository, TrackedFileRepository, WatchedJobRepository, WorkerRepository
 from encodr_db.runtime import worker_is_dispatchable
 from encodr_shared.scheduling import next_schedule_opening, normalise_schedule_windows, schedule_windows_allow_now, schedule_windows_summary
 
@@ -87,6 +87,21 @@ class OrchestrationService:
             likely_film_count=int(summary["likely_film_count"]),
             files_payload=list(summary["files"]),
         )
+        tracked_files = TrackedFileRepository(session)
+        for file_payload in summary["files"]:
+            source = Path(str(file_payload["path"]))
+            try:
+                stat_result = source.stat()
+                observed_modified_at = datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc)
+                observed_size = stat_result.st_size
+            except OSError:
+                observed_modified_at = None
+                observed_size = int(file_payload["size_bytes"]) if file_payload.get("size_bytes") is not None else None
+            tracked_files.upsert_by_path(
+                source,
+                last_observed_size=observed_size,
+                last_observed_modified_time=observed_modified_at,
+            )
         return self._scan_record_payload(record)
 
     def list_watched_jobs(self, session: Session) -> list[dict[str, object]]:

@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Select, desc, or_, select
+from sqlalchemy import Select, desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from encodr_core.execution import ExecutionResult
@@ -22,6 +22,7 @@ class TrackedFileRepository:
         source_path: Path | str,
         *,
         media_file: MediaFile | None = None,
+        last_observed_size: int | None = None,
         last_observed_modified_time: datetime | None = None,
         fingerprint_placeholder: str | None = None,
     ) -> TrackedFile:
@@ -43,6 +44,8 @@ class TrackedFileRepository:
         tracked_file.source_extension = resolved_path.suffix.lower().lstrip(".") or None
         tracked_file.source_directory = resolved_path.parent.as_posix()
         tracked_file.fingerprint_placeholder = fingerprint_placeholder
+        if last_observed_size is not None:
+            tracked_file.last_observed_size = last_observed_size
         if last_observed_modified_time is not None:
             tracked_file.last_observed_modified_time = last_observed_modified_time
         if media_file is not None:
@@ -91,6 +94,33 @@ class TrackedFileRepository:
         if limit is not None:
             query = query.limit(limit)
         return list(self.session.scalars(query))
+
+    def count_files(
+        self,
+        *,
+        lifecycle_state: FileLifecycleState | None = None,
+        compliance_state: ComplianceState | None = None,
+        protected_only: bool | None = None,
+        path_prefix: str | None = None,
+        path_search: str | None = None,
+        is_4k: bool | None = None,
+    ) -> int:
+        query = select(TrackedFile.id)
+        if lifecycle_state is not None:
+            query = query.where(TrackedFile.lifecycle_state == lifecycle_state)
+        if compliance_state is not None:
+            query = query.where(TrackedFile.compliance_state == compliance_state)
+        if protected_only is True:
+            query = query.where(TrackedFile.is_protected.is_(True))
+        if protected_only is False:
+            query = query.where(TrackedFile.is_protected.is_(False))
+        if path_prefix:
+            query = query.where(TrackedFile.source_path.startswith(path_prefix))
+        if path_search:
+            query = query.where(TrackedFile.source_path.ilike(f"%{path_search}%"))
+        if is_4k is not None:
+            query = query.where(TrackedFile.is_4k.is_(is_4k))
+        return int(self.session.scalar(select(func.count()).select_from(query.subquery())) or 0)
 
     def list_review_candidates(self) -> list[TrackedFile]:
         failed_job = aliased(Job)

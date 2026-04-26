@@ -313,36 +313,46 @@ def create_batch_jobs(
             folder_path=payload.folder_path,
             selected_paths=payload.selected_paths,
         )
-        planned_targets = []
+        jobs_service = JobsService()
+        items: list[BatchJobItemResponse] = []
+        total_files = 0
+        created_count = 0
+        blocked_count = 0
+        schedule_windows = [item.model_dump(mode="json") for item in payload.schedule_windows]
         for source_file in source_files:
             tracked_file, _probe_snapshot, plan_snapshot = plans_service.plan_file(
                 session,
                 source_path=source_file.as_posix(),
             )
-            planned_targets.append((source_file.as_posix(), tracked_file, plan_snapshot))
-        batch_results = JobsService().create_batch_jobs(
-            session,
-            planned_targets=planned_targets,
-            preferred_worker_id=payload.preferred_worker_id,
-            pinned_worker_id=payload.pinned_worker_id,
-            preferred_backend_override=payload.preferred_backend_override,
-            schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
-        )
-        session.commit()
-        items = [
-            BatchJobItemResponse(
-                source_path=result["source_path"],
-                status=result["status"],
-                message=result["message"],
-                job=JobDetailResponse.from_model(result["job"]) if result["job"] is not None else None,
+            batch_results = jobs_service.create_batch_jobs(
+                session,
+                planned_targets=[(source_file.as_posix(), tracked_file, plan_snapshot)],
+                preferred_worker_id=payload.preferred_worker_id,
+                pinned_worker_id=payload.pinned_worker_id,
+                preferred_backend_override=payload.preferred_backend_override,
+                schedule_windows=schedule_windows,
             )
-            for result in batch_results
-        ]
+            for result in batch_results:
+                total_files += 1
+                if result["status"] == "created":
+                    created_count += 1
+                elif result["status"] == "blocked":
+                    blocked_count += 1
+                if not payload.summary_only:
+                    items.append(
+                        BatchJobItemResponse(
+                            source_path=result["source_path"],
+                            status=result["status"],
+                            message=result["message"],
+                            job=JobDetailResponse.from_model(result["job"]) if result["job"] is not None else None,
+                        )
+                    )
+        session.commit()
         return BatchJobCreateResponse(
             scope=scope,
-            total_files=len(items),
-            created_count=sum(1 for item in items if item.status == "created"),
-            blocked_count=sum(1 for item in items if item.status == "blocked"),
+            total_files=total_files,
+            created_count=created_count,
+            blocked_count=blocked_count,
             items=items,
         )
     except ApiServiceError as error:

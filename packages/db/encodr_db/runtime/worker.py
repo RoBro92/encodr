@@ -998,8 +998,6 @@ def _should_bootstrap_legacy_local_worker(
 ) -> bool:
     if not config_bundle.workers.local.enabled:
         return False
-    if (config_bundle.app.data_dir / "setup-state.json").exists():
-        return True
     has_jobs = session.scalar(select(Job.id).limit(1)) is not None
     return bool(has_jobs)
 
