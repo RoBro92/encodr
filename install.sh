@@ -597,6 +597,8 @@ for raw_path in tracked_list.read_bytes().split(b"\0"):
         continue
     relative = Path(raw_path.decode("utf-8"))
     source_path = source_root / relative
+    if not source_path.exists():
+        continue
     target_path = target_root / relative
     target_path.parent.mkdir(parents=True, exist_ok=True)
     shutil.copy2(source_path, target_path)
@@ -680,6 +682,64 @@ PY
   else
     info "${variable_name} already set"
   fi
+}
+
+sync_database_dsn_with_env() {
+  local env_file="${INSTALL_ROOT}/.env"
+  local app_config_file="${INSTALL_ROOT}/config/app.yaml"
+  [[ -f "${env_file}" && -f "${app_config_file}" ]] || return 0
+
+  python3 - "${env_file}" "${app_config_file}" <<'PY'
+from pathlib import Path
+from urllib.parse import quote
+import sys
+
+env_path = Path(sys.argv[1])
+app_config_path = Path(sys.argv[2])
+
+env: dict[str, str] = {}
+for raw_line in env_path.read_text(encoding="utf-8").splitlines():
+    line = raw_line.strip()
+    if not line or line.startswith("#"):
+        continue
+    if line.startswith("export "):
+        line = line[7:].strip()
+    if "=" not in line:
+        continue
+    key, value = line.split("=", 1)
+    env[key.strip()] = value.strip().strip("\"'")
+
+database_name = env.get("POSTGRES_DB", "encodr")
+database_user = env.get("POSTGRES_USER", "encodr")
+database_password = env.get("POSTGRES_PASSWORD", "")
+if not database_password:
+    raise SystemExit(0)
+
+next_dsn = (
+    "postgresql+psycopg://"
+    f"{quote(database_user, safe='')}:{quote(database_password, safe='')}@postgres:5432/"
+    f"{quote(database_name, safe='')}"
+)
+
+lines = app_config_path.read_text(encoding="utf-8").splitlines()
+updated: list[str] = []
+changed = False
+for line in lines:
+    stripped = line.strip()
+    if stripped.startswith("dsn:"):
+        current = stripped.split(":", 1)[1].strip().strip("\"'")
+        if "@postgres:" in current and (
+            "change-me-before-production" in current or "encodr-dev-password" in current
+        ):
+            indent = line[: len(line) - len(line.lstrip())]
+            updated.append(f"{indent}dsn: {next_dsn}")
+            changed = True
+            continue
+    updated.append(line)
+
+if changed:
+    app_config_path.write_text("\n".join(updated) + "\n", encoding="utf-8")
+PY
 }
 
 prepare_management_cli_runtime() {
@@ -999,6 +1059,8 @@ main() {
   section "Bootstrapping Encodr"
   ./infra/scripts/bootstrap.sh >/dev/null
   normalise_host_config_paths_in_env
+  ensure_secret "POSTGRES_PASSWORD"
+  sync_database_dsn_with_env
   ensure_secret "ENCODR_AUTH_SECRET"
   ensure_secret "ENCODR_WORKER_REGISTRATION_SECRET"
   ensure_ui_allowed_hosts_for_network_ips
