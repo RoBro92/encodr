@@ -1,5 +1,32 @@
 # Changelog
 
+## 0.3.6 - 2026-04-26
+
+This release prepares Encodr for a cleaner public repository and tightens first-install security defaults without changing UI behaviour, worker execution, processing rules, or API contracts.
+
+- simplified public documentation around:
+  - install and update flow
+  - deployment and storage expectations
+  - local and remote workers
+  - processing rules and dry-run safety
+  - security posture and known limitations
+- reduced the public docs set to the user-facing README, changelog, and focused docs under `docs/`
+- moved developer-only planning, release-process, UI handoff, and local demo notes into the ignored `dev-local/` workspace for local reference
+- added a local-only milestone/roadmap summary covering completed capabilities, outstanding validation, backlog ideas, and release caveats
+- removed private/internal doc ignore exceptions so future local planning material stays under `dev-local/`
+- replaced the public example Postgres password with an explicit placeholder
+- updated the installer so fresh installs generate `POSTGRES_PASSWORD` and sync the generated value into the app database DSN
+- replaced a private-looking test hostname with a reserved example hostname
+- fixed local checkout install sync so deleted tracked paths in cleanup branches do not break external install-root sync
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - `bash -n install.sh`
+  - `bash -n encodr`
+  - `bash -n infra/scripts/*.sh`
+
 ## 0.3.5 - 2026-04-25
 
 This live release completes the 0.3.5 release-candidate line with a broad UI polish pass and scale-focused queue/dashboard architecture work.
