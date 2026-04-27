@@ -35,6 +35,26 @@ export function mockFetchRoutes(routes: MockRoute[]) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     const url = typeof input === "string" ? input : input.toString();
+    const route = routes.find((candidate) => {
+      const methodMatches = (candidate.method ?? "GET").toUpperCase() === method;
+      if (!methodMatches) {
+        return false;
+      }
+      if (typeof candidate.path === "string") {
+        return url.includes(candidate.path);
+      }
+      return candidate.path.test(url);
+    });
+
+    if (route) {
+      return new Response(JSON.stringify(route.body ?? {}), {
+        status: route.status ?? 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     if (method === "GET" && url.includes("/api/system/logs")) {
       return new Response(JSON.stringify({ retention_days: 7, log_dir: "/data/logs", items: [] }), {
         status: 200,
@@ -52,17 +72,6 @@ export function mockFetchRoutes(routes: MockRoute[]) {
         },
       });
     }
-
-    const route = routes.find((candidate) => {
-      const methodMatches = (candidate.method ?? "GET").toUpperCase() === method;
-      if (!methodMatches) {
-        return false;
-      }
-      if (typeof candidate.path === "string") {
-        return url.includes(candidate.path);
-      }
-      return candidate.path.test(url);
-    });
 
     if (!route && method === "GET" && url.includes("/api/auth/bootstrap-status")) {
       return new Response(
@@ -148,16 +157,7 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       });
     }
 
-    if (!route) {
-      throw new Error(`Unhandled fetch request: ${method} ${url}`);
-    }
-
-    return new Response(JSON.stringify(route.body ?? {}), {
-      status: route.status ?? 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    throw new Error(`Unhandled fetch request: ${method} ${url}`);
   });
 
   vi.stubGlobal("fetch", fetchMock);

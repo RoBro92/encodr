@@ -1,5 +1,25 @@
 # Changelog
 
+## 0.3.7.1 - 2026-04-27
+
+This release candidate tightens queue control, processed-file safety, backup handling, diagnostics logging, and Settings diagnostics presentation before public release.
+
+- removed the normal-user Batch Plan action from the Library UI while retaining backend planning for job creation, dry runs, watched jobs, and review flows
+- added active queue controls, failed/cancelled clearing, explicit cancelled job status handling, and safer local cancellation cleanup for staged outputs
+- separated active, completed, and failed/cancelled jobs in the Jobs UI and replaced anonymous status pills with labelled, explainable badges
+- fixed processed-file state so files are only marked processed after completed verification, successful replacement, final output presence, and backup handling
+- added per-job backup policy persistence, backup delete/restore API/UI, and automatic cleanup for expired one-day retained backups
+- added structured diagnostics logging, 7-day log retention, Settings log viewing, and downloadable diagnostic bundles with optional path redaction
+- moved Settings diagnostics into a compact header action and viewport-locked modal with a scrollable log console
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - `bash -n install.sh`
+  - `bash -n encodr`
+  - `bash -n infra/scripts/*.sh`
+
 ## 0.3.7 - 2026-04-27
 
 This patch release fixes stale Intel VAAPI capability reporting after worker image updates.

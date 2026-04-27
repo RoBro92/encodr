@@ -507,6 +507,61 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
   });
 
+  it("opens diagnostics from the settings header action and renders logs in a console", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      {
+        method: "GET",
+        path: "/api/system/logs",
+        body: {
+          retention_days: 7,
+          log_dir: "/data/logs",
+          items: [
+            {
+              timestamp: "2026-04-27T12:30:00Z",
+              level: "info",
+              component: "api",
+              logger: "encodr.jobs",
+              message: "job created",
+              fields: { job_id: "job-1" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^diagnostics$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/open a compact console/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /view diagnostics/i })).toBeInTheDocument();
+    expect(screen.queryByRole("log", { name: /recent diagnostic events/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view diagnostics/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /^diagnostics$/i });
+    expect(within(dialog).getByText(/only recent retained events are shown/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/7 days/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/component/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/level/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /refresh/i })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/bundle range/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/redact paths and file names/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /download bundle/i })).toBeInTheDocument();
+
+    const logConsole = within(dialog).getByRole("log", { name: /recent diagnostic events/i });
+    expect(logConsole).toHaveTextContent(/2026/i);
+    expect(logConsole).toHaveTextContent(/INFO/i);
+    expect(logConsole).toHaveTextContent(/api/i);
+    expect(logConsole).toHaveTextContent(/job created/i);
+  });
+
   it("refreshes stale update status when the settings updates card is shown", async () => {
     const latestVersion = nextPatchVersion(CURRENT_VERSION);
     const fetchMock = mockFetchRoutes([
