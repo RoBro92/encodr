@@ -1018,7 +1018,7 @@ export function FilesPage() {
         </div>
       </section>
 
-      <div className="dashboard-grid">
+      <div className="dashboard-grid library-activity-grid">
         <SectionCard
           title="Recent scans"
           subtitle="Reopen saved scan results or rescan a folder when it changes."
@@ -1026,7 +1026,7 @@ export function FilesPage() {
           {recentScans.length === 0 ? (
             <EmptyState title="No saved scans yet" message="Run a folder scan to keep the result available for later job creation." />
           ) : (
-            <div className="list-stack">
+            <div className="list-stack library-recent-scans-list">
               {recentScans.map((scan) => (
                 <div key={scan.scan_id ?? scan.folder_path} className="list-row">
                   <div>

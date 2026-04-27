@@ -347,8 +347,9 @@ export function WorkersPage() {
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Worker detail">
           <section className="modal-panel modal-panel-worker-detail worker-detail-modal">
             <div className="section-card-header">
-              <div>
+              <div className="worker-detail-header-copy">
                 <h2>Worker detail</h2>
+                <h3>{detail.worker_key}</h3>
                 <p>{detail.display_name}</p>
               </div>
               <div className="section-card-actions">
@@ -385,13 +386,16 @@ export function WorkersPage() {
             </div>
 
             <div className="card-stack">
-              <div className="badge-row">
-                <StatusBadge value={detail.worker_type} />
-                <StatusBadge value={detail.worker_state} />
-                <StatusBadge value={detail.enabled ? "enabled" : "disabled"} />
-                <StatusBadge value={detailStatusRollup?.badge ?? detail.health_status} />
-                <StatusBadge value={formatBackendLabel(detail.preferred_backend)} />
-                {cpuFallbackActive ? <StatusBadge value="cpu fallback active" /> : null}
+              <div className="worker-detail-tag-row" aria-label="Worker summary">
+                <WorkerDetailTag label="Type" value={titleCase(detail.worker_type)} />
+                <WorkerDetailTag
+                  label="Backend"
+                  value={cpuFallbackActive ? "CPU fallback" : formatBackendLabel(detailCurrentBackend ?? detail.preferred_backend)}
+                />
+                <WorkerDetailTag
+                  label="Status"
+                  value={<StatusBadge value={!detail.enabled ? "disabled" : detailStatusRollup?.badge ?? detail.health_status} />}
+                />
               </div>
 
               {detailAttentionMessage ? (
@@ -429,7 +433,7 @@ export function WorkersPage() {
               <section className="worker-detail-metric-grid">
                 <WorkerDetailMetric
                   label="Health summary"
-                  value={<WorkerStatusRollupView rollup={detailStatusRollup ?? buildWorkerStatusRollup(detail, localWorkerStatus)} compact />}
+                  value={(detailStatusRollup ?? buildWorkerStatusRollup(detail, localWorkerStatus)).compactMessage}
                 />
                 <WorkerDetailMetric
                   label="Current activity"
@@ -444,7 +448,6 @@ export function WorkersPage() {
               <SectionCard title="Health and execution">
                 <WorkerDetailInfoGrid
                   items={[
-                    { label: "Worker key", value: detail.worker_key },
                     { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
                     { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
                     { label: "Actual backend", value: formatBackendLabel(detailCurrentBackend) },
@@ -471,9 +474,9 @@ export function WorkersPage() {
                           {
                             label: "Dependencies",
                             value: (
-                              <span className="worker-inline-badges">
-                                {localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffmpeg.status} /> : <span>FFmpeg unknown</span>}
-                                {localWorkerStatus ? <StatusBadge value={localWorkerStatus.ffprobe.status} /> : <span>FFprobe unknown</span>}
+                              <span className="worker-inline-status-list">
+                                <WorkerStatusIndicator label="FFmpeg" status={localWorkerStatus?.ffmpeg.status} />
+                                <WorkerStatusIndicator label="FFprobe" status={localWorkerStatus?.ffprobe.status} />
                               </span>
                             ),
                             span: "full",
@@ -481,7 +484,12 @@ export function WorkersPage() {
                           { label: "Eligibility", value: localWorkerStatus?.eligibility_summary ?? "Not reported" },
                           {
                             label: "Configured backend health",
-                            value: configuredBackendProbe ? <StatusBadge value={configuredBackendProbe.status} /> : "No probe available",
+                            value: configuredBackendProbe ? (
+                              <WorkerStatusIndicator
+                                label={formatBackendLabel(detail.preferred_backend)}
+                                status={configuredBackendProbe.status}
+                              />
+                            ) : "No probe available",
                           },
                         ]}
                       />
@@ -498,17 +506,16 @@ export function WorkersPage() {
                         />
                       ) : null}
                       {selectedRuntimeDevices.length > 0 ? (
-                        <div className="list-stack">
+                        <div className="worker-device-list">
                           {selectedRuntimeDevices.map((device) => (
-                            <div key={device.path} className="list-row">
-                              <div>
-                                <strong>{device.path}</strong>
+                            <div key={device.path} className="worker-device-row">
+                              <div className="worker-device-row-main">
+                                <WorkerStatusIndicator label={device.path} status={device.status} />
                                 <p>
                                   {device.vendor_name ?? "Unknown vendor"}{device.vendor_id ? ` • ${device.vendor_id}` : ""}
                                 </p>
                                 <p>{device.message}</p>
                               </div>
-                              <StatusBadge value={device.status} />
                             </div>
                           ))}
                         </div>
@@ -545,12 +552,13 @@ export function WorkersPage() {
                   <WorkerDetailDenseGrid
                     items={[
                       {
-                        label: "Scratch validation",
-                        value: formatScratchStatus(detail.runtime_summary?.scratch_status),
-                      },
-                      {
-                        label: "Scratch path",
-                        value: detail.scratch_path ?? detail.runtime_summary?.scratch_dir ?? "Not configured",
+                        label: "Scratch",
+                        value: (
+                          <WorkerPathStatus
+                            path={detail.scratch_path ?? detail.runtime_summary?.scratch_dir ?? readScratchPath(detail.runtime_summary?.scratch_status) ?? "Not configured"}
+                            status={readStatusValue(detail.runtime_summary?.scratch_status)}
+                          />
+                        ),
                       },
                       {
                         label: "Path mappings",
@@ -559,15 +567,17 @@ export function WorkersPage() {
                     ]}
                   >
                     {detailPathMappings.length > 0 ? (
-                      <div className="list-stack worker-detail-grid-span">
+                      <div className="worker-device-list worker-detail-grid-span">
                         {detailPathMappings.map((mapping) => (
-                          <div key={`${mapping.server_path}:${mapping.worker_path}`} className="list-row">
-                            <div>
+                          <div key={`${mapping.server_path}:${mapping.worker_path}`} className="worker-device-row">
+                            <div className="worker-device-row-main">
                               <strong>{mapping.label ?? mapping.server_path}</strong>
                               <p>{mapping.server_path} → {mapping.worker_path}</p>
                               <p>{mapping.validation_message ?? "Validation not reported."}</p>
                             </div>
-                            <StatusBadge value={mapping.validation_status ?? "unknown"} />
+                            {isAttentionStatus(mapping.validation_status) ? (
+                              <StatusBadge value={mapping.validation_status ?? "unknown"} />
+                            ) : null}
                           </div>
                         ))}
                       </div>
@@ -993,12 +1003,52 @@ function WorkerDetailMetric({
   );
 }
 
+function WorkerDetailTag({ label, value }: { label: string; value: ReactNode }) {
+  return (
+    <div className="worker-detail-tag">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
+  );
+}
+
 function WorkerStatusRollupView({ rollup, compact = false }: { rollup: WorkerStatusRollupResult; compact?: boolean }) {
   return (
     <div className="worker-status-rollup">
       <StatusBadge value={rollup.badge} />
       <span className="worker-status-rollup-message">{compact ? rollup.compactMessage : rollup.message}</span>
     </div>
+  );
+}
+
+function WorkerStatusIndicator({
+  label,
+  status,
+}: {
+  label: string;
+  status: string | null | undefined;
+}) {
+  const resolvedStatus = status ?? "unknown";
+  return (
+    <span className="worker-status-indicator">
+      <span className={`worker-status-dot worker-status-dot-${statusDotTone(resolvedStatus)}`} aria-hidden="true" />
+      <span>{label}</span>
+      {isAttentionStatus(resolvedStatus) ? <StatusBadge value={resolvedStatus} /> : null}
+    </span>
+  );
+}
+
+function WorkerPathStatus({
+  path,
+  status,
+}: {
+  path: string;
+  status: string | null | undefined;
+}) {
+  return (
+    <span className="worker-path-status">
+      <WorkerStatusIndicator label={path} status={status} />
+    </span>
   );
 }
 
@@ -1219,6 +1269,11 @@ function readScratchPath(payload: Record<string, unknown> | null | undefined) {
   return typeof path === "string" ? path : null;
 }
 
+function readStatusValue(payload: Record<string, unknown> | null | undefined) {
+  const status = payload?.status;
+  return typeof status === "string" ? status : null;
+}
+
 function normaliseWorkerDraft(draft: WorkerPreferencePayload): WorkerPreferencePayload {
   return {
     ...draft,
@@ -1242,20 +1297,6 @@ function normaliseRemoteDraft(draft: RemoteWorkerOnboardingPayload): RemoteWorke
   };
 }
 
-function formatScratchStatus(status: Record<string, unknown> | null | undefined) {
-  if (!status) {
-    return "Not reported";
-  }
-  const path = typeof status.path === "string" ? status.path : null;
-  const state = typeof status.status === "string" ? status.status : "unknown";
-  return (
-    <span className="badge-row">
-      <StatusBadge value={state} />
-      <span>{path ?? "Unknown path"}</span>
-    </span>
-  );
-}
-
 function formatConcurrencyLabel(worker: {
   max_concurrent_jobs: number | null;
   capability_summary?: { recommended_concurrency?: number | null } | null;
@@ -1268,6 +1309,22 @@ function formatConcurrencyLabel(worker: {
     return `${worker.max_concurrent_jobs} (recommended ${recommended})`;
   }
   return `${worker.max_concurrent_jobs}`;
+}
+
+function isAttentionStatus(status: string | null | undefined) {
+  const normalized = (status ?? "unknown").toLowerCase();
+  return !["healthy", "ok", "running", "available", "enabled", "valid", "passed", "succeeded"].includes(normalized);
+}
+
+function statusDotTone(status: string | null | undefined) {
+  const normalized = (status ?? "unknown").toLowerCase();
+  if (["failed", "error", "missing", "unavailable", "invalid"].includes(normalized)) {
+    return "danger";
+  }
+  if (isAttentionStatus(normalized)) {
+    return "warning";
+  }
+  return "healthy";
 }
 
 function formatPercentValue(value: unknown) {
