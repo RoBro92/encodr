@@ -143,6 +143,9 @@ class WorkerCapabilitySummaryResponse(BaseModel):
     recommended_concurrency: int | None = None
     recommended_concurrency_reason: str | None = None
     tags: list[str] = Field(default_factory=list)
+    hardware_probes: list[dict[str, Any]] = Field(default_factory=list)
+    capability_source: str | None = None
+    capability_checked_at: datetime | None = None
 
 
 class WorkerHostSummaryResponse(BaseModel):
@@ -174,8 +177,13 @@ class WorkerRuntimeSummaryResponse(BaseModel):
 class WorkerBinarySummaryResponse(BaseModel):
     name: str
     configured_path: str | None = None
+    resolved_path: str | None = None
+    exists: bool | None = None
+    executable: bool | None = None
     discoverable: bool | None = None
+    status: str | None = None
     message: str | None = None
+    which: dict[str, Any] | None = None
 
 
 class WorkerRecentJobResponse(BaseModel):

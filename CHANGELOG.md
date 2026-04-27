@@ -1,5 +1,20 @@
 # Changelog
 
+## 0.3.7 - 2026-04-27
+
+This patch release fixes stale Intel VAAPI capability reporting after worker image updates.
+
+- refreshed local worker capability data from the actual worker runtime on startup and heartbeat instead of relying on API-container probes
+- ignored stale local capability payloads unless they are fresh worker-runtime reports
+- added `which vainfo` diagnostics, including command, return code, stdout, and stderr, to Intel VAAPI failure payloads
+- expanded remote worker-agent heartbeat capability payloads with `vainfo` binary diagnostics and hardware probe details
+- added regression coverage for stale `vainfo missing` data being replaced when the current worker runtime reports `/usr/bin/vainfo`
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+
 ## 0.3.6 - 2026-04-26
 
 This release prepares Encodr for a cleaner public repository and tightens first-install security defaults without changing UI behaviour, worker execution, processing rules, or API contracts.

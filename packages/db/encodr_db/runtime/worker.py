@@ -3,6 +3,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import logging
+import os
+import platform
 import subprocess
 import threading
 import time
@@ -31,12 +33,22 @@ from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload,
 from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
-from encodr_db.models import Job, JobKind, Worker, WorkerRegistrationStatus, WorkerType
+from encodr_db.models import Job, JobKind, Worker, WorkerHealthStatus, WorkerRegistrationStatus, WorkerType
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime.dispatch import job_allows_worker
-from encodr_shared import collect_runtime_telemetry, load_execution_preferences
+from encodr_shared import (
+    collect_runtime_telemetry,
+    discover_runtime_devices,
+    load_execution_preferences,
+    probe_binary,
+    probe_directory,
+    probe_execution_backends,
+    probe_which,
+    recommend_worker_concurrency,
+)
 
 logger = logging.getLogger("encodr.worker.loop")
+LOCAL_WORKER_CAPABILITY_SOURCE = "local_worker_runtime"
 
 
 @dataclass(slots=True)
@@ -152,6 +164,196 @@ class LocalWorkerConfiguration:
     worker: Worker | None
     preferred_backend: str
     allow_cpu_fallback: bool
+
+
+def _serialise_backend_probe(probe) -> dict[str, object]:
+    preference_key = {
+        "cpu": "cpu_only",
+        "intel_igpu": "prefer_intel_igpu",
+        "nvidia_gpu": "prefer_nvidia_gpu",
+        "amd_gpu": "prefer_amd_gpu",
+    }.get(probe.backend, probe.backend)
+    return {
+        "backend": probe.backend,
+        "preference_key": preference_key,
+        "detected": probe.detected,
+        "usable_by_ffmpeg": probe.usable,
+        "ffmpeg_path_verified": bool(probe.details.get("ffmpeg_path_verified", probe.usable)),
+        "status": probe.status,
+        "message": probe.message,
+        "reason_unavailable": probe.details.get("reason_unavailable"),
+        "recommended_usage": probe.details.get("recommended_usage"),
+        "device_paths": probe.details.get("device_paths", []),
+        "details": probe.details,
+    }
+
+
+def _binary_status_payload(configured_path: Path | str, *, name: str | None = None) -> dict[str, object]:
+    probe = probe_binary(configured_path)
+    payload: dict[str, object] = {
+        "configured_path": probe.configured_path,
+        "resolved_path": probe.resolved_path,
+        "exists": probe.exists,
+        "executable": probe.executable,
+        "discoverable": probe.discoverable,
+        "status": probe.status,
+        "message": probe.message,
+    }
+    if name == "vainfo":
+        payload["which"] = probe_which("vainfo")
+    return payload
+
+
+def _binary_inventory_item(name: str, payload: dict[str, object]) -> dict[str, object]:
+    item = {"name": name, **payload}
+    return item
+
+
+def build_local_worker_capability_report(
+    config_bundle: ConfigBundle,
+    *,
+    worker: Worker | None,
+    worker_name: str,
+    status_snapshot: WorkerStatusSnapshot | None = None,
+) -> dict[str, object]:
+    ffmpeg = _binary_status_payload(config_bundle.app.media.ffmpeg_path)
+    ffprobe = _binary_status_payload(config_bundle.app.media.ffprobe_path)
+    vainfo = _binary_status_payload("vainfo", name="vainfo")
+    scratch_path = probe_directory(
+        worker.scratch_path if worker is not None and worker.scratch_path else config_bundle.workers.local.scratch_dir,
+        writable_required=True,
+    )
+    media_paths = [
+        probe_directory(path, writable_required=True)
+        for path in config_bundle.workers.local.media_mounts
+    ]
+    backend_probes = probe_execution_backends(config_bundle.app.media.ffmpeg_path)
+    hardware_probes = [_serialise_backend_probe(item) for item in backend_probes]
+    runtime_device_paths = discover_runtime_devices()
+    execution_backends: list[str] = []
+    if ffmpeg["status"] == "healthy":
+        execution_backends.extend(["remux", "transcode"])
+    hardware_hints = [
+        item["backend"]
+        for item in hardware_probes
+        if item["backend"] != "cpu" and item["usable_by_ffmpeg"]
+    ]
+    if not hardware_hints:
+        hardware_hints.append("cpu_only")
+    recommended_concurrency, recommendation_reason = recommend_worker_concurrency(
+        cpu_count=os.cpu_count(),
+        hardware_hints=hardware_hints,
+    )
+    preferred_backend = worker.preferred_backend if worker is not None and worker.preferred_backend else "cpu_only"
+    allow_cpu_fallback = bool(worker.allow_cpu_fallback) if worker is not None else True
+    preferred_probe = next((item for item in hardware_probes if item["preference_key"] == preferred_backend), None)
+    transcode_backend_usable = (
+        preferred_backend == "cpu_only"
+        or (
+            preferred_probe is not None
+            and (
+                preferred_probe["usable_by_ffmpeg"]
+                or allow_cpu_fallback
+            )
+        )
+    )
+    scratch_ready = scratch_path["status"] == "healthy"
+    media_ready = all(item["status"] == "healthy" for item in media_paths) if media_paths else False
+    binaries_healthy = ffmpeg["status"] == "healthy" and ffprobe["status"] == "healthy"
+    local_enabled = bool(config_bundle.workers.local.enabled and (worker is None or worker.enabled))
+    eligible = bool(local_enabled and binaries_healthy and scratch_ready and media_ready)
+    if not local_enabled:
+        health_status = WorkerHealthStatus.UNKNOWN
+        health_summary = "The local worker is disabled in configuration."
+    elif not binaries_healthy:
+        health_status = WorkerHealthStatus.FAILED
+        health_summary = "Required media binaries are not available."
+    elif not scratch_ready:
+        health_status = WorkerHealthStatus.DEGRADED
+        health_summary = "The scratch path is not ready for execution."
+    elif not media_ready:
+        health_status = WorkerHealthStatus.DEGRADED
+        health_summary = "One or more media mount paths are unavailable."
+    elif not transcode_backend_usable:
+        health_status = WorkerHealthStatus.DEGRADED
+        health_summary = (
+            "The preferred transcode backend is unavailable and CPU fallback is disabled. "
+            "Remux jobs can still run, but transcodes will stay pending."
+        )
+    else:
+        health_status = WorkerHealthStatus.HEALTHY
+        health_summary = "The local worker can accept execution work."
+
+    checked_at = datetime.now(timezone.utc)
+    snapshot = status_snapshot or WorkerStatusSnapshot()
+    capability_summary = {
+        "execution_modes": execution_backends,
+        "supported_video_codecs": ["h264", "hevc", "av1"] if ffmpeg["discoverable"] else [],
+        "supported_audio_codecs": [],
+        "hardware_hints": hardware_hints,
+        "binary_support": {
+            "ffmpeg": bool(ffmpeg["discoverable"]),
+            "ffprobe": bool(ffprobe["discoverable"]),
+            "vainfo": bool(vainfo["discoverable"]),
+        },
+        "max_concurrent_jobs": worker.max_concurrent_jobs if worker is not None else config_bundle.workers.local.max_concurrent_jobs,
+        "recommended_concurrency": recommended_concurrency,
+        "recommended_concurrency_reason": recommendation_reason,
+        "tags": ["local"],
+        "hardware_probes": hardware_probes,
+        "capability_source": LOCAL_WORKER_CAPABILITY_SOURCE,
+        "capability_checked_at": checked_at.isoformat(),
+    }
+    runtime_summary = {
+        "queue": config_bundle.workers.local.queue,
+        "scratch_dir": str(worker.scratch_path if worker is not None and worker.scratch_path else config_bundle.workers.local.scratch_dir),
+        "scratch_status": scratch_path,
+        "media_mounts": [str(path) for path in config_bundle.workers.local.media_mounts],
+        "media_paths": media_paths,
+        "path_mappings": worker.path_mappings if worker is not None and worker.path_mappings is not None else [],
+        "preferred_backend": preferred_backend,
+        "allow_cpu_fallback": allow_cpu_fallback,
+        "max_concurrent_jobs": worker.max_concurrent_jobs if worker is not None else config_bundle.workers.local.max_concurrent_jobs,
+        "schedule_windows": worker.schedule_windows if worker is not None and worker.schedule_windows is not None else [],
+        "current_job_id": snapshot.current_job_id,
+        "current_backend": snapshot.current_backend,
+        "current_stage": snapshot.current_stage,
+        "current_progress_percent": snapshot.current_progress_percent,
+        "current_progress_updated_at": snapshot.current_progress_updated_at.isoformat() if snapshot.current_progress_updated_at else None,
+        "telemetry": snapshot.telemetry or collect_runtime_telemetry(current_backend=snapshot.current_backend),
+        "last_completed_job_id": snapshot.last_processed_job_id,
+        "ffmpeg": ffmpeg,
+        "ffprobe": ffprobe,
+        "execution_backends": execution_backends,
+        "hardware_acceleration": [item for item in hardware_hints if item != "cpu_only"],
+        "hardware_probes": hardware_probes,
+        "runtime_device_paths": runtime_device_paths,
+        "eligible": eligible,
+        "eligibility_summary": health_summary,
+        "transcode_backend_usable": transcode_backend_usable,
+        "capability_source": LOCAL_WORKER_CAPABILITY_SOURCE,
+        "capability_checked_at": checked_at.isoformat(),
+    }
+    return {
+        "capability_summary": capability_summary,
+        "runtime_summary": runtime_summary,
+        "binary_summary": {
+            "binaries": [
+                _binary_inventory_item("ffmpeg", ffmpeg),
+                _binary_inventory_item("ffprobe", ffprobe),
+                _binary_inventory_item("vainfo", vainfo),
+            ],
+        },
+        "host_summary": {
+            "hostname": platform.node() or config_bundle.workers.local.host,
+            "platform": platform.platform(),
+            "agent_version": None,
+            "python_version": platform.python_version(),
+            "worker_name": worker_name,
+        },
+        "health_status": health_status,
+        "health_summary": health_summary,
+    }
 
 
 def resolve_local_worker_configuration(
@@ -668,6 +870,7 @@ class LocalWorkerLoop:
         *,
         worker_name: str = "worker-local",
         poll_interval_seconds: float = 2.0,
+        capability_refresh_interval_seconds: float = 60.0,
         execution_service: WorkerExecutionService | None = None,
         status_tracker: WorkerStatusTracker | None = None,
     ) -> None:
@@ -675,15 +878,19 @@ class LocalWorkerLoop:
         self.config_bundle = config_bundle
         self.worker_name = worker_name
         self.poll_interval_seconds = poll_interval_seconds
+        self.capability_refresh_interval_seconds = capability_refresh_interval_seconds
         self.execution_service = execution_service or WorkerExecutionService()
         self.status_tracker = status_tracker or WorkerStatusTracker()
+        self._last_capability_refresh_at: datetime | None = None
         self._control_lock = threading.Lock()
         self._active_job_id: str | None = None
         self._active_process: subprocess.Popen[str] | None = None
         self._cancel_requested_job_ids: set[str] = set()
 
     def run_forever(self) -> None:
+        self.refresh_runtime_capabilities(force=True)
         while True:
+            self.refresh_runtime_capabilities()
             processed = self.run_once()
             if not processed:
                 time.sleep(self.poll_interval_seconds)
@@ -700,6 +907,44 @@ class LocalWorkerLoop:
             if process is not None and process.poll() is None:
                 process.terminate()
             return True
+
+    def refresh_runtime_capabilities(self, *, force: bool = False) -> bool:
+        now = datetime.now(timezone.utc)
+        if (
+            not force
+            and self._last_capability_refresh_at is not None
+            and (now - self._last_capability_refresh_at).total_seconds() < self.capability_refresh_interval_seconds
+        ):
+            return False
+
+        with self.session_factory() as session:
+            local_worker_config = resolve_local_worker_configuration(
+                session,
+                config_bundle=self.config_bundle,
+                worker_name=self.worker_name,
+            )
+            worker = local_worker_config.worker
+            if worker is None:
+                return False
+            report = build_local_worker_capability_report(
+                self.config_bundle,
+                worker=worker,
+                worker_name=self.worker_name,
+                status_snapshot=self.status_tracker.snapshot(),
+            )
+            WorkerRepository(session).record_heartbeat(
+                worker,
+                heartbeat_at=now,
+                health_status=report["health_status"],
+                health_summary=str(report["health_summary"]),
+                capability_payload=dict(report["capability_summary"]),
+                runtime_payload=dict(report["runtime_summary"]),
+                binary_payload=dict(report["binary_summary"]),
+                host_metadata=dict(report["host_summary"]),
+            )
+            session.commit()
+        self._last_capability_refresh_at = now
+        return True
 
     def run_once_with_summary(self) -> WorkerRunSummary:
         run_started_at = datetime.now(timezone.utc)

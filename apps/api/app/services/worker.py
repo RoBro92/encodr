@@ -34,7 +34,14 @@ from encodr_db.models import (
     WorkerType,
 )
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
-from encodr_db.runtime import LocalWorkerLoop, WorkerRunSummary, job_allows_worker, resolve_local_worker_configuration, worker_is_dispatchable
+from encodr_db.runtime import (
+    LOCAL_WORKER_CAPABILITY_SOURCE,
+    LocalWorkerLoop,
+    WorkerRunSummary,
+    job_allows_worker,
+    resolve_local_worker_configuration,
+    worker_is_dispatchable,
+)
 from encodr_shared import (
     collect_runtime_telemetry,
     ensure_mapping_marker,
@@ -176,6 +183,49 @@ class WorkerService:
             "eligibility_summary": eligibility_summary,
         }
 
+    @staticmethod
+    def _local_worker_runtime_payload_is_fresh(worker: Worker | None) -> bool:
+        if worker is None or worker.last_heartbeat_at is None:
+            return False
+        heartbeat = worker.last_heartbeat_at
+        if heartbeat.tzinfo is None:
+            heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+        if heartbeat < datetime.now(timezone.utc) - timedelta(minutes=5):
+            return False
+        runtime_payload = worker.runtime_payload or {}
+        return runtime_payload.get("capability_source") == LOCAL_WORKER_CAPABILITY_SOURCE
+
+    @staticmethod
+    def _local_runtime_probes_from_worker_payload(
+        worker: Worker,
+        *,
+        execution_preferences: dict[str, object],
+    ) -> dict[str, object] | None:
+        runtime_payload = worker.runtime_payload or {}
+        if runtime_payload.get("capability_source") != LOCAL_WORKER_CAPABILITY_SOURCE:
+            return None
+        hardware_probes = list(runtime_payload.get("hardware_probes") or [])
+        preferred_backend = str(execution_preferences["preferred_backend"])
+        preferred_backend_probe = next(
+            (item for item in hardware_probes if item.get("preference_key") == preferred_backend),
+            None,
+        )
+        return {
+            "ffmpeg": runtime_payload.get("ffmpeg") or {},
+            "ffprobe": runtime_payload.get("ffprobe") or {},
+            "scratch_path": runtime_payload.get("scratch_status") or {},
+            "media_paths": list(runtime_payload.get("media_paths") or []),
+            "execution_backends": list(runtime_payload.get("execution_backends") or []),
+            "hardware_acceleration": list(runtime_payload.get("hardware_acceleration") or []),
+            "hardware_probes": hardware_probes,
+            "runtime_device_paths": list(runtime_payload.get("runtime_device_paths") or []),
+            "execution_preferences": execution_preferences,
+            "preferred_backend_probe": preferred_backend_probe,
+            "transcode_backend_usable": bool(runtime_payload.get("transcode_backend_usable")),
+            "eligible": bool(runtime_payload.get("eligible")),
+            "eligibility_summary": str(runtime_payload.get("eligibility_summary") or "The local worker runtime has not reported eligibility."),
+        }
+
     def queue_health_summary(self) -> dict[str, object]:
         if self.session_factory is None:
             return {
@@ -262,7 +312,16 @@ class WorkerService:
         else:
             execution_preferences = SetupStateService(config_bundle=self.config_bundle).get_execution_preferences()
 
-        runtime_probes = self._local_runtime_probes(execution_preferences=execution_preferences)
+        runtime_probes = (
+            self._local_runtime_probes_from_worker_payload(
+                local_worker,
+                execution_preferences=execution_preferences,
+            )
+            if self._local_worker_runtime_payload_is_fresh(local_worker)
+            else None
+        )
+        if runtime_probes is None:
+            runtime_probes = self._local_runtime_probes(execution_preferences=execution_preferences)
         ffmpeg = runtime_probes["ffmpeg"]
         ffprobe = runtime_probes["ffprobe"]
         queue_health = self.queue_health_summary()
@@ -1161,6 +1220,13 @@ class WorkerService:
 
     def _local_worker_inventory(self, *, worker: Worker, detail: bool = False) -> dict[str, object]:
         status = self.status_summary(local_worker_override=worker)
+        has_fresh_runtime_payload = self._local_worker_runtime_payload_is_fresh(worker)
+        runtime_payload = worker.runtime_payload or {}
+        capability_summary = (
+            self._clean_capability_summary(worker.capability_payload)
+            if has_fresh_runtime_payload
+            else self._local_capability_summary()
+        )
         current_job = self._local_current_job_snapshot(worker.id)
         current_job_id = status["current_job_id"] or current_job.get("id")
         current_backend = status["current_backend"] or current_job.get("actual_execution_backend") or current_job.get("requested_execution_backend")
@@ -1181,16 +1247,20 @@ class WorkerService:
             "registration_status": worker.registration_status.value,
             "health_status": status["status"],
             "health_summary": status["summary"],
-            "last_seen_at": status["last_run_completed_at"],
-            "last_heartbeat_at": status["last_run_completed_at"],
+            "last_seen_at": worker.last_seen_at if has_fresh_runtime_payload else status["last_run_completed_at"],
+            "last_heartbeat_at": worker.last_heartbeat_at if has_fresh_runtime_payload else status["last_run_completed_at"],
             "last_registration_at": worker.created_at,
-            "capability_summary": self._local_capability_summary(),
-            "host_summary": {
-                "hostname": local_config.host,
-                "platform": None,
-                "agent_version": None,
-                "python_version": None,
-            },
+            "capability_summary": capability_summary,
+            "host_summary": (
+                self._clean_host_summary(worker.host_metadata)
+                if has_fresh_runtime_payload
+                else {
+                    "hostname": local_config.host,
+                    "platform": None,
+                    "agent_version": None,
+                    "python_version": None,
+                }
+            ),
             "preferred_backend": worker.preferred_backend,
             "allow_cpu_fallback": worker.allow_cpu_fallback,
             "max_concurrent_jobs": worker.max_concurrent_jobs,
@@ -1212,9 +1282,14 @@ class WorkerService:
             "last_completed_job_id": status["last_processed_job_id"],
         }
         if detail:
+            local_runtime_summary = (
+                self._clean_runtime_summary(runtime_payload)
+                if has_fresh_runtime_payload
+                else None
+            )
             item.update(
                 {
-                    "runtime_summary": {
+                    "runtime_summary": local_runtime_summary or {
                         "queue": local_config.queue,
                         "scratch_dir": worker.scratch_path or str(local_config.scratch_dir),
                         "scratch_status": probe_directory(
@@ -1240,8 +1315,14 @@ class WorkerService:
                         "last_completed_job_id": status["last_processed_job_id"],
                     },
                     "binary_summary": [
-                        self._binary_inventory_item("ffmpeg", status["ffmpeg"]),
-                        self._binary_inventory_item("ffprobe", status["ffprobe"]),
+                        *(
+                            (worker.binary_payload or {}).get("binaries", [])
+                            if has_fresh_runtime_payload and isinstance(worker.binary_payload, dict)
+                            else [
+                                self._binary_inventory_item("ffmpeg", status["ffmpeg"]),
+                                self._binary_inventory_item("ffprobe", status["ffprobe"]),
+                            ]
+                        )
                     ],
                     "assigned_job_ids": [str(current_job_id)] if current_job_id else [],
                     "last_processed_job_id": status["last_processed_job_id"],
@@ -1594,8 +1675,13 @@ class WorkerService:
         return {
             "name": name,
             "configured_path": payload.get("configured_path"),
+            "resolved_path": payload.get("resolved_path"),
+            "exists": payload.get("exists"),
+            "executable": payload.get("executable"),
             "discoverable": payload.get("discoverable"),
+            "status": payload.get("status"),
             "message": payload.get("message"),
+            "which": payload.get("which"),
         }
 
     @staticmethod
@@ -1611,6 +1697,9 @@ class WorkerService:
             "recommended_concurrency": payload.get("recommended_concurrency"),
             "recommended_concurrency_reason": payload.get("recommended_concurrency_reason"),
             "tags": payload.get("tags", []),
+            "hardware_probes": payload.get("hardware_probes", []),
+            "capability_source": payload.get("capability_source"),
+            "capability_checked_at": payload.get("capability_checked_at"),
         }
 
     @staticmethod

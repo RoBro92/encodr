@@ -22,6 +22,7 @@ from encodr_shared.worker_runtime import (
     probe_execution_backends,
     probe_intel_qsv,
     probe_vaapi,
+    probe_which,
 )
 
 __all__ = [
@@ -45,6 +46,7 @@ __all__ = [
     "probe_execution_backends",
     "probe_intel_qsv",
     "probe_vaapi",
+    "probe_which",
     "read_version",
     "recommend_worker_concurrency",
     "remap_server_path",

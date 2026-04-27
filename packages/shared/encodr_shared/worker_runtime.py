@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 import os
+import shlex
 import shutil
 import subprocess
 from typing import Any
@@ -155,6 +156,17 @@ def _run_command_capture(
     except (OSError, subprocess.SubprocessError) as error:
         return None, "", str(error)
     return completed.returncode, completed.stdout or "", completed.stderr or ""
+
+
+def probe_which(binary_name: str) -> dict[str, object]:
+    command = ["where", binary_name] if os.name == "nt" else ["which", binary_name]
+    returncode, stdout, stderr = _run_command_capture(command, timeout=5)
+    return {
+        "command": " ".join(shlex.quote(part) for part in command),
+        "returncode": returncode,
+        "stdout": stdout.strip() or None,
+        "stderr": stderr.strip() or None,
+    }
 
 
 def _run_text_command(command: list[str], *, timeout: int = 10) -> str:
@@ -373,12 +385,14 @@ def probe_intel_vaapi(ffmpeg_path: Path | str) -> HardwareProbe:
             },
         )
 
+    vainfo_which = probe_which("vainfo")
     vainfo_probe = probe_binary("vainfo")
     vainfo_details = {
         "configured_path": vainfo_probe.configured_path,
         "resolved_path": vainfo_probe.resolved_path,
         "discoverable": vainfo_probe.discoverable,
         "message": vainfo_probe.message,
+        "which": vainfo_which,
     }
     if not vainfo_probe.discoverable:
         return HardwareProbe(
