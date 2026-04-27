@@ -35,12 +35,15 @@ export function mockFetchRoutes(routes: MockRoute[]) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     const url = typeof input === "string" ? input : input.toString();
-    const route = routes.find((candidate) => {
+    const route = [...routes].sort((left, right) => routeSpecificity(right) - routeSpecificity(left)).find((candidate) => {
       const methodMatches = (candidate.method ?? "GET").toUpperCase() === method;
       if (!methodMatches) {
         return false;
       }
       if (typeof candidate.path === "string") {
+        if (candidate.path.startsWith("/api/")) {
+          return new URL(url, "http://localhost").pathname === candidate.path;
+        }
         return url.includes(candidate.path);
       }
       return candidate.path.test(url);
@@ -65,7 +68,7 @@ export function mockFetchRoutes(routes: MockRoute[]) {
     }
 
     if (method === "GET" && url.includes("/api/jobs/backups")) {
-      return new Response(JSON.stringify({ items: [] }), {
+      return new Response(JSON.stringify({ items: [], limit: 15, offset: 0, total: 0 }), {
         status: 200,
         headers: {
           "Content-Type": "application/json",
@@ -162,6 +165,13 @@ export function mockFetchRoutes(routes: MockRoute[]) {
 
   vi.stubGlobal("fetch", fetchMock);
   return fetchMock;
+}
+
+function routeSpecificity(route: MockRoute) {
+  if (typeof route.path === "string") {
+    return route.path.length;
+  }
+  return route.path.source.length;
 }
 
 export function makeSession(): StoredSession {

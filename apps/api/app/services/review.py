@@ -23,6 +23,8 @@ from app.services.plans import PlansService
 from encodr_db.models import (
     AuditEventType,
     AuditOutcome,
+    ComplianceState,
+    FileLifecycleState,
     Job,
     JobStatus,
     ManualReviewDecision,
@@ -308,6 +310,48 @@ class ReviewService:
         )
         return self._build_item_context(session, item.tracked_file), decision, job
 
+    def exclude_item(
+        self,
+        session: Session,
+        *,
+        item_id: str,
+        note: str | None,
+        actor: User,
+        request: Request,
+    ) -> tuple[ReviewItemContext, ManualReviewDecision]:
+        item = self.get_item(session, item_id=item_id)
+        now = datetime.now(timezone.utc)
+        if item.latest_job is not None and item.latest_job.status in {
+            JobStatus.FAILED,
+            JobStatus.MANUAL_REVIEW,
+            JobStatus.SKIPPED,
+            JobStatus.INTERRUPTED,
+            JobStatus.CANCELLED,
+        }:
+            JobRepository(session).mark_cleared(
+                item.latest_job,
+                cleared_at=now,
+                reason="Excluded from future processing by operator.",
+            )
+
+        item.tracked_file.lifecycle_state = FileLifecycleState.COMPLETED
+        item.tracked_file.compliance_state = ComplianceState.COMPLIANT
+        decision = self._record_decision(
+            session,
+            item=item,
+            actor=actor,
+            request=request,
+            decision_type=ManualReviewDecisionType.EXCLUDED,
+            note=note,
+            details={
+                "excluded": True,
+                "reason": "operator_excluded_from_future_processing",
+                "latest_job_id": item.latest_job.id if item.latest_job is not None else None,
+            },
+        )
+        session.flush()
+        return self._build_item_context(session, item.tracked_file), decision
+
     def to_summary_response(self, item: ReviewItemContext) -> ReviewItemSummaryResponse:
         return ReviewItemSummaryResponse(
             id=item.tracked_file.id,
@@ -439,6 +483,9 @@ class ReviewService:
             requires_review=requires_review,
             latest_decision=effective_decision,
         )
+        if effective_decision is not None and effective_decision.decision_type == ManualReviewDecisionType.EXCLUDED:
+            requires_review = False
+            review_status = REVIEW_STATUS_RESOLVED
         confidence = latest_plan.confidence.value if latest_plan is not None else None
 
         return ReviewItemContext(
@@ -493,6 +540,8 @@ class ReviewService:
         if latest_decision.decision_type == ManualReviewDecisionType.HELD:
             return REVIEW_STATUS_HELD
         if latest_decision.decision_type == ManualReviewDecisionType.JOB_CREATED:
+            return REVIEW_STATUS_RESOLVED
+        if latest_decision.decision_type == ManualReviewDecisionType.EXCLUDED:
             return REVIEW_STATUS_RESOLVED
         return REVIEW_STATUS_OPEN
 

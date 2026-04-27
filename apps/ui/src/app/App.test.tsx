@@ -1,6 +1,6 @@
 import { screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 import { makeSession, mockFetchRoutes, renderApp, resetBrowserState } from "../test/test-utils";
 
@@ -13,6 +13,15 @@ function nextPatchVersion(version: string): string {
     return `${version}-next`;
   }
   return [...parts.slice(0, -1), String(patch + 1)].join(".");
+}
+
+function jsonResponse(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      "Content-Type": "application/json",
+    },
+  });
 }
 
 describe("Encodr UI shell", () => {
@@ -153,6 +162,9 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("heading", { name: /active transcoding file/i })).toBeInTheDocument();
     expect(screen.getByText(/example film \(2024\)\.mkv/i)).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /open jobs/i })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /manual review/i })).toHaveAttribute("href", "/review?status=open");
+    expect(screen.getByRole("link", { name: /failed/i })).toHaveAttribute("href", "/jobs?status=failed&tab=problem");
+    expect(screen.getByRole("link", { name: /running/i })).toHaveAttribute("href", "/jobs?status=running&tab=active");
     expect(screen.queryByRole("link", { name: /^reports$/i, hidden: false })).not.toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /start here/i })).not.toBeInTheDocument();
     expect(screen.queryByLabelText(/probe source path/i)).not.toBeInTheDocument();
@@ -1234,6 +1246,54 @@ describe("Encodr UI shell", () => {
     });
   });
 
+  it("renders backup search, pagination, visible selection, and confirmed bulk delete", async () => {
+    const confirmSpy = vi.spyOn(window, "confirm").mockReturnValue(true);
+    const backupOne = {
+      job_id: "job-backup-1",
+      tracked_file_id: "file-1",
+      source_path: "/media/Movies/First Film (2024).mkv",
+      source_filename: "First Film (2024).mkv",
+      backup_path: "/media/Movies/First Film (2024).encodr-backup.mkv",
+      backup_policy: "keep",
+      created_at: "2026-04-20T10:00:00Z",
+      retention_until: null,
+      deleted_at: null,
+      restored_at: null,
+    };
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs/backups", body: { items: [backupOne], limit: 15, offset: 0, total: 16 } },
+      { method: "DELETE", path: "/api/jobs/job-backup-1/backup", body: backupOne },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/search backups/i)).toBeInTheDocument();
+    expect(screen.getByText(/showing 1-15 of 16/i)).toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /select all visible/i }));
+    await userEvent.click(screen.getByRole("button", { name: /delete selected \(1\)/i }));
+
+    await waitFor(() => {
+      expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining("Delete 1 selected backup file"));
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/job-backup-1/backup"),
+        expect.objectContaining({ method: "DELETE", headers: expect.any(Headers) }),
+      );
+    });
+    confirmSpy.mockRestore();
+  });
+
   it("uses tracked-file search requests instead of a fixed local picker list", async () => {
     const fetchMock = mockFetchRoutes([
       {
@@ -1359,6 +1419,58 @@ describe("Encodr UI shell", () => {
         expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
       );
     });
+  });
+
+  it("moves the review drawer to the next item after excluding the selected item", async () => {
+    const itemOne = reviewItemDetail();
+    const itemTwo = {
+      ...reviewItemDetail(),
+      id: "item-2",
+      source_path: "/media/Movies/Another Film (2024).mkv",
+      tracked_file: {
+        ...reviewItemDetail().tracked_file,
+        id: "file-2",
+        source_path: "/media/Movies/Another Film (2024).mkv",
+        source_filename: "Another Film (2024).mkv",
+      },
+    };
+    let excluded = false;
+    const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
+      const method = (init?.method ?? "GET").toUpperCase();
+      const url = typeof input === "string" ? input : input.toString();
+      if (method === "GET" && url.includes("/api/review/items/item-1")) {
+        return jsonResponse(itemOne);
+      }
+      if (method === "GET" && url.includes("/api/review/items/item-2")) {
+        return jsonResponse(itemTwo);
+      }
+      if (method === "GET" && url.includes("/api/review/items")) {
+        return jsonResponse({ items: excluded ? [itemTwo] : [itemOne, itemTwo], limit: 100, offset: 0 });
+      }
+      if (method === "POST" && url.includes("/api/review/items/item-1/exclude")) {
+        excluded = true;
+        return jsonResponse({
+          review_item: { ...itemOne, review_status: "resolved", requires_review: false },
+          decision: { id: "decision-1", decision_type: "excluded" },
+          job: null,
+        });
+      }
+      throw new Error(`Unhandled fetch request: ${method} ${url}`);
+    });
+    vi.stubGlobal("fetch", fetchMock);
+
+    renderApp({ route: "/review/item-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /example film \(2024\)\.mkv/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /exclude from future processing/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/review/items/item-1/exclude"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+    expect(await screen.findByRole("heading", { name: /another film \(2024\)\.mkv/i })).toBeInTheDocument();
   });
 
   it("shows an empty review inbox when no items match the current filters", async () => {
@@ -2224,6 +2336,7 @@ function jobDetail() {
     backend_selection_reason: null,
     failure_message: null,
     failure_category: null,
+    skipped_reason: null,
     verification_status: "pending",
     replacement_status: "pending",
     tracked_file_is_protected: false,

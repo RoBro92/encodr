@@ -199,8 +199,18 @@ class JobsService:
         logger.info("failed job history cleared", extra={"affected_count": len(jobs)})
         return jobs
 
-    def list_backups(self, session: Session) -> list[Job]:
-        return JobRepository(session).list_backup_jobs()
+    def list_backups(
+        self,
+        session: Session,
+        *,
+        search: str | None = None,
+        limit: int | None = None,
+        offset: int = 0,
+    ) -> list[Job]:
+        return JobRepository(session).list_backup_jobs(search=search, limit=limit, offset=offset)
+
+    def count_backups(self, session: Session, *, search: str | None = None) -> int:
+        return JobRepository(session).count_backup_jobs(search=search)
 
     def cleanup_expired_backups(self, session: Session, *, now: datetime | None = None) -> list[Job]:
         jobs = JobRepository(session).cleanup_expired_backups(now=now)
@@ -364,6 +374,15 @@ class JobsService:
         allow_review_approved: bool,
     ) -> None:
         latest_job = JobRepository(session).get_latest_for_tracked_file(tracked_file.id)
+        latest_decision = ManualReviewDecisionRepository(session).get_latest_for_tracked_file(tracked_file.id)
+        if (
+            latest_decision is not None
+            and latest_decision.decision_type == ManualReviewDecisionType.EXCLUDED
+            and self._normalise_datetime(latest_decision.created_at) >= self._normalise_datetime(plan_snapshot.created_at)
+        ):
+            raise ApiConflictError(
+                "This file was excluded from future processing by an operator."
+            )
         requires_review = bool(
             tracked_file.operator_protected
             or tracked_file.is_protected
@@ -384,7 +403,6 @@ class JobsService:
             issue_at_candidates.append(latest_job.updated_at)
         issue_at = max(self._normalise_datetime(value) for value in issue_at_candidates)
 
-        latest_decision = ManualReviewDecisionRepository(session).get_latest_for_tracked_file(tracked_file.id)
         decision_is_current = (
             latest_decision is not None
             and latest_decision.decision_type == ManualReviewDecisionType.APPROVED

@@ -234,6 +234,7 @@ def _accelerated_selection(
             device_path = _first_device_path(vaapi)
             if device_path is None:
                 return None
+            qsv_reason = _probe_reason(qsv) or "QSV is unavailable in this runtime"
             return SelectedExecutionBackend(
                 requested_backend=requested_backend,
                 actual_backend="intel_igpu",
@@ -241,7 +242,7 @@ def _accelerated_selection(
                 video_encoder=encoder,
                 command_prefix=["-vaapi_device", device_path],
                 video_filter="format=nv12,hwupload",
-                selection_reason="Using Intel VAAPI because QSV is unavailable in this runtime.",
+                selection_reason=f"Using Intel VAAPI because QSV is unavailable: {qsv_reason}.",
                 device_path=device_path,
             )
         return None
@@ -299,4 +300,16 @@ def _first_device_path(details: dict[str, object]) -> str | None:
     for item in device_paths:
         if isinstance(item, dict) and item.get("path"):
             return str(item["path"])
+    return None
+
+
+def _probe_reason(details: dict[str, object]) -> str | None:
+    reason = details.get("reason_unavailable") or details.get("message")
+    if isinstance(reason, str) and reason.strip():
+        return reason.strip().rstrip(".")
+    smoke_test = details.get("ffmpeg_smoke_test")
+    if isinstance(smoke_test, dict):
+        stderr = smoke_test.get("stderr")
+        if isinstance(stderr, str) and stderr.strip():
+            return stderr.strip().rstrip(".")
     return None

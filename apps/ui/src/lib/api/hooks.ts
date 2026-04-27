@@ -16,6 +16,7 @@ import {
   createRemoteWorkerOnboarding,
   createBatchJobs,
   createJobFromReviewItem,
+  excludeReviewItem,
   disableWorker,
   deleteWorker,
   deleteJobBackup,
@@ -431,11 +432,11 @@ export function useClearFailedJobsMutation() {
   });
 }
 
-export function useJobBackupsQuery() {
+export function useJobBackupsQuery(filters: Record<string, string | number | undefined> = {}) {
   const { apiClient, isAuthenticated } = useSession();
   return useQuery<JobBackupListResponse>({
-    queryKey: ["jobs", "backups"],
-    queryFn: () => listJobBackups(apiClient),
+    queryKey: ["jobs", "backups", filters],
+    queryFn: () => listJobBackups(apiClient, filters),
     enabled: isAuthenticated,
   });
 }
@@ -1009,6 +1010,11 @@ export function useReplanReviewItemMutation() {
 export function useCreateJobFromReviewItemMutation() {
   const { apiClient } = useSession();
   return useReviewDecisionMutation(({ itemId, request }) => createJobFromReviewItem(apiClient, itemId, request));
+}
+
+export function useExcludeReviewItemMutation() {
+  const { apiClient } = useSession();
+  return useReviewDecisionMutation(({ itemId, request }) => excludeReviewItem(apiClient, itemId, request));
 }
 
 export function useLoginMutation() {

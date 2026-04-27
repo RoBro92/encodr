@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
@@ -14,6 +14,7 @@ import {
   useApproveReviewItemMutation,
   useClearReviewItemProtectedMutation,
   useCreateJobFromReviewItemMutation,
+  useExcludeReviewItemMutation,
   useHoldReviewItemMutation,
   useRejectReviewItemMutation,
   useReplanReviewItemMutation,
@@ -21,7 +22,7 @@ import {
   useReviewItemDetailQuery,
   useReviewItemsQuery,
 } from "../../lib/api/hooks";
-import type { ReviewItemDetail, ReviewReason } from "../../lib/types/api";
+import type { ReviewItemDetail, ReviewItemSummary, ReviewReason } from "../../lib/types/api";
 import { formatDateTime, formatRelativeBoolean } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -32,16 +33,19 @@ type ReviewDecisionAction =
   | "mark_protected"
   | "clear_protected"
   | "replan"
-  | "create_job";
+  | "create_job"
+  | "exclude";
 
 export function ReviewPage() {
   const { itemId } = useParams();
   const navigate = useNavigate();
-  const [status, setStatus] = useState("open");
+  const [searchParams] = useSearchParams();
+  const [status, setStatus] = useState(searchParams.get("status") ?? "open");
   const [protectedOnly, setProtectedOnly] = useState("");
   const [is4k, setIs4k] = useState("");
   const [recentFailuresOnly, setRecentFailuresOnly] = useState(false);
   const [decisionNote, setDecisionNote] = useState("");
+  const previousItemsRef = useRef<ReviewItemSummary[]>([]);
 
   const filters = useMemo(
     () => ({
@@ -63,6 +67,7 @@ export function ReviewPage() {
   const clearProtectedMutation = useClearReviewItemProtectedMutation();
   const replanMutation = useReplanReviewItemMutation();
   const createJobMutation = useCreateJobFromReviewItemMutation();
+  const excludeMutation = useExcludeReviewItemMutation();
 
   const queryError = itemsQuery.error ?? detailQuery.error;
   const mutationError =
@@ -72,15 +77,8 @@ export function ReviewPage() {
     protectMutation.error ??
     clearProtectedMutation.error ??
     replanMutation.error ??
-    createJobMutation.error;
-
-  if (itemsQuery.isLoading) {
-    return <LoadingBlock label="Loading review items" />;
-  }
-
-  if (queryError instanceof Error) {
-    return <ErrorPanel title="Unable to load review items" message={queryError.message} />;
-  }
+    createJobMutation.error ??
+    excludeMutation.error;
 
   const items = itemsQuery.data?.items ?? [];
   const detail = detailQuery.data;
@@ -92,8 +90,44 @@ export function ReviewPage() {
     protectMutation.isPending ||
     clearProtectedMutation.isPending ||
     replanMutation.isPending ||
-    createJobMutation.isPending;
+    createJobMutation.isPending ||
+    excludeMutation.isPending;
   const metrics = summariseReviewItems(items);
+
+  useEffect(() => {
+    const queryStatus = searchParams.get("status") ?? "open";
+    if (queryStatus !== status) {
+      setStatus(queryStatus);
+    }
+  }, [searchParams, status]);
+
+  useEffect(() => {
+    if (itemsQuery.isLoading) {
+      return;
+    }
+    if (!itemId) {
+      previousItemsRef.current = items;
+      return;
+    }
+    if (items.some((item) => item.id === itemId)) {
+      previousItemsRef.current = items;
+      return;
+    }
+    const previousItems = previousItemsRef.current;
+    const previousIndex = previousItems.findIndex((item) => item.id === itemId);
+    const nextItem = items[previousIndex] ?? items[previousIndex - 1] ?? items[0] ?? null;
+    setDecisionNote("");
+    navigate(nextItem ? APP_ROUTES.reviewDetail(nextItem.id) : APP_ROUTES.review, { replace: true });
+    previousItemsRef.current = items;
+  }, [itemId, items, itemsQuery.isLoading, navigate]);
+
+  if (itemsQuery.isLoading) {
+    return <LoadingBlock label="Loading review items" />;
+  }
+
+  if (queryError instanceof Error) {
+    return <ErrorPanel title="Unable to load review items" message={queryError.message} />;
+  }
 
   async function handleDecision(
     action: ReviewDecisionAction,
@@ -124,6 +158,9 @@ export function ReviewPage() {
         break;
       case "create_job":
         await createJobMutation.mutateAsync(payload);
+        break;
+      case "exclude":
+        await excludeMutation.mutateAsync(payload);
         break;
       default:
         return;
@@ -481,6 +518,14 @@ function ReviewDetailDrawer({
                 disabled={isActionPending || !detail.protected_state.operator_protected}
               >
                 Clear protected
+              </button>
+              <button
+                className="button button-secondary"
+                type="button"
+                onClick={() => onDecision("exclude")}
+                disabled={isActionPending}
+              >
+                Exclude from future processing
               </button>
               <button
                 className="button button-primary review-primary-action"
