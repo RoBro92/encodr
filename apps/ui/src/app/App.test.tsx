@@ -455,6 +455,18 @@ describe("Encodr UI shell", () => {
           breaking_changes_summary: "Restart after update if newly passed-through devices are not visible.",
         },
       },
+      {
+        method: "POST",
+        path: "/api/system/update/check",
+        body: {
+          ...updateStatus(),
+          latest_version: nextPatchVersion(CURRENT_VERSION),
+          update_available: false,
+          checked_at: "2026-04-21T08:00:00Z",
+          release_summary: "## Runtime detection 2026-04-20\n\n- Update guidance improvements.\n- Safer `encodr update --apply` output.",
+          breaking_changes_summary: "Restart after update if newly passed-through devices are not visible.",
+        },
+      },
       { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
       { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
       { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
@@ -493,6 +505,59 @@ describe("Encodr UI shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /view changelog/i }));
     await userEvent.click(screen.getByRole("presentation"));
     expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
+  });
+
+  it("refreshes stale update status when the settings updates card is shown", async () => {
+    const latestVersion = nextPatchVersion(CURRENT_VERSION);
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      {
+        method: "GET",
+        path: "/api/system/update",
+        body: {
+          ...updateStatus(),
+          latest_version: CURRENT_VERSION,
+          update_available: false,
+          release_name: `Encodr v${CURRENT_VERSION}`,
+          checked_at: "2026-04-27T08:00:00Z",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/system/update/check",
+        body: {
+          ...updateStatus(),
+          latest_version: latestVersion,
+          update_available: true,
+          release_name: `Encodr v${latestVersion}`,
+          checked_at: "2026-04-27T09:00:00Z",
+          release_notes_url: `https://github.com/RoBro92/encodr/releases/tag/v${latestVersion}`,
+        },
+      },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    const updatesHeading = await screen.findByRole("heading", { name: /^updates$/i });
+    const updatesCard = updatesHeading.closest(".section-card");
+    expect(updatesCard).not.toBeNull();
+
+    await waitFor(() => {
+      expect(
+        fetchMock.mock.calls.some(([input, init]) => {
+          return String(input).includes("/api/system/update/check") && init?.method === "POST";
+        }),
+      ).toBe(true);
+    });
+    await waitFor(() => {
+      expect(within(updatesCard as HTMLElement).getByText(new RegExp(`Latest ${latestVersion}`))).toBeInTheDocument();
+    });
+    expect(within(updatesCard as HTMLElement).getByText("Yes")).toBeInTheDocument();
+    expect(within(updatesCard as HTMLElement).getByText(`Encodr v${latestVersion}`)).toBeInTheDocument();
   });
 
   it("renders the redesigned library workspace and lets tabs switch cleanly", async () => {

@@ -87,6 +87,30 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       );
     }
 
+    if (!route && method === "POST" && url.includes("/api/system/update/check")) {
+      return new Response(
+        JSON.stringify({
+          current_version: CURRENT_VERSION,
+          latest_version: null,
+          update_available: false,
+          channel: "internal",
+          status: "ok",
+          release_name: null,
+          release_summary: null,
+          checked_at: "2026-04-27T09:00:00Z",
+          error: null,
+          download_url: null,
+          release_notes_url: null,
+        }),
+        {
+          status: 200,
+          headers: {
+            "Content-Type": "application/json",
+          },
+        },
+      );
+    }
+
     if (!route && method === "GET" && url.includes("/api/jobs/progress-stream")) {
       return new Response("", {
         status: 200,
