@@ -7,7 +7,46 @@ from app.config import WorkerAgentSettings
 from app.version import read_agent_version
 from encodr_shared import collect_runtime_telemetry, recommend_worker_concurrency, validate_worker_path_mapping
 from encodr_core.execution import normalise_backend_preference
-from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_execution_backends
+from encodr_shared.worker_runtime import probe_binary, probe_directory, probe_execution_backends, probe_which
+
+
+def _serialise_backend_probe(probe) -> dict[str, object]:
+    preference_key = {
+        "cpu": "cpu_only",
+        "intel_igpu": "prefer_intel_igpu",
+        "nvidia_gpu": "prefer_nvidia_gpu",
+        "amd_gpu": "prefer_amd_gpu",
+    }.get(probe.backend, probe.backend)
+    return {
+        "backend": probe.backend,
+        "preference_key": preference_key,
+        "detected": probe.detected,
+        "usable_by_ffmpeg": probe.usable,
+        "ffmpeg_path_verified": bool(probe.details.get("ffmpeg_path_verified", probe.usable)),
+        "status": probe.status,
+        "message": probe.message,
+        "reason_unavailable": probe.details.get("reason_unavailable"),
+        "recommended_usage": probe.details.get("recommended_usage"),
+        "device_paths": probe.details.get("device_paths", []),
+        "details": probe.details,
+    }
+
+
+def _binary_summary_item(name: str, configured_path: str | os.PathLike[str]) -> dict[str, object]:
+    probe = probe_binary(configured_path)
+    item: dict[str, object] = {
+        "name": name,
+        "configured_path": probe.configured_path,
+        "resolved_path": probe.resolved_path,
+        "exists": probe.exists,
+        "executable": probe.executable,
+        "discoverable": probe.discoverable,
+        "status": probe.status,
+        "message": probe.message,
+    }
+    if name == "vainfo":
+        item["which"] = probe_which("vainfo")
+    return item
 
 
 def build_capability_summary(
@@ -48,6 +87,7 @@ def build_capability_summary(
         "recommended_concurrency": recommended_concurrency,
         "recommended_concurrency_reason": recommendation_reason,
         "tags": ["remote", settings.queue],
+        "hardware_probes": [_serialise_backend_probe(probe) for probe in backend_probes],
     }
 
 
@@ -108,21 +148,10 @@ def build_runtime_summary(
 
 
 def build_binary_summary(settings: WorkerAgentSettings) -> list[dict[str, object]]:
-    ffmpeg = probe_binary(settings.ffmpeg_path)
-    ffprobe = probe_binary(settings.ffprobe_path)
     return [
-        {
-            "name": "ffmpeg",
-            "configured_path": ffmpeg.configured_path,
-            "discoverable": ffmpeg.discoverable,
-            "message": ffmpeg.message,
-        },
-        {
-            "name": "ffprobe",
-            "configured_path": ffprobe.configured_path,
-            "discoverable": ffprobe.discoverable,
-            "message": ffprobe.message,
-        },
+        _binary_summary_item("ffmpeg", settings.ffmpeg_path),
+        _binary_summary_item("ffprobe", settings.ffprobe_path),
+        _binary_summary_item("vainfo", "vainfo"),
     ]
 
 

@@ -150,6 +150,10 @@ def test_probe_intel_vaapi_reports_missing_vainfo(monkeypatch: pytest.MonkeyPatc
     )
     monkeypatch.setattr("encodr_shared.worker_runtime.Path.exists", lambda self: str(self) == "/dev/dri")
     monkeypatch.setattr(
+        "encodr_shared.worker_runtime._run_command_capture",
+        lambda command, **kwargs: (1, "", "") if command == ["which", "vainfo"] else (0, "", ""),
+    )
+    monkeypatch.setattr(
         "encodr_shared.worker_runtime._device_probe",
         lambda path: {
             "path": Path(path).as_posix(),
@@ -184,6 +188,12 @@ def test_probe_intel_vaapi_reports_missing_vainfo(monkeypatch: pytest.MonkeyPatc
 
     assert probe.usable is False
     assert probe.details["reason_unavailable"] == "vainfo missing"
+    assert probe.details["vainfo"]["which"] == {
+        "command": "which vainfo",
+        "returncode": 1,
+        "stdout": None,
+        "stderr": None,
+    }
 
 
 def test_probe_intel_vaapi_reports_driver_missing(monkeypatch: pytest.MonkeyPatch) -> None:

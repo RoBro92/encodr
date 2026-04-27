@@ -580,6 +580,9 @@ export type WorkerCapabilitySummary = {
   recommended_concurrency: number | null;
   recommended_concurrency_reason: string | null;
   tags: string[];
+  hardware_probes?: Array<Record<string, unknown>>;
+  capability_source?: string | null;
+  capability_checked_at?: string | null;
 };
 
 export type WorkerHostSummary = {
@@ -611,8 +614,13 @@ export type WorkerRuntimeSummary = {
 export type WorkerBinarySummary = {
   name: string;
   configured_path: string | null;
+  resolved_path?: string | null;
+  exists?: boolean | null;
+  executable?: boolean | null;
   discoverable: boolean | null;
+  status?: string | null;
   message: string | null;
+  which?: Record<string, unknown> | null;
 };
 
 export type WorkerInventorySummary = {
