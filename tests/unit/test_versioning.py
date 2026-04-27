@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import pytest
@@ -84,6 +85,46 @@ def test_update_checker_reports_available_update() -> None:
     assert result.latest_version == latest_version
     assert result.update_available is True
     assert result.download_url == f"https://downloads.example.invalid/encodr-{latest_version}.tar.gz"
+
+
+def test_update_checker_auto_refreshes_stale_cached_status() -> None:
+    latest_version = next_patch_version(CURRENT_VERSION)
+    now = datetime(2026, 4, 27, 9, 0, tzinfo=timezone.utc)
+    payloads = [
+        {
+            "latest_version": CURRENT_VERSION,
+            "channel": "internal",
+        },
+        {
+            "latest_version": latest_version,
+            "channel": "internal",
+        },
+    ]
+
+    def fetcher(_url: str, _timeout: int) -> dict[str, str]:
+        return payloads.pop(0)
+
+    checker = UpdateChecker(
+        current_version=CURRENT_VERSION,
+        settings=UpdateCheckSettings(
+            enabled=True,
+            metadata_url="https://updates.example.invalid/encodr.json",
+            channel="internal",
+            timeout_seconds=2,
+        ),
+        fetcher=fetcher,
+        auto_check_interval_seconds=60,
+        now_provider=lambda: now,
+    )
+
+    first_result = checker.current_status(auto_check=True)
+    now += timedelta(seconds=61)
+    second_result = checker.current_status(auto_check=True)
+
+    assert first_result.latest_version == CURRENT_VERSION
+    assert first_result.update_available is False
+    assert second_result.latest_version == latest_version
+    assert second_result.update_available is True
 
 
 def test_update_checker_understands_github_release_payload() -> None:

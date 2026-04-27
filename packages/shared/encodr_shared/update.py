@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, replace
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Callable
 from urllib.error import URLError
 from urllib.request import urlopen
@@ -10,9 +10,11 @@ from urllib.request import urlopen
 from encodr_shared.versioning import is_version_newer
 
 DEFAULT_RELEASE_METADATA_URL = "https://api.github.com/repos/RoBro92/encodr/releases/latest"
+DEFAULT_AUTO_CHECK_INTERVAL_SECONDS = 15 * 60
 
 
 UpdateFetcher = Callable[[str, int], dict[str, Any]]
+Clock = Callable[[], datetime]
 
 
 @dataclass(frozen=True, slots=True)
@@ -54,10 +56,14 @@ class UpdateChecker:
         current_version: str,
         settings: UpdateCheckSettings,
         fetcher: UpdateFetcher | None = None,
+        auto_check_interval_seconds: int = DEFAULT_AUTO_CHECK_INTERVAL_SECONDS,
+        now_provider: Clock | None = None,
     ) -> None:
         self.current_version = current_version
         self.settings = settings
         self.fetcher = fetcher or default_update_fetcher
+        self.auto_check_interval = timedelta(seconds=max(0, auto_check_interval_seconds))
+        self._now = now_provider or _utc_now
         self._last_result = self._default_result()
 
     def _default_result(self) -> UpdateCheckResult:
@@ -71,9 +77,24 @@ class UpdateChecker:
         )
 
     def current_status(self, *, auto_check: bool = False) -> UpdateCheckResult:
-        if auto_check and self.settings.enabled and self._last_result.status == "not_checked":
+        if auto_check and self._should_auto_check():
             return self.check_now()
         return self._last_result
+
+    def _should_auto_check(self) -> bool:
+        if not self.settings.enabled:
+            return False
+        if self._last_result.status == "not_checked":
+            return True
+        if self._last_result.checked_at is None:
+            return True
+        if self.auto_check_interval <= timedelta(seconds=0):
+            return True
+        checked_at = _as_aware_utc(self._last_result.checked_at)
+        return self._now_utc() - checked_at >= self.auto_check_interval
+
+    def _now_utc(self) -> datetime:
+        return _as_aware_utc(self._now())
 
     def check_now(self) -> UpdateCheckResult:
         if not self.settings.enabled:
@@ -87,12 +108,12 @@ class UpdateChecker:
                 update_available=False,
                 channel=self.settings.channel,
                 status="misconfigured",
-                checked_at=datetime.now(timezone.utc),
+                checked_at=self._now_utc(),
                 error="Update checks are enabled but no metadata URL is configured.",
             )
             return self._last_result
 
-        checked_at = datetime.now(timezone.utc)
+        checked_at = self._now_utc()
         try:
             payload = self.fetcher(self.settings.metadata_url, self.settings.timeout_seconds)
             latest_version = _extract_latest_version(payload)
@@ -131,6 +152,16 @@ class UpdateChecker:
                 error=str(error),
             )
             return self._last_result
+
+
+def _utc_now() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _as_aware_utc(value: datetime) -> datetime:
+    if value.tzinfo is None:
+        return value.replace(tzinfo=timezone.utc)
+    return value.astimezone(timezone.utc)
 
 
 def _optional_text(value: Any) -> str | None:

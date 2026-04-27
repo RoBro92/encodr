@@ -86,6 +86,8 @@ import type {
 } from "../types/api";
 
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "interrupted", "manual_review", "skipped"]);
+const UPDATE_STATUS_STALE_MS = 60 * 1000;
+const UPDATE_STATUS_REFETCH_MS = 5 * 60 * 1000;
 
 export function useBootstrapStatusQuery(enabled = true) {
   const { apiClient } = useSession();
@@ -568,6 +570,9 @@ export function useUpdateStatusQuery() {
     queryKey: ["system", "update"],
     queryFn: () => getUpdateStatus(apiClient),
     enabled: isAuthenticated,
+    staleTime: UPDATE_STATUS_STALE_MS,
+    refetchInterval: isAuthenticated ? UPDATE_STATUS_REFETCH_MS : false,
+    refetchIntervalInBackground: false,
   });
 }
 
@@ -592,8 +597,8 @@ export function useCheckUpdateStatusMutation() {
   const queryClient = useQueryClient();
   return useMutation({
     mutationFn: () => checkUpdateStatus(apiClient),
-    onSuccess: async () => {
-      await queryClient.invalidateQueries({ queryKey: ["system", "update"] });
+    onSuccess: (result) => {
+      queryClient.setQueryData(["system", "update"], result);
     },
   });
 }

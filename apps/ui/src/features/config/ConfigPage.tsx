@@ -12,6 +12,7 @@ import {
   useProcessingRulesQuery,
   useRuntimeStatusQuery,
   useStorageStatusQuery,
+  useCheckUpdateStatusMutation,
   useUpdateStatusQuery,
   useUpdateLibraryRootsMutation,
   useUpdateProcessingRulesMutation,
@@ -83,6 +84,8 @@ export function ConfigPage() {
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
   const updateStatusQuery = useUpdateStatusQuery();
+  const { mutate: refreshUpdateStatus } = useCheckUpdateStatusMutation();
+  const updateRefreshRequestedRef = useRef(false);
   const updateRootsMutation = useUpdateLibraryRootsMutation();
   const updateRulesMutation = useUpdateProcessingRulesMutation();
 
@@ -92,6 +95,14 @@ export function ConfigPage() {
       setPersistedRules(rulesQuery.data);
     }
   }, [rulesQuery.data]);
+
+  useEffect(() => {
+    if (updateRefreshRequestedRef.current || !updateStatusQuery.data) {
+      return;
+    }
+    updateRefreshRequestedRef.current = true;
+    refreshUpdateStatus();
+  }, [refreshUpdateStatus, updateStatusQuery.data]);
 
   const error =
     rootsQuery.error ??
