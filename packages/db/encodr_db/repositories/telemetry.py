@@ -14,6 +14,7 @@ TERMINAL_STATUSES = {
     JobStatus.COMPLETED,
     JobStatus.FAILED,
     JobStatus.INTERRUPTED,
+    JobStatus.CANCELLED,
     JobStatus.SKIPPED,
     JobStatus.MANUAL_REVIEW,
 }

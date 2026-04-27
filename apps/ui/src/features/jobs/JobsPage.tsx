@@ -8,19 +8,23 @@ import { KeyValueList } from "../../components/KeyValueList";
 import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
-import { StatusBadge } from "../../components/StatusBadge";
 import { useSession } from "../auth/AuthProvider";
 import {
   useCancelJobMutation,
+  useClearFailedJobsMutation,
+  useClearQueueMutation,
   useCreateJobMutation,
+  useDeleteJobBackupMutation,
   useFilesQuery,
+  useJobBackupsQuery,
   useJobDetailQuery,
   useJobProgressStream,
   useJobsQuery,
   useRetryJobMutation,
+  useRestoreJobBackupMutation,
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
-import type { FileSummary, JobDetail, JobSummary } from "../../lib/types/api";
+import type { FileSummary, JobBackup, JobDetail, JobSummary } from "../../lib/types/api";
 import { formatBytes, formatDateTime, formatDurationSeconds, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -32,9 +36,13 @@ const JOB_STATUS_OPTIONS = [
   { label: "Completed", value: "completed" },
   { label: "Failed", value: "failed" },
   { label: "Interrupted", value: "interrupted" },
+  { label: "Cancelled", value: "cancelled" },
   { label: "Manual review", value: "manual_review" },
   { label: "Skipped", value: "skipped" },
 ];
+
+type JobsTab = "active" | "completed" | "problem";
+type ConfirmAction = "clear-queue" | "clear-failed" | null;
 
 type JobWorkerGroup = {
   key: string;
@@ -59,6 +67,8 @@ export function JobsPage() {
   const [fileSearch, setFileSearch] = useState("");
   const [createFromFileId, setCreateFromFileId] = useState("");
   const [createFileSearch, setCreateFileSearch] = useState("");
+  const [jobsTab, setJobsTab] = useState<JobsTab>("active");
+  const [confirmAction, setConfirmAction] = useState<ConfirmAction>(null);
 
   const filters = useMemo(
     () => ({
@@ -81,7 +91,12 @@ export function JobsPage() {
   const detailQuery = useJobDetailQuery(jobId);
   const retryMutation = useRetryJobMutation();
   const cancelMutation = useCancelJobMutation();
+  const clearQueueMutation = useClearQueueMutation();
+  const clearFailedMutation = useClearFailedJobsMutation();
   const createJobMutation = useCreateJobMutation();
+  const jobBackupsQuery = useJobBackupsQuery();
+  const deleteBackupMutation = useDeleteJobBackupMutation();
+  const restoreBackupMutation = useRestoreJobBackupMutation();
   const workerStatusQuery = useWorkerStatusQuery();
   const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({});
 
@@ -91,11 +106,19 @@ export function JobsPage() {
   const files = deduplicateTrackedFiles([...filterFiles, ...createFiles]);
   const jobs = jobsQuery.data?.items ?? [];
   const orderedJobs = sortJobsForDisplay(jobs);
-  const groupedJobs = groupJobsByWorker(orderedJobs);
+  const activeJobs = orderedJobs.filter(isActiveQueueJob);
+  const clearableQueueJobs = activeJobs.filter((job) => ["pending", "scheduled"].includes(normalisedJobStatus(job)));
+  const completedJobs = orderedJobs.filter(isCompletedJob);
+  const problemJobs = orderedJobs.filter(isProblemJob);
+  const clearableProblemJobs = problemJobs.filter((job) =>
+    ["failed", "interrupted", "cancelled"].includes(normalisedJobStatus(job)),
+  );
+  const tabJobs = jobsForTab(orderedJobs, jobsTab);
+  const groupedJobs = groupJobsByWorker(tabJobs);
   const localWorkerId = workerStatusQuery.data?.worker_id ?? null;
   const detail = detailQuery.data;
   const metrics = summariseJobs(jobs);
-  const canRetry = detail ? ["failed", "interrupted", "manual_review", "skipped"].includes(detail.status) : false;
+  const canRetry = detail ? ["failed", "interrupted", "cancelled", "manual_review", "skipped"].includes(detail.status) : false;
   const selectedJobId = detail?.id;
 
   function closeDrawer() {
@@ -123,6 +146,12 @@ export function JobsPage() {
     });
   }, [groupedJobs]);
 
+  useEffect(() => {
+    if (detail) {
+      setJobsTab(tabForJob(detail));
+    }
+  }, [detail?.id, detail?.status, detail?.failure_category]);
+
   if (jobsQuery.isLoading || filterFilesQuery.isLoading || createFilesQuery.isLoading) {
     return <LoadingBlock label="Loading jobs" />;
   }
@@ -148,6 +177,18 @@ export function JobsPage() {
       {createJobMutation.error instanceof Error ? (
         <ErrorPanel title="Job creation failed" message={createJobMutation.error.message} />
       ) : null}
+      {clearQueueMutation.error instanceof Error ? (
+        <ErrorPanel title="Clear queue failed" message={clearQueueMutation.error.message} />
+      ) : null}
+      {clearFailedMutation.error instanceof Error ? (
+        <ErrorPanel title="Clear failed jobs failed" message={clearFailedMutation.error.message} />
+      ) : null}
+      {deleteBackupMutation.error instanceof Error ? (
+        <ErrorPanel title="Backup delete failed" message={deleteBackupMutation.error.message} />
+      ) : null}
+      {restoreBackupMutation.error instanceof Error ? (
+        <ErrorPanel title="Backup restore failed" message={restoreBackupMutation.error.message} />
+      ) : null}
 
       <section className="metrics-card-grid" aria-label="Jobs metrics">
         <div className="metrics-card-item">
@@ -168,7 +209,30 @@ export function JobsPage() {
         </div>
       </section>
 
-      <SectionCard title="Queue controls" subtitle="Filter the queue or create a job from a tracked file.">
+      <SectionCard
+        title="Queue controls"
+        subtitle="Filter jobs, create work, or clear stalled queue history."
+        actions={
+          <>
+            <button
+              className="button button-secondary button-small"
+              type="button"
+              onClick={() => setConfirmAction("clear-failed")}
+              disabled={clearFailedMutation.isPending || clearableProblemJobs.length === 0}
+            >
+              {clearFailedMutation.isPending ? "Clearing…" : "Clear failed"}
+            </button>
+            <button
+              className="button button-secondary button-small"
+              type="button"
+              onClick={() => setConfirmAction("clear-queue")}
+              disabled={clearQueueMutation.isPending || clearableQueueJobs.length === 0}
+            >
+              {clearQueueMutation.isPending ? "Clearing…" : "Clear queue"}
+            </button>
+          </>
+        }
+      >
         <div className="jobs-control-bar">
           <div className="jobs-control-group jobs-control-group-filters">
             <label className="field">
@@ -243,9 +307,39 @@ export function JobsPage() {
       </SectionCard>
 
       <section className="jobs-review-layout jobs-review-layout-single">
-        <SectionCard title="Queue" subtitle={`${jobs.length} job${jobs.length === 1 ? "" : "s"} in view`}>
-          {orderedJobs.length === 0 ? (
-            <EmptyState title="No jobs yet" message="Create a plan in Library, then create a job to populate the queue." />
+        <SectionCard title={jobsTabTitle(jobsTab)} subtitle={`${tabJobs.length} job${tabJobs.length === 1 ? "" : "s"} in view`}>
+          <div className="jobs-tab-bar" role="tablist" aria-label="Job queue sections">
+            <button
+              className={`jobs-tab${jobsTab === "active" ? " jobs-tab-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={jobsTab === "active"}
+              onClick={() => setJobsTab("active")}
+            >
+              Active Queue <span>{activeJobs.length}</span>
+            </button>
+            <button
+              className={`jobs-tab${jobsTab === "completed" ? " jobs-tab-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={jobsTab === "completed"}
+              onClick={() => setJobsTab("completed")}
+            >
+              Completed <span>{completedJobs.length}</span>
+            </button>
+            <button
+              className={`jobs-tab${jobsTab === "problem" ? " jobs-tab-active" : ""}`}
+              type="button"
+              role="tab"
+              aria-selected={jobsTab === "problem"}
+              onClick={() => setJobsTab("problem")}
+            >
+              Failed / Cancelled <span>{problemJobs.length}</span>
+            </button>
+          </div>
+
+          {tabJobs.length === 0 ? (
+            <EmptyState title={emptyTitleForTab(jobsTab)} message={emptyMessageForTab(jobsTab)} />
           ) : (
             <div className="job-worker-groups" role="list" aria-label="Jobs list">
               {groupedJobs.map((group) => (
@@ -289,16 +383,7 @@ export function JobsPage() {
                                       <Link className="queue-job-card-title text-link" to={APP_ROUTES.jobDetail(item.id)}>
                                         <strong>{jobPrimaryLabel(item, files)}</strong>
                                       </Link>
-                                      <div className="badge-row queue-job-card-badges">
-                                        <StatusBadge value={displayJobStatus(item)} />
-                                        {item.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
-                                        {item.requires_review ? <StatusBadge value={item.review_status ?? "open"} /> : null}
-                                        {item.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
-                                        {(item.actual_execution_backend ?? item.requested_execution_backend) ? (
-                                          <StatusBadge value={formatBackendLabel(item.actual_execution_backend ?? item.requested_execution_backend)} />
-                                        ) : null}
-                                        {item.backend_fallback_used ? <StatusBadge value="cpu fallback" /> : null}
-                                      </div>
+                                      <JobStatusBadgeRow job={item} />
                                     </div>
                                     <div className="queue-job-card-context">
                                       <span className="queue-job-card-path" title={jobContextPathLabel(item)}>{jobContextPathLabel(item)}</span>
@@ -349,6 +434,55 @@ export function JobsPage() {
         </SectionCard>
       </section>
 
+      <SectionCard title="Backups" subtitle="Original files retained by completed replacement jobs.">
+        {jobBackupsQuery.isLoading ? (
+          <LoadingBlock label="Loading backups" />
+        ) : jobBackupsQuery.data?.items.length ? (
+          <div className="backup-list" role="list" aria-label="Job backups">
+            {jobBackupsQuery.data.items.map((item) => (
+              <BackupRow
+                key={item.job_id}
+                item={item}
+                onDelete={() => {
+                  if (window.confirm("Delete this backup file? This cannot be undone.")) {
+                    deleteBackupMutation.mutate(item.job_id);
+                  }
+                }}
+                onRestore={() => {
+                  if (window.confirm("Restore this backup and move the current replacement aside?")) {
+                    restoreBackupMutation.mutate(item.job_id);
+                  }
+                }}
+                isBusy={deleteBackupMutation.isPending || restoreBackupMutation.isPending}
+              />
+            ))}
+          </div>
+        ) : (
+          <EmptyState title="No backups tracked" message="Backups from completed replacement jobs will appear here." />
+        )}
+      </SectionCard>
+
+      {confirmAction ? (
+        <ConfirmBulkActionModal
+          action={confirmAction}
+          activeCount={clearableQueueJobs.length}
+          problemCount={clearableProblemJobs.length}
+          isPending={clearQueueMutation.isPending || clearFailedMutation.isPending}
+          onClose={() => setConfirmAction(null)}
+          onConfirm={() => {
+            if (confirmAction === "clear-queue") {
+              clearQueueMutation.mutate(undefined, {
+                onSuccess: () => setConfirmAction(null),
+              });
+              return;
+            }
+            clearFailedMutation.mutate(undefined, {
+              onSuccess: () => setConfirmAction(null),
+            });
+          }}
+        />
+      ) : null}
+
       {jobId ? (
         <JobDetailDrawer
           detail={detail}
@@ -372,6 +506,153 @@ export function JobsPage() {
         />
       ) : null}
     </div>
+  );
+}
+
+function JobStatusBadgeRow({
+  job,
+  includeVerification = false,
+}: {
+  job: JobSummary | JobDetail;
+  includeVerification?: boolean;
+}) {
+  const badges = [
+    jobBadge(job),
+    workerBadge(job),
+    reviewBadge(job),
+    backendBadge(job),
+    scheduleBadge(job),
+  ];
+
+  if (job.job_kind === "dry_run") {
+    badges.push({
+      label: "Type",
+      value: "Dry run",
+      tone: "info",
+      title: "This job only analysed planned work and did not replace media.",
+    });
+  }
+  if (includeVerification) {
+    badges.push({
+      label: "Verify",
+      value: titleCase(job.verification_status),
+      tone: statusToneForValue(job.verification_status),
+      title: "Probe and verification result recorded before replacement.",
+    });
+    badges.push({
+      label: "Replace",
+      value: titleCase(job.replacement_status),
+      tone: statusToneForValue(job.replacement_status),
+      title: "Final replacement state for the source file.",
+    });
+  }
+
+  return (
+    <div className="badge-row queue-job-card-badges">
+      {badges.map((badge) => (
+        <ExplainedStatusBadge
+          key={`${badge.label}:${badge.value}`}
+          label={badge.label}
+          value={badge.value}
+          tone={badge.tone}
+          title={badge.title}
+        />
+      ))}
+    </div>
+  );
+}
+
+function ExplainedStatusBadge({
+  label,
+  value,
+  tone,
+  title,
+}: {
+  label: string;
+  value: string;
+  tone: "neutral" | "info" | "success" | "warning" | "danger" | "active";
+  title: string;
+}) {
+  return (
+    <span className={`explained-status-badge explained-status-badge-${tone}`} title={title}>
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </span>
+  );
+}
+
+function ConfirmBulkActionModal({
+  action,
+  activeCount,
+  problemCount,
+  isPending,
+  onClose,
+  onConfirm,
+}: {
+  action: Exclude<ConfirmAction, null>;
+  activeCount: number;
+  problemCount: number;
+  isPending: boolean;
+  onClose: () => void;
+  onConfirm: () => void;
+}) {
+  const isClearQueue = action === "clear-queue";
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={isClearQueue ? "Clear queue" : "Clear failed jobs"}>
+      <section className="modal-panel">
+        <div className="card-stack">
+          <div>
+            <strong>{isClearQueue ? "Clear active queue?" : "Clear failed history?"}</strong>
+            <p className="muted-copy">
+              {isClearQueue
+                ? `${activeCount} queued, scheduled, or waiting job${activeCount === 1 ? "" : "s"} will be cancelled. Running jobs are left alone.`
+                : `${problemCount} failed, cancelled, or interrupted job${problemCount === 1 ? "" : "s"} will be hidden from the queue view. Review-held jobs stay visible.`}
+            </p>
+          </div>
+          <div className="section-card-actions">
+            <button className="button button-secondary" type="button" onClick={onClose} disabled={isPending}>
+              Keep
+            </button>
+            <button className="button button-primary" type="button" onClick={onConfirm} disabled={isPending}>
+              {isPending ? "Clearing…" : isClearQueue ? "Clear queue" : "Clear failed"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function BackupRow({
+  item,
+  onDelete,
+  onRestore,
+  isBusy,
+}: {
+  item: JobBackup;
+  onDelete: () => void;
+  onRestore: () => void;
+  isBusy: boolean;
+}) {
+  return (
+    <article className="backup-list-row" role="listitem">
+      <div>
+        <strong>{item.source_filename ?? item.source_path?.split("/").pop() ?? `Job ${shortId(item.job_id)}`}</strong>
+        <p className="muted-copy">{item.source_path ?? "Source path unavailable"}</p>
+        <p className="muted-copy">
+          Backup {item.backup_path} • {formatBackupPolicy(item.backup_policy)}
+          {item.retention_until ? ` • retain until ${formatDateTime(item.retention_until)}` : ""}
+        </p>
+      </div>
+      <div className="section-card-actions">
+        <button className="button button-secondary button-small" type="button" onClick={onRestore} disabled={isBusy}>
+          Restore
+        </button>
+        <button className="button button-secondary button-small" type="button" onClick={onDelete} disabled={isBusy}>
+          Delete
+        </button>
+      </div>
+    </article>
   );
 }
 
@@ -428,16 +709,7 @@ function JobDetailDrawer({
         <header className="job-drawer-header">
           <div className="job-drawer-title">
             <h2 id="job-drawer-title">{title}</h2>
-            {detail ? (
-              <div className="badge-row">
-                <StatusBadge value={displayJobStatus(detail)} />
-                <StatusBadge value={detail.verification_status} />
-                <StatusBadge value={detail.replacement_status} />
-                {detail.requires_review ? <StatusBadge value={detail.review_status ?? "open"} /> : null}
-                {detail.tracked_file_is_protected ? <StatusBadge value="protected" /> : null}
-                {detail.job_kind === "dry_run" ? <StatusBadge value="dry run" /> : null}
-              </div>
-            ) : null}
+            {detail ? <JobStatusBadgeRow job={detail} includeVerification /> : null}
           </div>
           <button
             ref={closeButtonRef}
@@ -606,8 +878,10 @@ function JobDetailDrawer({
                   <KeyValueList
                     items={[
                       { label: "Replace in place", value: detail.replace_in_place ? "Yes" : "No" },
+                      { label: "Backup policy", value: formatBackupPolicy(detail.backup_policy) },
                       { label: "Delete replaced source", value: detail.delete_replaced_source ? "Yes" : "No" },
                       { label: "Backup path", value: detail.original_backup_path ?? <MutedValue>Not available</MutedValue> },
+                      { label: "Backup retention", value: detail.backup_retention_until ? formatDateTime(detail.backup_retention_until) : <MutedValue>Not scheduled</MutedValue> },
                       { label: "Replacement failure", value: detail.replacement_failure_message ?? <MutedValue>None</MutedValue> },
                       { label: "Replacement payload", value: detail.replacement_payload ? <pre>{JSON.stringify(detail.replacement_payload, null, 2)}</pre> : <MutedValue>Not available</MutedValue> },
                     ]}
@@ -935,6 +1209,68 @@ function JobMetadataBadges({ items }: { items: string[] }) {
   );
 }
 
+function jobsForTab(jobs: JobSummary[], tab: JobsTab) {
+  if (tab === "active") {
+    return jobs.filter(isActiveQueueJob);
+  }
+  if (tab === "completed") {
+    return jobs.filter(isCompletedJob);
+  }
+  return jobs.filter(isProblemJob);
+}
+
+function tabForJob(job: JobSummary | JobDetail): JobsTab {
+  if (isCompletedJob(job)) {
+    return "completed";
+  }
+  if (isProblemJob(job)) {
+    return "problem";
+  }
+  return "active";
+}
+
+function jobsTabTitle(tab: JobsTab) {
+  if (tab === "active") {
+    return "Active Queue";
+  }
+  if (tab === "completed") {
+    return "Completed Jobs";
+  }
+  return "Failed / Cancelled / Interrupted";
+}
+
+function emptyTitleForTab(tab: JobsTab) {
+  if (tab === "active") {
+    return "No active queue";
+  }
+  if (tab === "completed") {
+    return "No completed jobs";
+  }
+  return "No failed jobs";
+}
+
+function emptyMessageForTab(tab: JobsTab) {
+  if (tab === "active") {
+    return "Create jobs from Library to populate the queue. Completed jobs stay in their own tab.";
+  }
+  if (tab === "completed") {
+    return "Successful jobs move here after verification and replacement finish.";
+  }
+  return "Failed, cancelled, interrupted, and review-held jobs will appear here.";
+}
+
+function isActiveQueueJob(job: JobSummary) {
+  return ["pending", "scheduled", "running"].includes(normalisedJobStatus(job));
+}
+
+function isCompletedJob(job: JobSummary) {
+  return ["completed", "skipped"].includes(normalisedJobStatus(job));
+}
+
+function isProblemJob(job: JobSummary) {
+  return ["failed", "interrupted", "cancelled", "manual_review"].includes(normalisedJobStatus(job));
+}
+
 function deduplicateTrackedFiles(items: FileSummary[]) {
   const seen = new Set<string>();
   return items.filter((item) => {
@@ -1002,7 +1338,7 @@ function summariseJobs(
     active: jobs.filter((job) => ["pending", "scheduled", "running"].includes(job.status)).length,
     attention: jobs.filter(
       (job) =>
-        ["failed", "interrupted", "manual_review", "skipped"].includes(job.status) ||
+        ["failed", "interrupted", "cancelled", "manual_review", "skipped"].includes(job.status) ||
         job.requires_review ||
         Boolean(job.tracked_file_is_protected),
     ).length,
@@ -1017,9 +1353,10 @@ function sortJobsForDisplay(jobs: JobSummary[]) {
     scheduled: 2,
     failed: 3,
     interrupted: 4,
-    manual_review: 5,
-    skipped: 6,
-    completed: 7,
+    cancelled: 5,
+    manual_review: 6,
+    skipped: 7,
+    completed: 8,
   };
   return [...jobs].sort((left, right) => {
     const statusDelta = (rank[normalisedJobStatus(left)] ?? 99) - (rank[normalisedJobStatus(right)] ?? 99);
@@ -1063,7 +1400,147 @@ function formatStatusLabel(value: string) {
   return value.replace(/_/g, " ").toUpperCase();
 }
 
-function jobStatusTone(job: JobStatusWithFailureCategory) {
+function jobBadge(job: JobSummary | JobDetail) {
+  const status = displayJobStatus(job);
+  return {
+    label: "Job",
+    value: titleCase(status.replace(/_/g, " ")),
+    tone: jobStatusTone(job),
+    title: jobStatusExplanation(job),
+  };
+}
+
+function workerBadge(job: JobSummary | JobDetail) {
+  const status = normalisedJobStatus(job);
+  if (status === "running" && job.worker_name) {
+    return {
+      label: "Worker",
+      value: `Running on ${job.worker_name}`,
+      tone: "info" as const,
+      title: "The worker currently executing this job.",
+    };
+  }
+  if (job.worker_name || job.assigned_worker_id) {
+    return {
+      label: "Worker",
+      value: job.worker_name ?? `Assigned ${shortId(job.assigned_worker_id ?? "")}`,
+      tone: "neutral" as const,
+      title: "The worker assigned to this job.",
+    };
+  }
+  return {
+    label: "Worker",
+    value: status === "pending" ? "Waiting" : "Unassigned",
+    tone: status === "pending" ? "warning" as const : "neutral" as const,
+    title: status === "pending" ? "Waiting for an eligible worker." : "No worker is assigned.",
+  };
+}
+
+function reviewBadge(job: JobSummary | JobDetail) {
+  if (job.tracked_file_is_protected) {
+    return {
+      label: "Review",
+      value: "Protected",
+      tone: "warning" as const,
+      title: "This file is protected and requires explicit review approval before replacement.",
+    };
+  }
+  if (job.requires_review || job.status === "manual_review") {
+    return {
+      label: "Review",
+      value: titleCase(job.review_status ?? "Needs review"),
+      tone: "warning" as const,
+      title: "The job is held for review before processing can continue.",
+    };
+  }
+  return {
+    label: "Review",
+    value: "Clear",
+    tone: "success" as const,
+    title: "No review hold is recorded for this job.",
+  };
+}
+
+function backendBadge(job: JobSummary | JobDetail) {
+  if (job.backend_fallback_used) {
+    return {
+      label: "Backend",
+      value: "CPU fallback",
+      tone: "warning" as const,
+      title: job.backend_selection_reason ?? "The requested backend was unavailable and the job used CPU fallback.",
+    };
+  }
+  const backend = job.actual_execution_backend ?? job.requested_execution_backend;
+  return {
+    label: "Backend",
+    value: formatBackendLabel(backend),
+    tone: backend ? "neutral" as const : "warning" as const,
+    title: backend ? "Requested or actual execution backend." : "No backend has been selected yet.",
+  };
+}
+
+function scheduleBadge(job: JobSummary | JobDetail) {
+  if (job.status === "scheduled") {
+    return {
+      label: "Schedule",
+      value: "Waiting",
+      tone: "warning" as const,
+      title: job.schedule_summary
+        ? `Waiting for schedule window: ${job.schedule_summary}.`
+        : "Waiting for an allowed schedule window.",
+    };
+  }
+  return {
+    label: "Schedule",
+    value: "Now",
+    tone: "neutral" as const,
+    title: "No schedule window is currently holding this job.",
+  };
+}
+
+function jobStatusExplanation(job: JobSummary | JobDetail) {
+  const status = normalisedJobStatus(job);
+  if (status === "pending") {
+    return "Queued and waiting for an eligible worker.";
+  }
+  if (status === "scheduled") {
+    return "Waiting for its schedule window.";
+  }
+  if (status === "running") {
+    return "Currently executing on a worker.";
+  }
+  if (status === "completed") {
+    return "Execution, verification, and replacement completed successfully.";
+  }
+  if (status === "cancelled") {
+    return "Cancelled by an operator. Processed-file state was not updated.";
+  }
+  if (status === "manual_review") {
+    return "Held for manual review before further processing.";
+  }
+  if (status === "failed") {
+    return job.failure_message ?? "The job failed.";
+  }
+  if (status === "skipped") {
+    return "Skipped because no replacement work was required.";
+  }
+  return "Job lifecycle status.";
+}
+
+function statusToneForValue(value: string): "neutral" | "info" | "success" | "warning" | "danger" {
+  if (["passed", "succeeded", "completed", "success"].includes(value)) {
+    return "success";
+  }
+  if (["failed", "error"].includes(value)) {
+    return "danger";
+  }
+  if (["pending", "skipped", "not_required"].includes(value)) {
+    return "warning";
+  }
+  return "neutral";
+}
+
+function jobStatusTone(job: JobStatusWithFailureCategory): "neutral" | "info" | "success" | "warning" | "danger" | "active" {
   const status = normalisedJobStatus(job);
   if (["failed", "interrupted", "cancelled", "manual_review"].includes(status)) {
     return "danger";
@@ -1081,7 +1558,7 @@ function jobStatusTone(job: JobStatusWithFailureCategory) {
 }
 
 function isOperatorCancelled(job: JobStatusWithFailureCategory) {
-  return job.status === "interrupted" && job.failure_category === "cancelled_by_operator";
+  return job.status === "cancelled" || (job.status === "interrupted" && job.failure_category === "cancelled_by_operator");
 }
 
 function jobProgressTone(job: JobStatusWithFailureCategory, stalled: boolean) {
@@ -1335,4 +1812,17 @@ function formatBackendLabel(value: string | null | undefined) {
     amd_gpu: "AMD",
     prefer_amd_gpu: "AMD",
   }[value] ?? value.replace(/_/g, " ");
+}
+
+function formatBackupPolicy(value: string | null | undefined) {
+  if (value === "keep_for_1_day") {
+    return "Keep for 1 day";
+  }
+  if (value === "delete_after_success") {
+    return "Delete after success";
+  }
+  if (value === "no_backup") {
+    return "No backup after success";
+  }
+  return "Keep backup";
 }

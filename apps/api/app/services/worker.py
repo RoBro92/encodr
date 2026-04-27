@@ -263,15 +263,15 @@ class WorkerService:
         oldest_pending_age_seconds = age_seconds(oldest_pending, now)
         last_completed_age_seconds = age_seconds(last_completed, now)
 
-        if running_count > 0:
-            status = HealthStatus.DEGRADED
-            summary = "The local worker is currently processing jobs."
-        elif failed_count > 0 or manual_review_count > 0:
+        if failed_count > 0 or manual_review_count > 0:
             status = HealthStatus.DEGRADED
             summary = "Recent job history includes failures or manual review outcomes."
         elif pending_count > 10:
             status = HealthStatus.DEGRADED
             summary = "Pending jobs are building up."
+        elif running_count > 0:
+            status = HealthStatus.HEALTHY
+            summary = "The queue is active and workers are processing jobs."
         else:
             status = HealthStatus.HEALTHY
             summary = "Queue health is within expected bounds."
@@ -824,6 +824,31 @@ class WorkerService:
             raise ApiConflictError("Only running jobs can be completed.")
 
         result = ExecutionResult.model_validate(result_payload)
+        if job.cancellation_requested_at is not None and result.status not in {"cancelled", "failed"}:
+            result = ExecutionResult(
+                mode="cancelled",
+                status="cancelled",
+                command=result.command,
+                output_path=result.output_path,
+                final_output_path=result.final_output_path,
+                original_backup_path=result.original_backup_path,
+                stdout=result.stdout,
+                stderr=result.stderr,
+                failure_message=(
+                    "Remote worker result arrived after cancellation was requested. "
+                    "The file was left unprocessed in Encodr and should be reviewed before retrying."
+                ),
+                failure_category="cancelled_by_operator",
+                requested_backend=result.requested_backend,
+                actual_backend=result.actual_backend,
+                actual_accelerator=result.actual_accelerator,
+                backend_fallback_used=result.backend_fallback_used,
+                backend_selection_reason=result.backend_selection_reason,
+                verification=result.verification,
+                replacement=result.replacement,
+                started_at=result.started_at,
+                completed_at=result.completed_at,
+            )
         repository.mark_result(job, result)
         job.last_worker_id = worker.id
         job.worker_name = worker.display_name
@@ -1612,13 +1637,27 @@ class WorkerService:
             "plan_snapshot_id": job.plan_snapshot_id,
             "job_kind": job.job_kind.value,
             "source_path": remapped_source,
-            "plan_payload": job.plan_snapshot.payload,
+            "plan_payload": self._plan_payload_for_job(job),
             "media_payload": media_payload,
             "analysis_payload": job.analysis_payload,
             "requested_worker_type": job.requested_worker_type.value if job.requested_worker_type is not None else None,
             "assignment_state": "claimed" if job.status == JobStatus.RUNNING else "assigned",
             "assigned_worker_id": job.assigned_worker_id,
         }
+
+    @staticmethod
+    def _plan_payload_for_job(job: Any) -> dict:
+        payload = copy.deepcopy(job.plan_snapshot.payload)
+        replace = payload.get("replace")
+        if isinstance(replace, dict):
+            policy = str(getattr(job, "backup_policy", "keep") or "keep").strip().lower()
+            if policy in {"delete_after_success", "no_backup", "delete_backup_after_success"}:
+                replace["delete_replaced_source"] = True
+            elif policy in {"keep", "keep_backup", "keep_for_1_day", "keep_for_one_day"}:
+                replace["delete_replaced_source"] = False
+            else:
+                replace["delete_replaced_source"] = bool(getattr(job, "delete_replaced_source", False))
+        return payload
 
     def _local_capability_summary(self) -> dict[str, object]:
         runtime_probes = self._local_runtime_probes()

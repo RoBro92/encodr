@@ -46,6 +46,33 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       return candidate.path.test(url);
     });
 
+    if (route) {
+      return new Response(JSON.stringify(route.body ?? {}), {
+        status: route.status ?? 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
+    if (method === "GET" && url.includes("/api/system/logs")) {
+      return new Response(JSON.stringify({ retention_days: 7, log_dir: "/data/logs", items: [] }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
+    if (method === "GET" && url.includes("/api/jobs/backups")) {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     if (!route && method === "GET" && url.includes("/api/auth/bootstrap-status")) {
       return new Response(
         JSON.stringify({
@@ -130,16 +157,7 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       });
     }
 
-    if (!route) {
-      throw new Error(`Unhandled fetch request: ${method} ${url}`);
-    }
-
-    return new Response(JSON.stringify(route.body ?? {}), {
-      status: route.status ?? 200,
-      headers: {
-        "Content-Type": "application/json",
-      },
-    });
+    throw new Error(`Unhandled fetch request: ${method} ${url}`);
   });
 
   vi.stubGlobal("fetch", fetchMock);

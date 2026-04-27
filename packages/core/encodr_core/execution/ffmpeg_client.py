@@ -85,6 +85,7 @@ class FFmpegClient:
                     "exit_code": returncode,
                     "stdout": stdout,
                     "stderr": stderr,
+                    "output_path": str(command_plan.output_path) if command_plan.output_path is not None else None,
                     "requested_backend": command_plan.requested_backend,
                     "actual_backend": command_plan.actual_backend,
                     "actual_accelerator": command_plan.actual_accelerator,

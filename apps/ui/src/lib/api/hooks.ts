@@ -9,6 +9,8 @@ import {
   cancelJob,
   checkUpdateStatus,
   clearReviewItemProtected,
+  clearFailedJobs,
+  clearQueue,
   createWatchedJob,
   createDryRunJobs,
   createRemoteWorkerOnboarding,
@@ -16,6 +18,7 @@ import {
   createJobFromReviewItem,
   disableWorker,
   deleteWorker,
+  deleteJobBackup,
   getAnalyticsDashboard,
   getAnalyticsMedia,
   getAnalyticsOutcomes,
@@ -38,10 +41,12 @@ import {
   getRuntimeStatus,
   getStorageStatus,
   getUpdateStatus,
+  getDiagnosticLogs,
   getWorker,
   getWorkerStatus,
   holdReviewItem,
   listWorkers,
+  listJobBackups,
   listReviewItems,
   markReviewItemProtected,
   runWorkerSelfTest,
@@ -55,6 +60,7 @@ import {
   dryRunSelection,
   rejectReviewItem,
   retryJob,
+  restoreJobBackup,
   runWorkerOnce,
   scanFolder,
   setupLocalWorker,
@@ -74,6 +80,7 @@ import type {
   CreateDryRunJobsPayload,
   FileSelectionPayload,
   JobDetail,
+  JobBackupListResponse,
   JobListResponse,
   JobSummary,
   LoginPayload,
@@ -85,7 +92,7 @@ import type {
   WorkerPreferencePayload,
 } from "../types/api";
 
-const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "interrupted", "manual_review", "skipped"]);
+const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "interrupted", "cancelled", "manual_review", "skipped"]);
 const UPDATE_STATUS_STALE_MS = 60 * 1000;
 const UPDATE_STATUS_REFETCH_MS = 5 * 60 * 1000;
 
@@ -395,6 +402,74 @@ export function useCancelJobMutation() {
   });
 }
 
+export function useClearQueueMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => clearQueue(apiClient),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
+        queryClient.invalidateQueries({ queryKey: ["analytics"] }),
+      ]);
+    },
+  });
+}
+
+export function useClearFailedJobsMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: () => clearFailedJobs(apiClient),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["analytics"] }),
+      ]);
+    },
+  });
+}
+
+export function useJobBackupsQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery<JobBackupListResponse>({
+    queryKey: ["jobs", "backups"],
+    queryFn: () => listJobBackups(apiClient),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useDeleteJobBackupMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => deleteJobBackup(apiClient, jobId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["jobs", "backups"] }),
+      ]);
+    },
+  });
+}
+
+export function useRestoreJobBackupMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => restoreJobBackup(apiClient, jobId),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["jobs", "backups"] }),
+        queryClient.invalidateQueries({ queryKey: ["files"] }),
+        queryClient.invalidateQueries({ queryKey: ["review"] }),
+      ]);
+    },
+  });
+}
+
 export function useReviewItemsQuery(filters: Record<string, string | number | boolean | undefined>) {
   const { apiClient, isAuthenticated } = useSession();
   return useQuery({
@@ -560,6 +635,15 @@ export function useRuntimeStatusQuery() {
   return useQuery({
     queryKey: ["system", "runtime"],
     queryFn: () => getRuntimeStatus(apiClient),
+    enabled: isAuthenticated,
+  });
+}
+
+export function useDiagnosticLogsQuery(filters: Record<string, string | number | undefined>) {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["system", "logs", filters],
+    queryFn: () => getDiagnosticLogs(apiClient, filters),
     enabled: isAuthenticated,
   });
 }

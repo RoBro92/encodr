@@ -48,9 +48,11 @@ class JobRepository:
         analysis_payload: dict | None = None,
         ignore_worker_schedule: bool = False,
         scheduled_for_at: datetime | None = None,
+        backup_policy: str = "keep",
     ) -> Job:
         payload = plan_snapshot.payload
         replace_payload = payload["replace"]
+        effective_backup_policy = normalise_backup_policy(backup_policy)
         window_opening_at = next_schedule_opening(schedule_windows)
         backoff_due_at = _normalise_datetime(scheduled_for_at) if scheduled_for_at is not None else None
         starts_scheduled = bool(
@@ -83,7 +85,11 @@ class JobRepository:
             replace_in_place=replace_payload["in_place"],
             require_verification=replace_payload["require_verification"],
             keep_original_until_verified=replace_payload["keep_original_until_verified"],
-            delete_replaced_source=replace_payload["delete_replaced_source"],
+            delete_replaced_source=delete_replaced_source_for_backup_policy(
+                effective_backup_policy,
+                fallback=bool(replace_payload["delete_replaced_source"]),
+            ),
+            backup_policy=effective_backup_policy,
         )
         self.session.add(job)
         tracked_file.lifecycle_state = FileLifecycleState.QUEUED
@@ -95,6 +101,7 @@ class JobRepository:
             select(Job)
             .where(
                 Job.status == JobStatus.PENDING,
+                Job.cleared_at.is_(None),
                 Job.assigned_worker_id.is_(None),
                 or_(Job.requested_worker_type.is_(None), Job.requested_worker_type == WorkerType.LOCAL),
             )
@@ -116,6 +123,7 @@ class JobRepository:
             select(Job)
             .where(
                 Job.status == JobStatus.PENDING,
+                Job.cleared_at.is_(None),
                 or_(Job.requested_worker_type.is_(None), Job.requested_worker_type == WorkerType.REMOTE),
                 or_(Job.assigned_worker_id.is_(None), Job.assigned_worker_id == worker.id),
             )
@@ -141,6 +149,7 @@ class JobRepository:
                 select(func.count(Job.id)).where(
                     Job.assigned_worker_id == worker_id,
                     Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
+                    Job.cleared_at.is_(None),
                 )
             )
             or 0
@@ -149,7 +158,10 @@ class JobRepository:
     def list_jobs_for_scheduling(self, *, limit: int = 200) -> list[Job]:
         query = (
             select(Job)
-            .where(Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED]))
+            .where(
+                Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED]),
+                Job.cleared_at.is_(None),
+            )
             .options(
                 joinedload(Job.tracked_file),
                 joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
@@ -224,6 +236,21 @@ class JobRepository:
         self.session.flush()
         return job
 
+    def mark_cancellation_requested(
+        self,
+        job: Job,
+        *,
+        requested_at: datetime,
+        reason: str,
+    ) -> Job:
+        job.cancellation_requested_at = requested_at
+        job.cancellation_reason = reason
+        job.interruption_reason = reason
+        job.progress_stage = "cancellation_requested"
+        job.progress_updated_at = requested_at
+        self.session.flush()
+        return job
+
     def promote_scheduled(self, job: Job) -> Job:
         job.status = JobStatus.PENDING
         job.scheduled_for_at = None
@@ -250,7 +277,7 @@ class JobRepository:
             "failed": JobStatus.FAILED,
             "skipped": JobStatus.SKIPPED,
             "manual_review": JobStatus.MANUAL_REVIEW,
-            "cancelled": JobStatus.INTERRUPTED,
+            "cancelled": JobStatus.CANCELLED,
         }
         job.status = status_map[result.status]
         job.completed_at = result.completed_at
@@ -294,6 +321,14 @@ class JobRepository:
             result.replacement.failure_message if result.replacement is not None else None
         )
         job.analysis_payload = result.analysis_payload
+        if (
+            result.status == "completed"
+            and job.backup_policy == "keep_for_1_day"
+            and job.original_backup_path
+        ):
+            job.backup_retention_until = result.completed_at + timedelta(days=1)
+        if result.replacement is not None and result.replacement.deleted_original_source:
+            job.backup_deleted_at = result.completed_at
         if result.status == "cancelled":
             job.interrupted_at = result.completed_at
             job.interruption_reason = result.failure_message
@@ -345,6 +380,7 @@ class JobRepository:
                 analysis_payload=job.analysis_payload,
                 ignore_worker_schedule=job.ignore_worker_schedule,
                 scheduled_for_at=scheduled_for_at,
+                backup_policy=job.backup_policy,
             )
 
         self.route_to_manual_review(
@@ -415,7 +451,7 @@ class JobRepository:
         cancelled_at: datetime,
         reason: str = "Cancelled by operator.",
     ) -> Job:
-        job.status = JobStatus.INTERRUPTED
+        job.status = JobStatus.CANCELLED
         job.completed_at = cancelled_at
         job.interrupted_at = cancelled_at
         job.interruption_reason = reason
@@ -427,6 +463,20 @@ class JobRepository:
         job.progress_updated_at = cancelled_at
         job.assigned_worker_id = None
         job.scheduled_for_at = None
+        job.cancellation_requested_at = cancelled_at
+        job.cancellation_reason = reason
+        self.session.flush()
+        return job
+
+    def mark_cleared(
+        self,
+        job: Job,
+        *,
+        cleared_at: datetime,
+        reason: str,
+    ) -> Job:
+        job.cleared_at = cleared_at
+        job.cleared_reason = reason
         self.session.flush()
         return job
 
@@ -456,6 +506,7 @@ class JobRepository:
         job_kind: JobKind | None = None,
         tracked_file_id: str | None = None,
         worker_name: str | None = None,
+        include_cleared: bool = False,
         limit: int | None = None,
         offset: int | None = None,
     ) -> list[Job]:
@@ -472,6 +523,8 @@ class JobRepository:
             query = query.where(Job.tracked_file_id == tracked_file_id)
         if worker_name is not None:
             query = query.where(Job.worker_name == worker_name)
+        if not include_cleared:
+            query = query.where(Job.cleared_at.is_(None))
         if offset is not None:
             query = query.offset(offset)
         if limit is not None:
@@ -482,12 +535,16 @@ class JobRepository:
         query = select(Job.id).where(
             Job.tracked_file_id == tracked_file_id,
             Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.RUNNING]),
+            Job.cleared_at.is_(None),
         ).limit(1)
         return self.session.scalar(query) is not None
 
     def count_by_status(self) -> dict[str, int]:
         rows = self.session.execute(
-            select(Job.status, func.count(Job.id)).group_by(Job.status).order_by(Job.status.asc())
+            select(Job.status, func.count(Job.id))
+            .where(Job.cleared_at.is_(None))
+            .group_by(Job.status)
+            .order_by(Job.status.asc())
         ).all()
         return {status.value: int(count) for status, count in rows}
 
@@ -502,6 +559,7 @@ class JobRepository:
                 select(func.count(Job.id)).where(
                     Job.status.in_(statuses),
                     Job.updated_at >= since,
+                    Job.cleared_at.is_(None),
                 )
             )
             or 0
@@ -509,15 +567,105 @@ class JobRepository:
 
     def oldest_created_at_for_status(self, status: JobStatus) -> datetime | None:
         return self.session.scalar(
-            select(func.min(Job.created_at)).where(Job.status == status)
+            select(func.min(Job.created_at)).where(Job.status == status, Job.cleared_at.is_(None))
         )
 
     def latest_completed_at(self) -> datetime | None:
         return self.session.scalar(
             select(func.max(Job.completed_at)).where(
-                Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED])
+                Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED]),
+                Job.cleared_at.is_(None),
             )
         )
+
+    def clear_queue(
+        self,
+        *,
+        cleared_at: datetime,
+        reason: str = "Cleared from queue by operator.",
+    ) -> list[Job]:
+        query = (
+            select(Job)
+            .where(
+                Job.cleared_at.is_(None),
+                Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED]),
+            )
+            .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
+            .order_by(asc(Job.created_at))
+        )
+        jobs = list(self.session.scalars(query))
+        for job in jobs:
+            self.mark_cancelled(job, cancelled_at=cleared_at, reason=reason)
+        return jobs
+
+    def clear_failed_history(
+        self,
+        *,
+        cleared_at: datetime,
+        reason: str = "Cleared historical problem jobs by operator.",
+    ) -> list[Job]:
+        query = (
+            select(Job)
+            .where(
+                Job.cleared_at.is_(None),
+                Job.status.in_([JobStatus.FAILED, JobStatus.INTERRUPTED, JobStatus.CANCELLED]),
+            )
+            .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
+            .order_by(desc(Job.updated_at))
+        )
+        jobs = list(self.session.scalars(query))
+        for job in jobs:
+            self.mark_cleared(job, cleared_at=cleared_at, reason=reason)
+        return jobs
+
+    def list_backup_jobs(self, *, include_missing: bool = False) -> list[Job]:
+        query = (
+            select(Job)
+            .where(
+                Job.original_backup_path.is_not(None),
+                Job.backup_deleted_at.is_(None),
+                Job.backup_restored_at.is_(None),
+            )
+            .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
+            .order_by(desc(Job.completed_at), desc(Job.updated_at))
+        )
+        jobs = list(self.session.scalars(query))
+        if include_missing:
+            return jobs
+        from pathlib import Path
+
+        return [job for job in jobs if job.original_backup_path and Path(job.original_backup_path).exists()]
+
+    def cleanup_expired_backups(self, *, now: datetime | None = None) -> list[Job]:
+        from pathlib import Path
+
+        effective_now = _normalise_datetime(now or datetime.now(timezone.utc))
+        query = (
+            select(Job)
+            .where(
+                Job.status == JobStatus.COMPLETED,
+                Job.replacement_status == ReplacementStatus.SUCCEEDED,
+                Job.backup_policy == "keep_for_1_day",
+                Job.backup_retention_until.is_not(None),
+                Job.backup_retention_until <= effective_now,
+                Job.original_backup_path.is_not(None),
+                Job.backup_deleted_at.is_(None),
+                Job.backup_restored_at.is_(None),
+            )
+            .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
+            .order_by(asc(Job.backup_retention_until), asc(Job.updated_at))
+        )
+        deleted: list[Job] = []
+        for job in self.session.scalars(query):
+            backup_path = Path(str(job.original_backup_path))
+            if not backup_path.exists() or backup_path.is_dir():
+                continue
+            backup_path.unlink()
+            job.backup_deleted_at = effective_now
+            deleted.append(job)
+        if deleted:
+            self.session.flush()
+        return deleted
 
     def list_recent_for_worker(
         self,
@@ -535,6 +683,7 @@ class JobRepository:
                         JobStatus.COMPLETED,
                         JobStatus.FAILED,
                         JobStatus.INTERRUPTED,
+                        JobStatus.CANCELLED,
                         JobStatus.MANUAL_REVIEW,
                         JobStatus.SKIPPED,
                     ]
@@ -577,6 +726,29 @@ def replacement_status_for_result(result: ExecutionResult) -> ReplacementStatus:
     if result.replacement.status == "failed":
         return ReplacementStatus.FAILED
     return ReplacementStatus.NOT_REQUIRED
+
+
+def normalise_backup_policy(value: str | None) -> str:
+    cleaned = (value or "keep").strip().lower()
+    aliases = {
+        "keep_backup": "keep",
+        "keep": "keep",
+        "delete_after_success": "delete_after_success",
+        "delete_backup_after_success": "delete_after_success",
+        "no_backup": "delete_after_success",
+        "keep_for_1_day": "keep_for_1_day",
+        "keep_for_one_day": "keep_for_1_day",
+    }
+    return aliases.get(cleaned, "keep")
+
+
+def delete_replaced_source_for_backup_policy(value: str, *, fallback: bool) -> bool:
+    policy = normalise_backup_policy(value)
+    if policy == "delete_after_success":
+        return True
+    if policy in {"keep", "keep_for_1_day"}:
+        return False
+    return fallback
 
 
 def job_requires_manual_review(job: Job) -> bool:

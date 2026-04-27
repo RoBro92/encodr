@@ -73,6 +73,10 @@ class UpdateSettings(ConfigModel):
         return self
 
 
+class DiagnosticsSettings(ConfigModel):
+    retention_days: PositiveInt = 7
+
+
 class AppConfig(ConfigModel):
     name: NonEmptyString
     environment: EnvironmentName = EnvironmentName.DEVELOPMENT
@@ -89,6 +93,7 @@ class AppConfig(ConfigModel):
     media: MediaToolSettings
     dashboard: DashboardSettings = Field(default_factory=DashboardSettings)
     update: UpdateSettings = Field(default_factory=UpdateSettings)
+    diagnostics: DiagnosticsSettings = Field(default_factory=DiagnosticsSettings)
 
     @model_validator(mode="after")
     def validate_paths(self) -> "AppConfig":

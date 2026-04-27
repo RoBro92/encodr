@@ -10,6 +10,14 @@ from encodr_shared.path_mappings import (
 )
 from encodr_shared.setup_state import load_execution_preferences
 from encodr_shared.telemetry import collect_runtime_telemetry
+from encodr_shared.diagnostics import (
+    build_diagnostic_bundle,
+    cleanup_old_logs,
+    configure_component_logging,
+    read_log_events,
+    redact_mapping,
+    redact_secrets,
+)
 from encodr_shared.update import UpdateCheckResult, UpdateCheckSettings, UpdateChecker
 from encodr_shared.versioning import find_project_root, is_version_newer, parse_version, read_version
 from encodr_shared.worker_policy import recommend_worker_concurrency
@@ -30,7 +38,10 @@ __all__ = [
     "UpdateCheckSettings",
     "UpdateChecker",
     "MARKER_RELATIVE_PATH",
+    "build_diagnostic_bundle",
+    "cleanup_old_logs",
     "collect_runtime_telemetry",
+    "configure_component_logging",
     "load_execution_preferences",
     "detect_ffmpeg_hwaccels",
     "discover_runtime_devices",
@@ -48,6 +59,9 @@ __all__ = [
     "probe_vaapi",
     "probe_which",
     "read_version",
+    "read_log_events",
+    "redact_mapping",
+    "redact_secrets",
     "recommend_worker_concurrency",
     "remap_server_path",
     "validate_worker_path_mapping",

@@ -221,7 +221,7 @@ def test_cancel_endpoint_marks_pending_job_cancelled_without_execution(
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["status"] == JobStatus.INTERRUPTED.value
+    assert payload["status"] == JobStatus.CANCELLED.value
     assert payload["failure_category"] == "cancelled_by_operator"
     assert payload["progress_stage"] == "cancelled"
     assert payload["assigned_worker_id"] is None
@@ -231,7 +231,7 @@ def test_cancel_endpoint_marks_pending_job_cancelled_without_execution(
         tracked_file = session.get(TrackedFile, persisted.job.tracked_file_id)
         assert job is not None
         assert tracked_file is not None
-        assert job.status == JobStatus.INTERRUPTED
+        assert job.status == JobStatus.CANCELLED
         assert job.failure_category == "cancelled_by_operator"
         assert tracked_file.lifecycle_state == FileLifecycleState.PLANNED
 

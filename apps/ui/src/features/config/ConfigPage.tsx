@@ -4,10 +4,11 @@ import type { KeyboardEvent as ReactKeyboardEvent, ReactNode } from "react";
 import { FolderPickerModal } from "../../components/FolderPickerModal";
 import { ErrorPanel } from "../../components/ErrorPanel";
 import { LoadingBlock } from "../../components/LoadingBlock";
-import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
+import { useSession } from "../auth/AuthProvider";
 import {
+  useDiagnosticLogsQuery,
   useLibraryRootsQuery,
   useProcessingRulesQuery,
   useRuntimeStatusQuery,
@@ -18,6 +19,7 @@ import {
   useUpdateProcessingRulesMutation,
 } from "../../lib/api/hooks";
 import type {
+  DiagnosticLogEvent,
   ProcessingRules,
   ProcessingRuleset,
   ProcessingRuleValues,
@@ -79,11 +81,23 @@ export function ConfigPage() {
   const [rulesDraft, setRulesDraft] = useState<ProcessingRules | null>(null);
   const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
   const [isChangelogModalOpen, setIsChangelogModalOpen] = useState(false);
+  const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
+  const [diagnosticLevel, setDiagnosticLevel] = useState("");
+  const [diagnosticComponent, setDiagnosticComponent] = useState("");
+  const [diagnosticRange, setDiagnosticRange] = useState("last_day");
+  const [diagnosticRedactPaths, setDiagnosticRedactPaths] = useState(true);
+  const [diagnosticDownloadError, setDiagnosticDownloadError] = useState<string | null>(null);
+  const { apiClient } = useSession();
   const rootsQuery = useLibraryRootsQuery();
   const rulesQuery = useProcessingRulesQuery();
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
   const updateStatusQuery = useUpdateStatusQuery();
+  const diagnosticLogsQuery = useDiagnosticLogsQuery({
+    level: diagnosticLevel || undefined,
+    component: diagnosticComponent || undefined,
+    limit: 100,
+  });
   const { mutate: refreshUpdateStatus } = useCheckUpdateStatusMutation();
   const updateRefreshRequestedRef = useRef(false);
   const updateRootsMutation = useUpdateLibraryRootsMutation();
@@ -103,6 +117,12 @@ export function ConfigPage() {
     updateRefreshRequestedRef.current = true;
     refreshUpdateStatus();
   }, [refreshUpdateStatus, updateStatusQuery.data]);
+
+  useEffect(() => {
+    if (isDiagnosticsModalOpen) {
+      void diagnosticLogsQuery.refetch();
+    }
+  }, [diagnosticLogsQuery.refetch, isDiagnosticsModalOpen]);
 
   const error =
     rootsQuery.error ??
@@ -146,13 +166,53 @@ export function ConfigPage() {
     }, { movies: null, movies_4k: null, tv: null, tv_4k: null });
   };
 
+  async function downloadDiagnosticBundle() {
+    setDiagnosticDownloadError(null);
+    try {
+      const params = new URLSearchParams({
+        time_range: diagnosticRange,
+        redact_paths: diagnosticRedactPaths ? "true" : "false",
+      });
+      const response = await apiClient.stream(`/system/diagnostics/bundle?${params.toString()}`, {
+        headers: { Accept: "application/zip" },
+      });
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `encodr-diagnostics-${diagnosticRange}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      setDiagnosticDownloadError(error instanceof Error ? error.message : "Diagnostic bundle download failed.");
+    }
+  }
+
   return (
     <div className="page-stack">
-      <PageHeader
-        eyebrow="Settings"
-        title="Settings"
-        description="Choose library roots, set processing rules, and confirm runtime health."
-      />
+      <header className="settings-page-header">
+        <div>
+          <p className="section-eyebrow">Settings</p>
+          <h1>Settings</h1>
+          <p>Choose library roots, set processing rules, and confirm runtime health.</p>
+        </div>
+        <button
+          className="settings-diagnostics-button"
+          type="button"
+          onClick={() => {
+            setDiagnosticDownloadError(null);
+            setIsDiagnosticsModalOpen(true);
+          }}
+        >
+          <svg viewBox="0 0 24 24" focusable="false" aria-hidden="true">
+            <path d="m4 17 5-5-5-5" />
+            <path d="M12 19h8" />
+          </svg>
+          <span>View Diagnostics</span>
+        </button>
+      </header>
 
       {updateRootsMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to save folders" message={updateRootsMutation.error.message} />
@@ -258,6 +318,26 @@ export function ConfigPage() {
           releaseSummary={updateStatus.release_summary}
           breakingChangesSummary={updateStatus.breaking_changes_summary}
           onClose={() => setIsChangelogModalOpen(false)}
+        />
+      ) : null}
+      {isDiagnosticsModalOpen ? (
+        <DiagnosticsModal
+          retentionDays={diagnosticLogsQuery.data?.retention_days ?? 7}
+          diagnosticLevel={diagnosticLevel}
+          diagnosticComponent={diagnosticComponent}
+          diagnosticRange={diagnosticRange}
+          diagnosticRedactPaths={diagnosticRedactPaths}
+          diagnosticDownloadError={diagnosticDownloadError}
+          logError={diagnosticLogsQuery.error instanceof Error ? diagnosticLogsQuery.error.message : null}
+          logItems={diagnosticLogsQuery.data?.items ?? []}
+          logsLoading={diagnosticLogsQuery.isLoading || diagnosticLogsQuery.isFetching}
+          onLevelChange={setDiagnosticLevel}
+          onComponentChange={setDiagnosticComponent}
+          onRangeChange={setDiagnosticRange}
+          onRedactPathsChange={setDiagnosticRedactPaths}
+          onRefresh={() => void diagnosticLogsQuery.refetch()}
+          onDownload={() => void downloadDiagnosticBundle()}
+          onClose={() => setIsDiagnosticsModalOpen(false)}
         />
       ) : null}
 
@@ -413,6 +493,185 @@ function ChangelogModal({
   );
 }
 
+function DiagnosticsModal({
+  retentionDays,
+  diagnosticLevel,
+  diagnosticComponent,
+  diagnosticRange,
+  diagnosticRedactPaths,
+  diagnosticDownloadError,
+  logError,
+  logItems,
+  logsLoading,
+  onLevelChange,
+  onComponentChange,
+  onRangeChange,
+  onRedactPathsChange,
+  onRefresh,
+  onDownload,
+  onClose,
+}: {
+  retentionDays: number;
+  diagnosticLevel: string;
+  diagnosticComponent: string;
+  diagnosticRange: string;
+  diagnosticRedactPaths: boolean;
+  diagnosticDownloadError: string | null;
+  logError: string | null;
+  logItems: DiagnosticLogEvent[];
+  logsLoading: boolean;
+  onLevelChange: (value: string) => void;
+  onComponentChange: (value: string) => void;
+  onRangeChange: (value: string) => void;
+  onRedactPathsChange: (value: boolean) => void;
+  onRefresh: () => void;
+  onDownload: () => void;
+  onClose: () => void;
+}) {
+  const dialogRef = useRef<HTMLElement | null>(null);
+  const closeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const previousFocusRef = useRef<HTMLElement | null>(null);
+
+  useEffect(() => {
+    previousFocusRef.current = document.activeElement instanceof HTMLElement ? document.activeElement : null;
+    closeButtonRef.current?.focus();
+    return () => {
+      previousFocusRef.current?.focus();
+    };
+  }, []);
+
+  function handleKeyDown(event: ReactKeyboardEvent<HTMLDivElement>) {
+    if (event.key === "Escape") {
+      event.preventDefault();
+      onClose();
+      return;
+    }
+
+    if (event.key !== "Tab" || !dialogRef.current) {
+      return;
+    }
+
+    const focusable = dialogRef.current.querySelectorAll<HTMLElement>(
+      'button, [href], input, select, textarea, [tabindex]:not([tabindex="-1"])',
+    );
+    if (focusable.length === 0) {
+      return;
+    }
+
+    const first = focusable[0];
+    const last = focusable[focusable.length - 1];
+    const activeElement = document.activeElement;
+    if (event.shiftKey && activeElement === first) {
+      event.preventDefault();
+      last.focus();
+    } else if (!event.shiftKey && activeElement === last) {
+      event.preventDefault();
+      first.focus();
+    }
+  }
+
+  return (
+    <div
+      className="modal-backdrop diagnostics-modal-backdrop"
+      role="presentation"
+      onMouseDown={(event) => {
+        if (event.target === event.currentTarget) {
+          onClose();
+        }
+      }}
+      onKeyDown={handleKeyDown}
+    >
+      <section
+        ref={dialogRef}
+        className="modal-panel diagnostics-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="diagnostics-modal-title"
+      >
+        <div className="diagnostics-modal-fixed">
+          <div className="diagnostics-modal-header">
+            <div>
+              <p className="section-eyebrow">Settings</p>
+              <h2 id="diagnostics-modal-title">Diagnostics</h2>
+              <p>Only recent retained events are shown. Download a bundle for more detail.</p>
+            </div>
+            <button ref={closeButtonRef} className="button button-secondary button-small" type="button" onClick={onClose}>
+              Close
+            </button>
+          </div>
+
+          <div className="diagnostics-filter-row">
+            <div className="diagnostics-filter-group">
+              <label className="field diagnostics-field">
+                <span>Component</span>
+                <select value={diagnosticComponent} onChange={(event) => onComponentChange(event.target.value)}>
+                  <option value="">All components</option>
+                  <option value="api">API</option>
+                  <option value="worker">Worker</option>
+                  <option value="worker-agent">Worker agent</option>
+                  <option value="system">System</option>
+                </select>
+              </label>
+              <label className="field diagnostics-field">
+                <span>Level</span>
+                <select value={diagnosticLevel} onChange={(event) => onLevelChange(event.target.value)}>
+                  <option value="">All levels</option>
+                  <option value="error">Errors</option>
+                  <option value="warning">Warnings</option>
+                  <option value="info">Info</option>
+                  <option value="debug">Debug</option>
+                </select>
+              </label>
+            </div>
+            <div className="diagnostics-refresh-group">
+              <button className="button button-secondary button-small" type="button" onClick={onRefresh}>
+                Refresh
+              </button>
+              <span>Logs retained for {retentionDays} days</span>
+            </div>
+          </div>
+
+          <div className="diagnostics-export-box">
+            <label className="field diagnostics-field diagnostics-range-field">
+              <span>Bundle range</span>
+              <select value={diagnosticRange} onChange={(event) => onRangeChange(event.target.value)}>
+                <option value="last_hour">Last hour</option>
+                <option value="last_6_hours">Last 6 hours</option>
+                <option value="last_day">Last day</option>
+                <option value="last_week">Last week</option>
+              </select>
+            </label>
+            <div className="diagnostics-export-actions">
+              <label className="diagnostics-checkbox-row">
+                <input
+                  type="checkbox"
+                  checked={diagnosticRedactPaths}
+                  onChange={(event) => onRedactPathsChange(event.target.checked)}
+                />
+                <span>Redact paths and file names</span>
+              </label>
+              <button className="button button-primary button-small" type="button" onClick={onDownload}>
+                Download bundle
+              </button>
+            </div>
+          </div>
+
+          {diagnosticDownloadError ? <ErrorPanel title="Diagnostic export failed" message={diagnosticDownloadError} /> : null}
+          {logError ? <ErrorPanel title="Unable to load logs" message={logError} /> : null}
+        </div>
+
+        <div className="diagnostics-log-panel">
+          <div className="diagnostics-log-panel-header">
+            <strong>Recent logs</strong>
+            <span>Last 100 records</span>
+          </div>
+          <DiagnosticLogList items={logItems} loading={logsLoading} />
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function SettingsDataItem({ label, value }: { label: string; value: ReactNode }) {
   return (
     <div className="settings-data-item">
@@ -420,6 +679,32 @@ function SettingsDataItem({ label, value }: { label: string; value: ReactNode })
       <strong>{value}</strong>
     </div>
   );
+}
+
+function DiagnosticLogList({ items, loading }: { items: DiagnosticLogEvent[]; loading: boolean }) {
+  return (
+    <div className="settings-log-console" role="log" aria-label="Recent diagnostic events">
+      {loading ? <div className="settings-log-console-empty">Loading recent logs...</div> : null}
+      {!loading && items.length === 0 ? <div className="settings-log-console-empty">No matching log events yet.</div> : null}
+      {!loading
+        ? items.map((item, index) => (
+            <div key={`${item.timestamp}-${item.component}-${index}`} className={`settings-log-row settings-log-row-${item.level}`}>
+              <time dateTime={item.timestamp}>{formatDiagnosticTimestamp(item.timestamp)}</time>
+              <strong>{formatDiagnosticLevel(item.level)}</strong>
+              <em>{item.component}</em>
+              <span>{item.message}</span>
+            </div>
+          ))
+        : null}
+    </div>
+  );
+}
+
+function formatDiagnosticLevel(value: string) {
+  if (value.toLowerCase() === "warning") {
+    return "WARN";
+  }
+  return value.toUpperCase();
 }
 
 function MarkdownContent({ source }: { source: string }) {
@@ -558,6 +843,14 @@ function formatDisplayDate(value: string | null) {
     return value;
   }
   return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function formatDiagnosticTimestamp(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
 }
 
 function ProcessingRulesSection({

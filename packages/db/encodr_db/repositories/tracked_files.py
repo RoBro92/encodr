@@ -225,8 +225,6 @@ class TrackedFileRepository:
         tracked_file: TrackedFile,
         plan: ProcessingPlan,
     ) -> TrackedFile:
-        tracked_file.last_processed_policy_version = plan.policy_context.policy_version
-        tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
         tracked_file.is_protected = plan.should_treat_as_protected or tracked_file.operator_protected
         tracked_file.compliance_state = compliance_state_for_plan(plan)
         tracked_file.lifecycle_state = lifecycle_state_for_plan(plan)
@@ -239,14 +237,16 @@ class TrackedFileRepository:
         plan: ProcessingPlan,
         result: ExecutionResult,
     ) -> TrackedFile:
-        tracked_file.last_processed_policy_version = plan.policy_context.policy_version
-        tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
         tracked_file.is_protected = plan.should_treat_as_protected or tracked_file.operator_protected
 
-        if result.status == "completed":
+        if result_marks_file_processed(result):
+            tracked_file.last_processed_policy_version = plan.policy_context.policy_version
+            tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
             tracked_file.lifecycle_state = FileLifecycleState.COMPLETED
             tracked_file.compliance_state = ComplianceState.COMPLIANT
         elif result.status == "skipped":
+            tracked_file.last_processed_policy_version = plan.policy_context.policy_version
+            tracked_file.last_processed_profile_name = plan.policy_context.selected_profile_name
             tracked_file.lifecycle_state = FileLifecycleState.COMPLETED
             tracked_file.compliance_state = ComplianceState.COMPLIANT
         elif result.status == "manual_review":
@@ -326,3 +326,14 @@ def compliance_state_for_plan(plan: ProcessingPlan) -> ComplianceState:
     if plan.is_already_compliant:
         return ComplianceState.COMPLIANT
     return ComplianceState.NON_COMPLIANT
+
+
+def result_marks_file_processed(result: ExecutionResult) -> bool:
+    if result.status != "completed":
+        return False
+    if result.replacement is None or result.replacement.status != "succeeded":
+        return False
+    final_output_path = result.final_output_path or result.replacement.final_output_path
+    if final_output_path is None:
+        return False
+    return Path(final_output_path).exists()

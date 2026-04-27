@@ -507,6 +507,61 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
   });
 
+  it("opens diagnostics from the settings header action and renders logs in a console", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      {
+        method: "GET",
+        path: "/api/system/logs",
+        body: {
+          retention_days: 7,
+          log_dir: "/data/logs",
+          items: [
+            {
+              timestamp: "2026-04-27T12:30:00Z",
+              level: "info",
+              component: "api",
+              logger: "encodr.jobs",
+              message: "job created",
+              fields: { job_id: "job-1" },
+            },
+          ],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    expect(screen.queryByRole("heading", { name: /^diagnostics$/i })).not.toBeInTheDocument();
+    expect(screen.queryByText(/open a compact console/i)).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /view diagnostics/i })).toBeInTheDocument();
+    expect(screen.queryByRole("log", { name: /recent diagnostic events/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /view diagnostics/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /^diagnostics$/i });
+    expect(within(dialog).getByText(/only recent retained events are shown/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/7 days/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/component/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/level/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /refresh/i })).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/bundle range/i)).toBeInTheDocument();
+    expect(within(dialog).getByLabelText(/redact paths and file names/i)).toBeInTheDocument();
+    expect(within(dialog).getByRole("button", { name: /download bundle/i })).toBeInTheDocument();
+
+    const logConsole = within(dialog).getByRole("log", { name: /recent diagnostic events/i });
+    expect(logConsole).toHaveTextContent(/2026/i);
+    expect(logConsole).toHaveTextContent(/INFO/i);
+    expect(logConsole).toHaveTextContent(/api/i);
+    expect(logConsole).toHaveTextContent(/job created/i);
+  });
+
   it("refreshes stale update status when the settings updates card is shown", async () => {
     const latestVersion = nextPatchVersion(CURRENT_VERSION);
     const fetchMock = mockFetchRoutes([
@@ -617,8 +672,8 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("tab", { name: /^browse$/i })).toBeInTheDocument();
     await userEvent.click(screen.getByRole("tab", { name: /^dry run$/i }));
     expect(screen.getByText(/no dry run yet/i)).toBeInTheDocument();
-    await userEvent.click(screen.getByRole("tab", { name: /batch plan/i }));
-    expect(screen.getByText(/no batch results yet/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("tab", { name: /jobs created/i }));
+    expect(screen.getByText(/no jobs created yet/i)).toBeInTheDocument();
   });
 
   it("shows a missing-roots prompt when library roots have not been set", async () => {
@@ -748,7 +803,7 @@ describe("Encodr UI shell", () => {
     await userEvent.click(await screen.findByRole("checkbox", { name: /film one/i }));
     expect(screen.getAllByText(/1 file selected/i).length).toBeGreaterThan(0);
     expect(screen.getByRole("button", { name: /^dry run$/i })).toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /batch plan/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /batch plan/i })).not.toBeInTheDocument();
     expect(screen.getByRole("button", { name: /create jobs/i })).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /^dry run$/i }));
@@ -939,13 +994,14 @@ describe("Encodr UI shell", () => {
           headers: expect.any(Headers),
           body: JSON.stringify({
             folder_path: "/media/Movies",
+            backup_policy: "keep",
           }),
         }),
       );
     });
 
-    expect(await screen.findByText(/jobs created/i)).toBeInTheDocument();
-    expect(screen.getByRole("tab", { name: /batch plan/i })).toHaveAttribute("aria-selected", "true");
+    expect(await screen.findByText(/jobs created/i, { selector: "strong" })).toBeInTheDocument();
+    expect(screen.getByRole("tab", { name: /jobs created/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("link", { name: /open job/i })).toBeInTheDocument();
     expect(screen.getByText(/^Created$/i, { selector: ".metric-label" })).toBeInTheDocument();
     expect(screen.getByText(/^Blocked$/i, { selector: ".metric-label" })).toBeInTheDocument();
@@ -1034,7 +1090,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/jobs/job-1", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
-    expect(screen.getByRole("list", { name: /jobs list/i })).toBeInTheDocument();
+    expect(await screen.findByRole("list", { name: /jobs list/i })).toBeInTheDocument();
     expect(screen.getByText(/needs attention/i)).toBeInTheDocument();
     expect(screen.getByLabelText(/create job from tracked file/i)).toBeInTheDocument();
     expect(screen.queryByText(/ffmpeg -i input\.mkv output\.mkv/i)).not.toBeInTheDocument();
@@ -1240,7 +1296,7 @@ describe("Encodr UI shell", () => {
     renderApp({ route: "/jobs", initialSession: makeSession() });
 
     expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
-    expect(screen.getByText(/no jobs yet/i)).toBeInTheDocument();
+    expect(screen.getByText(/no active queue/i)).toBeInTheDocument();
   });
 
   it("renders the review inbox layout, keeps decisions wired, and hides advanced sections by default", async () => {
@@ -2192,6 +2248,14 @@ function jobDetail() {
     interrupted_at: null,
     interruption_reason: null,
     interruption_retryable: true,
+    cleared_at: null,
+    cleared_reason: null,
+    cancellation_requested_at: null,
+    cancellation_reason: null,
+    backup_policy: "keep",
+    backup_retention_until: null,
+    backup_deleted_at: null,
+    backup_restored_at: null,
     watched_job_id: null,
     requested_worker_type: null,
     created_at: "2026-04-20T10:02:30Z",

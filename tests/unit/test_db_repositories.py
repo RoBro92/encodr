@@ -10,6 +10,8 @@ from encodr_core.config import load_config_bundle
 from encodr_core.execution import ExecutionResult
 from encodr_core.planning import PlanAction, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
+from encodr_core.replacement.service import ReplacementResult
+from encodr_core.verification.models import VerificationResult
 from encodr_shared.scheduling import schedule_windows_allow_now
 from encodr_db import Base
 from encodr_db.models import (
@@ -157,7 +159,8 @@ def test_file_state_updates_from_plan_result() -> None:
 
         assert tracked_file.lifecycle_state == FileLifecycleState.PLANNED
         assert tracked_file.compliance_state == ComplianceState.NON_COMPLIANT
-        assert tracked_file.last_processed_policy_version == plan.policy_context.policy_version
+        assert tracked_file.last_processed_policy_version is None
+        assert tracked_file.last_processed_profile_name is None
         assert tracked_file.is_protected is True
 
 
@@ -178,6 +181,20 @@ def test_already_processed_under_policy() -> None:
         )
         plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
         tracked_files.update_file_state_from_plan_result(tracked_file, plan)
+        skipped_at = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+        tracked_files.update_file_state_from_execution_result(
+            tracked_file,
+            plan,
+            ExecutionResult(
+                mode="skipped",
+                status="skipped",
+                command=[],
+                output_path=None,
+                failure_message=None,
+                started_at=skipped_at,
+                completed_at=skipped_at,
+            ),
+        )
 
         assert (
             tracked_files.already_processed_under_policy(
@@ -188,6 +205,79 @@ def test_already_processed_under_policy() -> None:
             is True
         )
         assert tracked_files.already_processed_under_policy(media.file_path, 999) is False
+
+
+def test_processed_state_requires_successful_replacement(tmp_path: Path) -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movie.mkv"
+        final_path = tmp_path / "Movie.encodr.mkv"
+        source_path.write_text("source", encoding="utf-8")
+        media = parse_fixture("film_1080p.json")
+        media = media.model_copy(update={"file_path": source_path.as_posix()})
+
+        tracked_file = tracked_files.upsert_by_path(source_path.as_posix(), media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=source_path.as_posix())
+        plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        timestamp = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+
+        failed_result = ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=[],
+            output_path=None,
+            failure_message="ffmpeg failed",
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, failed_result)
+        assert tracked_file.last_processed_policy_version is None
+
+        cancelled_result = ExecutionResult(
+            mode="cancelled",
+            status="cancelled",
+            command=[],
+            output_path=None,
+            failure_message="cancelled",
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, cancelled_result)
+        assert tracked_file.last_processed_policy_version is None
+
+        incomplete_result = ExecutionResult(
+            mode="completed",
+            status="completed",
+            command=[],
+            output_path=tmp_path / "staged.mkv",
+            final_output_path=final_path,
+            verification=VerificationResult(status="passed", passed=True),
+            replacement=ReplacementResult(status="failed", failure_message="move failed"),
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, incomplete_result)
+        assert tracked_file.last_processed_policy_version is None
+
+        final_path.write_text("final", encoding="utf-8")
+        completed_result = ExecutionResult(
+            mode="completed",
+            status="completed",
+            command=[],
+            output_path=tmp_path / "staged.mkv",
+            final_output_path=final_path,
+            verification=VerificationResult(status="passed", passed=True),
+            replacement=ReplacementResult(status="succeeded", final_output_path=final_path),
+            started_at=timestamp,
+            completed_at=timestamp,
+        )
+        tracked_files.update_file_state_from_execution_result(tracked_file, plan, completed_result)
+        assert tracked_file.last_processed_policy_version == plan.policy_context.policy_version
+        assert tracked_file.last_processed_profile_name == plan.policy_context.selected_profile_name
 
 
 def test_basic_file_and_job_filtering() -> None:
@@ -348,6 +438,110 @@ def test_interrupted_jobs_clear_assignment_and_stop_counting_as_active() -> None
         assert interrupted.interruption_retryable is True
         assert interrupted.interruption_reason == "Worker stopped responding."
         assert jobs.has_active_job_for_tracked_file(tracked_file.id) is False
+
+
+def test_clear_queue_cancels_non_running_jobs_only() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        pending_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        scheduled_job = jobs.create_job_from_plan(
+            tracked_file,
+            plan_snapshot,
+            scheduled_for_at=datetime(2026, 4, 22, 23, 0, tzinfo=timezone.utc),
+        )
+        running_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        jobs.mark_running(running_job, worker_name="worker-local")
+
+        cleared = jobs.clear_queue(cleared_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc))
+
+        assert {job.id for job in cleared} == {pending_job.id, scheduled_job.id}
+        assert pending_job.status == JobStatus.CANCELLED
+        assert scheduled_job.status == JobStatus.CANCELLED
+        assert running_job.status == JobStatus.RUNNING
+        assert jobs.has_active_job_for_tracked_file(tracked_file.id) is True
+
+
+def test_backup_policy_is_persisted_on_jobs() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+
+        keep_job = jobs.create_job_from_plan(tracked_file, plan_snapshot, backup_policy="keep_for_1_day")
+        delete_job = jobs.create_job_from_plan(tracked_file, plan_snapshot, backup_policy="delete_after_success")
+
+        assert keep_job.backup_policy == "keep_for_1_day"
+        assert keep_job.delete_replaced_source is False
+        assert delete_job.backup_policy == "delete_after_success"
+        assert delete_job.delete_replaced_source is True
+
+
+def test_expired_backup_cleanup_deletes_retained_backup(tmp_path: Path) -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+        source_path = tmp_path / "Example Film.mkv"
+        final_path = tmp_path / "Example Film.mp4"
+        backup_path = tmp_path / "Example Film.encodr-backup.mkv"
+        backup_path.write_text("original", encoding="utf-8")
+        final_path.write_text("replacement", encoding="utf-8")
+        media = media.model_copy(update={"file_path": source_path.as_posix()})
+
+        tracked_file = tracked_files.upsert_by_path(source_path.as_posix(), media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=source_path.as_posix())
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        job = jobs.create_job_from_plan(tracked_file, plan_snapshot, backup_policy="keep_for_1_day")
+        completed_at = datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc)
+        result = ExecutionResult(
+            mode="completed",
+            status="completed",
+            command=[],
+            output_path=tmp_path / "staged.mkv",
+            final_output_path=final_path,
+            original_backup_path=backup_path,
+            verification=VerificationResult(status="passed", passed=True),
+            replacement=ReplacementResult(
+                status="succeeded",
+                final_output_path=final_path,
+                original_backup_path=backup_path,
+            ),
+            started_at=completed_at,
+            completed_at=completed_at,
+        )
+        jobs.mark_result(job, result)
+
+        assert job.backup_retention_until == completed_at + timedelta(days=1)
+        assert jobs.cleanup_expired_backups(now=completed_at + timedelta(hours=23)) == []
+        assert backup_path.exists()
+
+        deleted = jobs.cleanup_expired_backups(now=completed_at + timedelta(days=1, seconds=1))
+
+        assert deleted == [job]
+        assert backup_path.exists() is False
+        assert job.backup_deleted_at == completed_at + timedelta(days=1, seconds=1)
 
 
 def test_failed_execution_uses_exponential_backoff_before_manual_review() -> None:

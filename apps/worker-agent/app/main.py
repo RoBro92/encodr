@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import logging
+import os
+from pathlib import Path
 import sys
 import time
 
 from app.client import WorkerApiClient
 from app.config import load_settings
 from app.service import WorkerAgentService
+from encodr_shared import configure_component_logging
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s %(name)s %(message)s")
 logger = logging.getLogger("encodr.worker_agent")
@@ -20,6 +23,12 @@ def main(argv: list[str] | None = None) -> None:
         settings = load_settings()
     except ValueError as error:
         raise SystemExit(str(error)) from error
+    configure_component_logging(
+        component="worker-agent",
+        log_dir=Path(os.environ.get("ENCODR_LOG_DIR", "/data/logs")),
+        level=os.environ.get("ENCODR_LOG_LEVEL", "INFO"),
+        retention_days=int(os.environ.get("ENCODR_LOG_RETENTION_DAYS", "7")),
+    )
 
     service = WorkerAgentService(
         settings=settings,

@@ -38,3 +38,5 @@ app:
     metadata_url: https://api.github.com/repos/RoBro92/encodr/releases/latest
     channel: internal
     check_timeout_seconds: 5
+  diagnostics:
+    retention_days: 7

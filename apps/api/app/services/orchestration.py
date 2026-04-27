@@ -34,6 +34,7 @@ class OrchestrationSummary:
     staged_files: int = 0
     promoted_jobs: int = 0
     interrupted_jobs: int = 0
+    expired_backups: int = 0
 
 
 class OrchestrationService:
@@ -166,6 +167,7 @@ class OrchestrationService:
     def run_once(self) -> OrchestrationSummary:
         summary = OrchestrationSummary()
         with self.session_factory() as session:
+            summary.expired_backups += len(JobsService().cleanup_expired_backups(session))
             summary.promoted_jobs += self._refresh_scheduled_jobs(session)
             watcher_summary = self._refresh_watched_jobs(session)
             summary.scanned_watchers += watcher_summary.scanned_watchers
