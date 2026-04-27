@@ -461,14 +461,69 @@ def test_clear_queue_cancels_non_running_jobs_only() -> None:
         )
         running_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
         jobs.mark_running(running_job, worker_name="worker-local")
+        retryable_interrupted_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        jobs.mark_interrupted(
+            retryable_interrupted_job,
+            interrupted_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+            reason="transient worker issue",
+        )
+        nonretryable_interrupted_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        jobs.mark_interrupted(
+            nonretryable_interrupted_job,
+            interrupted_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+            reason="hard worker failure",
+        )
+        nonretryable_interrupted_job.interruption_retryable = False
 
         cleared = jobs.clear_queue(cleared_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc))
 
-        assert {job.id for job in cleared} == {pending_job.id, scheduled_job.id}
+        assert {job.id for job in cleared} == {
+            pending_job.id,
+            scheduled_job.id,
+            retryable_interrupted_job.id,
+        }
         assert pending_job.status == JobStatus.CANCELLED
         assert scheduled_job.status == JobStatus.CANCELLED
+        assert retryable_interrupted_job.status == JobStatus.CANCELLED
         assert running_job.status == JobStatus.RUNNING
+        assert nonretryable_interrupted_job.status == JobStatus.INTERRUPTED
         assert jobs.has_active_job_for_tracked_file(tracked_file.id) is True
+
+
+def test_clear_failed_history_includes_skipped_jobs() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+
+        failed_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        failed_job.status = JobStatus.FAILED
+        interrupted_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        interrupted_job.status = JobStatus.INTERRUPTED
+        cancelled_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        cancelled_job.status = JobStatus.CANCELLED
+        skipped_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        skipped_job.status = JobStatus.SKIPPED
+        completed_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        completed_job.status = JobStatus.COMPLETED
+
+        cleared = jobs.clear_failed_history(cleared_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc))
+
+        assert {job.id for job in cleared} == {
+            failed_job.id,
+            interrupted_job.id,
+            cancelled_job.id,
+            skipped_job.id,
+        }
+        assert completed_job.cleared_at is None
 
 
 def test_backup_policy_is_persisted_on_jobs() -> None:
@@ -492,6 +547,40 @@ def test_backup_policy_is_persisted_on_jobs() -> None:
         assert keep_job.delete_replaced_source is False
         assert delete_job.backup_policy == "delete_after_success"
         assert delete_job.delete_replaced_source is True
+
+
+def test_backup_listing_supports_search_pagination_and_total(tmp_path: Path) -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        base_media = parse_fixture("film_1080p.json")
+
+        for index in range(16):
+            source_path = tmp_path / f"Film {index:02d}.mkv"
+            backup_path = tmp_path / f"Film {index:02d}.encodr-backup.mkv"
+            backup_path.write_text("original", encoding="utf-8")
+            media = base_media.model_copy(update={"file_path": source_path.as_posix()})
+            tracked_file = tracked_files.upsert_by_path(source_path.as_posix(), media_file=media)
+            probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+            plan = build_processing_plan(media, bundle, source_path=source_path.as_posix())
+            plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+            job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+            job.status = JobStatus.COMPLETED
+            job.completed_at = datetime(2026, 4, 22, 13, index, tzinfo=timezone.utc)
+            job.original_backup_path = backup_path.as_posix()
+
+        page = jobs.list_backup_jobs(limit=15, offset=0)
+        second_page = jobs.list_backup_jobs(limit=15, offset=15)
+        filtered = jobs.list_backup_jobs(search="Film 15", limit=15, offset=0)
+
+        assert jobs.count_backup_jobs() == 16
+        assert len(page) == 15
+        assert len(second_page) == 1
+        assert len(filtered) == 1
+        assert filtered[0].tracked_file.source_filename == "Film 15.mkv"
 
 
 def test_expired_backup_cleanup_deletes_retained_backup(tmp_path: Path) -> None:

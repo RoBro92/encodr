@@ -281,3 +281,30 @@ def create_job_from_review_item(
     except ApiServiceError as error:
         session.rollback()
         _raise_service_error(error)
+
+
+@router.post("/items/{item_id}/exclude", response_model=ReviewDecisionResponse)
+def exclude_review_item(
+    item_id: str,
+    payload: ReviewDecisionRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+    service: ReviewService = Depends(get_review_service),
+    current_user: User = Depends(require_admin_user),
+) -> ReviewDecisionResponse:
+    try:
+        item, decision = service.exclude_item(
+            session,
+            item_id=item_id,
+            note=payload.note,
+            actor=current_user,
+            request=request,
+        )
+        session.commit()
+        return ReviewDecisionResponse(
+            review_item=service.to_detail_response(item),
+            decision=service._decision_summary(decision),
+        )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)

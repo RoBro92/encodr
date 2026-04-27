@@ -107,21 +107,21 @@ export function DashboardPage() {
       ) : null}
 
       <section className="dashboard-analytics-row" aria-label="Historical processing metrics">
-        <article className="dashboard-metric-card">
+        <Link className="dashboard-metric-card dashboard-card-link" to={`${APP_ROUTES.jobs}?status=completed&tab=completed`}>
           <span className="metric-label">Files Processed</span>
           <strong>{formatInteger(processedFileCount)}</strong>
           <small>{formatAverage(averageProcessedPerDay, "Average per day")}</small>
-        </article>
-        <article className="dashboard-metric-card">
+        </Link>
+        <Link className="dashboard-metric-card dashboard-card-link" to={APP_ROUTES.system}>
           <span className="metric-label">Storage Saved</span>
           <strong>{formatBytes(totalSpaceSaved)}</strong>
           <small>{averageSavedPerDay == null ? "Average saved per day unavailable" : `${formatBytes(averageSavedPerDay)} average saved per day`}</small>
-        </article>
-        <article className="dashboard-metric-card">
+        </Link>
+        <Link className="dashboard-metric-card dashboard-card-link" to={`${APP_ROUTES.jobs}?status=completed&tab=completed`}>
           <span className="metric-label">Media Cleaned</span>
           <strong>{formatInteger(totalAudioRemoved)} audio</strong>
           <small>{formatInteger(totalSubtitleRemoved)} subtitles removed</small>
-        </article>
+        </Link>
       </section>
 
       <section className="dashboard-command-grid" aria-label="Transcoding command center">
@@ -135,20 +135,20 @@ export function DashboardPage() {
           </div>
 
           <div className="dashboard-outcome-top">
-            <div className={`dashboard-outcome-card${manualReviewCount > 0 ? " dashboard-outcome-card-attention" : ""}`}>
+            <Link className={`dashboard-outcome-card dashboard-card-link${manualReviewCount > 0 ? " dashboard-outcome-card-attention" : ""}`} to={`${APP_ROUTES.review}?status=open`}>
               <span className="metric-label">Manual Review</span>
               <strong>{formatInteger(manualReviewCount)}</strong>
-            </div>
-            <div className="dashboard-outcome-card">
+            </Link>
+            <Link className="dashboard-outcome-card dashboard-card-link" to={`${APP_ROUTES.jobs}?status=completed&tab=completed`}>
               <span className="metric-label">Total Transcodes</span>
               <strong>{formatInteger(totalTranscodes)}</strong>
-            </div>
+            </Link>
           </div>
 
           <div className="dashboard-breakdown-grid">
-            <StatusSummaryCard label="Failed" value={failedJobCount} tone="danger" />
-            <StatusSummaryCard label="Interrupted" value={interruptedJobCount} tone="warning" />
-            <StatusSummaryCard label="Running" value={runningJobCount} tone="success" />
+            <StatusSummaryCard label="Failed" value={failedJobCount} tone="danger" to={`${APP_ROUTES.jobs}?status=failed&tab=problem`} />
+            <StatusSummaryCard label="Interrupted" value={interruptedJobCount} tone="warning" to={`${APP_ROUTES.jobs}?status=interrupted&tab=problem`} />
+            <StatusSummaryCard label="Running" value={runningJobCount} tone="success" to={`${APP_ROUTES.jobs}?status=running&tab=active`} />
           </div>
         </article>
 
@@ -200,14 +200,14 @@ export function DashboardPage() {
 
         <div className="dashboard-node-grid">
           {systemNodes.map((node) => (
-            <div key={node.name} className="dashboard-node-row">
+            <Link key={node.name} className="dashboard-node-row dashboard-card-link" to={systemNodeRoute(node, worker)}>
               <div className={`dashboard-status-dot dashboard-status-dot-${node.tone}`} aria-hidden="true" />
               <div>
                 <strong>{node.name}</strong>
                 <p>{node.detail}</p>
               </div>
               <span className={`dashboard-node-pill dashboard-node-pill-${node.tone}`}>{node.status}</span>
-            </div>
+            </Link>
           ))}
         </div>
       </section>
@@ -219,16 +219,18 @@ function StatusSummaryCard({
   label,
   value,
   tone,
+  to,
 }: {
   label: string;
   value: number;
   tone: "danger" | "warning" | "success";
+  to: string;
 }) {
   return (
-    <div className={`dashboard-breakdown-card dashboard-breakdown-card-${tone}`}>
+    <Link className={`dashboard-breakdown-card dashboard-card-link dashboard-breakdown-card-${tone}`} to={to}>
       <span className="metric-label">{label}</span>
       <strong>{formatInteger(value)}</strong>
-    </div>
+    </Link>
   );
 }
 
@@ -287,6 +289,19 @@ function buildSystemNodes(
       tone: workerTone(worker),
     },
   ];
+}
+
+function systemNodeRoute(node: SystemNode, worker: WorkerStatus | undefined) {
+  if (node.name === "Storage") {
+    return APP_ROUTES.system;
+  }
+  if (node.name === "Database") {
+    return APP_ROUTES.system;
+  }
+  if (worker?.worker_id) {
+    return APP_ROUTES.workerDetail(worker.worker_id);
+  }
+  return APP_ROUTES.workers;
 }
 
 function workerStatusLabel(worker: WorkerStatus | undefined) {

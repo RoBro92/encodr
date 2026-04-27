@@ -200,12 +200,22 @@ def clear_failed_jobs(
 
 @router.get("/backups", response_model=JobBackupListResponse)
 def list_job_backups(
+    search: str | None = None,
+    limit: int | None = 15,
+    offset: int = 0,
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin_user),
 ) -> JobBackupListResponse:
     del current_user
-    jobs = JobsService().list_backups(session)
-    return JobBackupListResponse(items=[JobBackupResponse.from_model(job) for job in jobs])
+    jobs_service = JobsService()
+    jobs = jobs_service.list_backups(session, search=search, limit=limit, offset=offset)
+    total = jobs_service.count_backups(session, search=search)
+    return JobBackupListResponse(
+        items=[JobBackupResponse.from_model(job) for job in jobs],
+        limit=limit,
+        offset=offset,
+        total=total,
+    )
 
 
 @router.delete("/{job_id}/backup", response_model=JobBackupResponse)

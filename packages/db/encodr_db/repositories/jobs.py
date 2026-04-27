@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from math import floor
 
-from sqlalchemy import Select, asc, desc, func, or_, select
+from sqlalchemy import Select, and_, asc, desc, func, or_, select
 from sqlalchemy.orm import Session, joinedload
 
 from encodr_core.execution import normalise_backend_preference
@@ -588,7 +588,14 @@ class JobRepository:
             select(Job)
             .where(
                 Job.cleared_at.is_(None),
-                Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED]),
+                or_(
+                    Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED]),
+                    and_(
+                        Job.status == JobStatus.INTERRUPTED,
+                        Job.interruption_retryable.is_(True),
+                        Job.assigned_worker_id.is_(None),
+                    ),
+                ),
             )
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
             .order_by(asc(Job.created_at))
@@ -608,7 +615,7 @@ class JobRepository:
             select(Job)
             .where(
                 Job.cleared_at.is_(None),
-                Job.status.in_([JobStatus.FAILED, JobStatus.INTERRUPTED, JobStatus.CANCELLED]),
+                Job.status.in_([JobStatus.FAILED, JobStatus.INTERRUPTED, JobStatus.CANCELLED, JobStatus.SKIPPED]),
             )
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
             .order_by(desc(Job.updated_at))
@@ -618,9 +625,17 @@ class JobRepository:
             self.mark_cleared(job, cleared_at=cleared_at, reason=reason)
         return jobs
 
-    def list_backup_jobs(self, *, include_missing: bool = False) -> list[Job]:
+    def list_backup_jobs(
+        self,
+        *,
+        search: str | None = None,
+        limit: int | None = None,
+        offset: int | None = None,
+        include_missing: bool = False,
+    ) -> list[Job]:
         query = (
             select(Job)
+            .outerjoin(Job.tracked_file)
             .where(
                 Job.original_backup_path.is_not(None),
                 Job.backup_deleted_at.is_(None),
@@ -629,12 +644,30 @@ class JobRepository:
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
             .order_by(desc(Job.completed_at), desc(Job.updated_at))
         )
+        query = _apply_backup_search(query, search)
+        if offset is not None:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
         jobs = list(self.session.scalars(query))
         if include_missing:
             return jobs
         from pathlib import Path
 
         return [job for job in jobs if job.original_backup_path and Path(job.original_backup_path).exists()]
+
+    def count_backup_jobs(self, *, search: str | None = None) -> int:
+        query = (
+            select(func.count(Job.id))
+            .outerjoin(Job.tracked_file)
+            .where(
+                Job.original_backup_path.is_not(None),
+                Job.backup_deleted_at.is_(None),
+                Job.backup_restored_at.is_(None),
+            )
+        )
+        query = _apply_backup_search(query, search)
+        return int(self.session.scalar(query) or 0)
 
     def cleanup_expired_backups(self, *, now: datetime | None = None) -> list[Job]:
         from pathlib import Path
@@ -698,6 +731,20 @@ class JobRepository:
             return []
         query = query.order_by(desc(Job.completed_at), desc(Job.updated_at)).limit(limit)
         return list(self.session.scalars(query))
+
+
+def _apply_backup_search(query: Select, search: str | None) -> Select:
+    cleaned = (search or "").strip().lower()
+    if not cleaned:
+        return query
+    pattern = f"%{cleaned}%"
+    return query.where(
+        or_(
+            func.lower(Job.original_backup_path).like(pattern),
+            func.lower(TrackedFile.source_path).like(pattern),
+            func.lower(TrackedFile.source_filename).like(pattern),
+        )
+    )
 
 
 def truncate_log(value: str | None, limit: int = 8000) -> str | None:

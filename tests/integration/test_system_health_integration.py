@@ -37,6 +37,7 @@ def test_worker_status_endpoint_returns_enriched_health_data(
     assert payload["queue_health"]["failed_count"] == 1
     assert payload["queue_health"]["manual_review_count"] == 1
     assert payload["queue_health"]["status"] == "degraded"
+    assert payload["summary"] != "The local worker is available but queue health needs attention."
     assert payload["self_test_available"] is True
 
 

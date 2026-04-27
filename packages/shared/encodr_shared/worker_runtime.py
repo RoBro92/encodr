@@ -696,28 +696,44 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
             "reason_unavailable": "ffmpeg missing",
         },
     )
-    intel_usable = intel_vaapi_probe.usable
-    intel_reason = None if intel_usable else (intel_vaapi_probe.details.get("reason_unavailable") or intel_vaapi_probe.message)
+    qsv_reason = qsv_probe.details.get("reason_unavailable") or qsv_probe.message
+    vaapi_reason = intel_vaapi_probe.details.get("reason_unavailable") or intel_vaapi_probe.message
+    selected_intel_backend = "qsv" if qsv_probe.usable else ("vaapi" if intel_vaapi_probe.usable else None)
+    intel_usable = qsv_probe.usable or intel_vaapi_probe.usable
+    intel_reason = None if intel_usable else (qsv_reason or vaapi_reason)
+    intel_message = (
+        "Intel iGPU is available via QSV in this runtime."
+        if selected_intel_backend == "qsv"
+        else (
+            f"Intel iGPU is available via VAAPI because QSV is unavailable: {qsv_reason}."
+            if selected_intel_backend == "vaapi"
+            else "Intel iGPU passthrough is not fully usable in this runtime."
+        )
+    )
     intel_probe = HardwareProbe(
         backend="intel_igpu",
         detected=intel_render is not None or qsv_probe.detected or any("intel" in item.lower() for item in windows_adapters),
         usable=intel_usable,
         status="healthy" if intel_usable else "failed",
-        message=(
-            "Intel iGPU is available via VAAPI in this runtime."
-            if intel_usable
-            else "Intel iGPU passthrough is not fully usable in this runtime."
-        ),
+        message=intel_message,
         details={
             "device_paths": [item for item in [_device_probe_from_path(intel_render), _device_probe_from_path(intel_card)] if item is not None],
             "ffmpeg_hwaccels": hwaccels,
-            "ffmpeg_path_verified": intel_vaapi_probe.usable,
+            "ffmpeg_path_verified": intel_usable,
             "reason_unavailable": intel_reason,
             "recommended_usage": (
-                "Use Intel VAAPI once the render node, vainfo validation, and FFmpeg smoke test all succeed."
+                "Use Intel QSV when the smoke test succeeds; otherwise use Intel VAAPI after its validation succeeds."
                 if intel_usable
                 else "Expose /dev/dri to the worker runtime and validate Intel VAAPI before selecting Intel iGPU."
             ),
+            "selected_intel_backend": selected_intel_backend,
+            "fallback_reason": (
+                f"Using Intel VAAPI because QSV is unavailable: {qsv_reason}"
+                if selected_intel_backend == "vaapi"
+                else None
+            ),
+            "qsv_usable": qsv_probe.usable,
+            "vaapi_usable": intel_vaapi_probe.usable,
             "qsv": qsv_probe.details | {"usable": qsv_probe.usable, "message": qsv_probe.message, "status": qsv_probe.status},
             "vaapi": intel_vaapi_probe.details | {"usable": intel_vaapi_probe.usable, "message": intel_vaapi_probe.message},
             "windows_adapters": windows_adapters,
@@ -870,7 +886,12 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
             usable=False,
             status="failed",
             message="No Intel render device is visible to the runtime.",
-            details={"hwaccels": hwaccels, "render_devices": render_devices},
+            details={
+                "hwaccels": hwaccels,
+                "render_devices": render_devices,
+                "validation_state": "device missing",
+                "reason_unavailable": "device missing",
+            },
         )
 
     if "qsv" not in hwaccels:
@@ -880,18 +901,80 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
             usable=False,
             status="failed",
             message="FFmpeg does not report QSV hardware acceleration support.",
-            details={"hwaccels": hwaccels, "render_devices": render_devices},
+            details={
+                "hwaccels": hwaccels,
+                "render_devices": render_devices,
+                "validation_state": "ffmpeg qsv hwaccel missing",
+                "reason_unavailable": "ffmpeg qsv hwaccel missing",
+            },
         )
+
+    resolved_ffmpeg = probe_binary(ffmpeg_path).resolved_path or str(ffmpeg_path)
+    init_hw_device = "qsv=qsv"
+    if render_devices and not is_windows:
+        init_hw_device = f"qsv=qsv:{render_devices[0]}"
+    ffmpeg_command = [
+        resolved_ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-init_hw_device",
+        init_hw_device,
+        "-filter_hw_device",
+        "qsv",
+        "-f",
+        "lavfi",
+        "-i",
+        "testsrc2=size=1280x720:rate=30",
+        "-t",
+        "3",
+        "-vf",
+        "format=nv12,hwupload=extra_hw_frames=64",
+        "-c:v",
+        "h264_qsv",
+        "-f",
+        "null",
+        "-",
+    ]
+    ffmpeg_returncode, ffmpeg_stdout, ffmpeg_stderr = _run_command_capture(
+        ffmpeg_command,
+        timeout=20,
+    )
+    ffmpeg_payload = {
+        "command": " ".join(ffmpeg_command),
+        "returncode": ffmpeg_returncode,
+        "stdout": ffmpeg_stdout.strip()[:1000] if ffmpeg_stdout else None,
+        "stderr": ffmpeg_stderr.strip()[:1000] if ffmpeg_stderr else None,
+    }
+    if ffmpeg_returncode != 0:
+        stderr = (ffmpeg_stderr or ffmpeg_stdout or "").strip()
+        return HardwareProbe(
+            backend="intel_qsv",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="Intel QSV is visible, but the FFmpeg QSV encode smoke test failed.",
+            details={
+                "hwaccels": hwaccels,
+                "render_devices": render_devices,
+                "ffmpeg_smoke_test": ffmpeg_payload,
+                "validation_state": "ffmpeg QSV encode test failed",
+                "reason_unavailable": stderr[:300] if stderr else "ffmpeg QSV encode test failed",
+            },
+        )
+
     return HardwareProbe(
         backend="intel_qsv",
         detected=True,
-        usable=False,
-        status="unknown",
-        message="Intel QSV is visible in FFmpeg but remains unverified in this runtime.",
+        usable=True,
+        status="healthy",
+        message="Intel QSV is available and validated in the current runtime.",
         details={
             "hwaccels": hwaccels,
             "render_devices": render_devices,
-            "reason_unavailable": "QSV remains deliberately unverified until a reliable smoke test is validated in production.",
+            "ffmpeg_smoke_test": ffmpeg_payload,
+            "validation_state": "usable",
+            "reason_unavailable": None,
         },
     )
 

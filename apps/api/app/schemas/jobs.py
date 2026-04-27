@@ -141,6 +141,9 @@ class JobBackupResponse(BaseModel):
 
 class JobBackupListResponse(BaseModel):
     items: list[JobBackupResponse]
+    limit: int | None = None
+    offset: int = 0
+    total: int = 0
 
 
 class JobSummaryResponse(BaseModel):
@@ -169,6 +172,7 @@ class JobSummaryResponse(BaseModel):
     backend_selection_reason: str | None = None
     failure_message: str | None = None
     failure_category: str | None = None
+    skipped_reason: str | None = None
     input_size_bytes: int | None = None
     output_size_bytes: int | None = None
     space_saved_bytes: int | None = None
@@ -238,6 +242,7 @@ class JobSummaryResponse(BaseModel):
             backend_selection_reason=job.backend_selection_reason,
             failure_message=job.failure_message,
             failure_category=job.failure_category,
+            skipped_reason=job_skipped_reason(job),
             input_size_bytes=job.input_size_bytes,
             output_size_bytes=job.output_size_bytes if job.output_size_bytes is not None else (
                 analysis_payload.estimated_output_size_bytes if analysis_payload is not None else None
@@ -369,6 +374,48 @@ def job_removed_subtitle_tracks(job: Job) -> int:
     if not isinstance(dropped, list):
         return 0
     return len(dropped)
+
+
+def job_skipped_reason(job: Job) -> str | None:
+    if job.status.value != "skipped":
+        return None
+    if job.failure_message:
+        return job.failure_message
+
+    payload = getattr(job.plan_snapshot, "payload", None)
+    if isinstance(payload, dict):
+        summary = payload.get("summary")
+        if isinstance(summary, dict):
+            is_already_compliant = summary.get("is_already_compliant")
+            if is_already_compliant is True:
+                return "Already efficient under the active processing policy."
+        action = payload.get("action")
+        if action == "skip":
+            reasons = payload.get("reasons")
+            if isinstance(reasons, list):
+                for reason in reasons:
+                    if not isinstance(reason, dict):
+                        continue
+                    message = reason.get("message")
+                    if isinstance(message, str) and message.strip():
+                        return message.strip()
+                    code = reason.get("code")
+                    if isinstance(code, str) and code.strip():
+                        return code.replace("_", " ")
+
+    reasons = getattr(job.plan_snapshot, "reasons", None)
+    if isinstance(reasons, list):
+        for reason in reasons:
+            if not isinstance(reason, dict):
+                continue
+            message = reason.get("message")
+            if isinstance(message, str) and message.strip():
+                return message.strip()
+            code = reason.get("code")
+            if isinstance(code, str) and code.strip():
+                return code.replace("_", " ")
+
+    return "Skipped because no replacement work was required."
 
 
 def dry_run_requires_review(job: Job) -> bool:

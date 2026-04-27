@@ -63,11 +63,14 @@ class ExecutionRunner:
             )
 
         if plan.action == PlanAction.SKIP:
+            skipped_reason = skipped_reason_for_plan(plan)
             return ExecutionResult(
                 mode="skip",
                 status="skipped",
                 command=[],
                 output_path=None,
+                failure_message=skipped_reason,
+                failure_category="skipped_by_policy",
                 started_at=started_at,
                 completed_at=datetime.now(timezone.utc),
             )
@@ -98,3 +101,14 @@ class ExecutionRunner:
             execution_result = self.ffmpeg_client.run(command_plan)
         execution_result.status = "staged"
         return execution_result
+
+
+def skipped_reason_for_plan(plan: ProcessingPlan) -> str:
+    for reason in plan.reasons:
+        if reason.message:
+            return reason.message
+        if reason.code:
+            return reason.code.replace("_", " ")
+    if plan.is_already_compliant:
+        return "Already efficient under the active processing policy."
+    return "Skipped because no replacement work was required."

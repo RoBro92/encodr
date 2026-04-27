@@ -260,15 +260,117 @@ def test_probe_intel_vaapi_reports_driver_missing(monkeypatch: pytest.MonkeyPatc
     assert probe.details["reason_unavailable"] == "Intel driver missing"
 
 
-def test_probe_intel_qsv_is_left_unverified_without_dedicated_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_intel_qsv_runs_real_smoke_test(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("encodr_shared.worker_runtime.detect_ffmpeg_hwaccels", lambda _path: ["qsv", "vaapi"])
     monkeypatch.setattr(
         "encodr_shared.worker_runtime.Path.glob",
         lambda self, pattern: [Path("/dev/dri/renderD128")] if str(self) == "/dev/dri" and pattern == "renderD*" else [],
     )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_binary",
+        lambda path: type(
+            "BinaryProbe",
+            (),
+            {
+                "configured_path": str(path),
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "discoverable": True,
+                "status": "healthy",
+                "message": "Binary is discoverable and executable.",
+            },
+        )(),
+    )
+
+    def fake_run(command, **kwargs):
+        assert "-init_hw_device" in command
+        assert "qsv=qsv:/dev/dri/renderD128" in command
+        assert "h264_qsv" in command
+        return 0, "", ""
+
+    monkeypatch.setattr("encodr_shared.worker_runtime._run_command_capture", fake_run)
 
     probe = probe_intel_qsv("ffmpeg")
 
     assert probe.detected is True
-    assert probe.usable is False
-    assert probe.status == "unknown"
+    assert probe.usable is True
+    assert probe.status == "healthy"
+    assert probe.details["validation_state"] == "usable"
+    assert probe.details["ffmpeg_smoke_test"]["returncode"] == 0
+
+
+def test_probe_execution_backends_reports_qsv_to_vaapi_fallback_reason(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_binary",
+        lambda _path: type(
+            "BinaryProbe",
+            (),
+            {
+                "configured_path": "ffmpeg",
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "discoverable": True,
+                "status": "healthy",
+                "message": "Binary is discoverable and executable.",
+            },
+        )(),
+    )
+    monkeypatch.setattr("encodr_shared.worker_runtime.detect_ffmpeg_hwaccels", lambda _path: ["qsv", "vaapi"])
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.discover_runtime_devices",
+        lambda: [
+            {
+                "path": "/dev/dri/renderD128",
+                "exists": True,
+                "readable": True,
+                "writable": True,
+                "is_character_device": True,
+                "status": "healthy",
+                "message": "Device path is present and readable.",
+                "vendor_id": "0x8086",
+                "vendor_name": "Intel",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_intel_qsv",
+        lambda _path: HardwareProbe(
+            backend="intel_qsv",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="Intel QSV is visible, but the FFmpeg QSV encode smoke test failed.",
+            details={"reason_unavailable": "qsv smoke failed", "render_devices": ["/dev/dri/renderD128"]},
+        ),
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_intel_vaapi",
+        lambda _path: HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=True,
+            status="healthy",
+            message="Intel VAAPI is available and validated in the current runtime.",
+            details={"device_paths": [{"path": "/dev/dri/renderD128"}]},
+        ),
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_nvenc",
+        lambda _path: HardwareProbe(
+            backend="nvidia_gpu",
+            detected=False,
+            usable=False,
+            status="failed",
+            message="No NVIDIA runtime device is visible to the runtime.",
+            details={},
+        ),
+    )
+
+    intel_probe = next(item for item in probe_execution_backends("ffmpeg") if item.backend == "intel_igpu")
+
+    assert intel_probe.usable is True
+    assert intel_probe.details["selected_intel_backend"] == "vaapi"
+    assert "Using Intel VAAPI because QSV is unavailable: qsv smoke failed" in intel_probe.details["fallback_reason"]
+    assert "qsv smoke failed" in intel_probe.message

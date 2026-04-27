@@ -281,6 +281,7 @@ export type JobSummary = {
   backend_selection_reason: string | null;
   failure_message: string | null;
   failure_category: string | null;
+  skipped_reason: string | null;
   verification_status: string;
   replacement_status: string;
   tracked_file_is_protected: boolean | null;
@@ -388,6 +389,9 @@ export type JobBackup = {
 
 export type JobBackupListResponse = {
   items: JobBackup[];
+  limit: number | null;
+  offset: number;
+  total: number;
 };
 
 export type DryRunJobCreateResponse = {

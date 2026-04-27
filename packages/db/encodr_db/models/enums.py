@@ -76,6 +76,7 @@ class ManualReviewDecisionType(StrEnum):
     CLEAR_PROTECTED = "clear_protected"
     REPLAN_REQUESTED = "replan_requested"
     JOB_CREATED = "job_created"
+    EXCLUDED = "excluded"
 
 
 class UserRole(StrEnum):

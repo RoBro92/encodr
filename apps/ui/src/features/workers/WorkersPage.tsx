@@ -213,6 +213,13 @@ export function WorkersPage() {
     ? configuredBackendProbe
     : null;
   const selectedRuntimeDevices = selectedHardwareBackendProbe?.device_paths ?? [];
+  const intelBackendDetails = configuredBackendProbe?.backend === "intel_igpu"
+    ? configuredBackendProbe.details
+    : null;
+  const intelQsvStatus = intelBackendDetails ? readNestedBackendStatus(intelBackendDetails, "qsv") : null;
+  const intelVaapiStatus = intelBackendDetails ? readNestedBackendStatus(intelBackendDetails, "vaapi") : null;
+  const selectedIntelBackend = intelBackendDetails ? readStringValue(intelBackendDetails.selected_intel_backend) : null;
+  const intelFallbackReason = intelBackendDetails ? readStringValue(intelBackendDetails.fallback_reason) : null;
 
   function openAddWorker(mode: Exclude<AddWorkerMode, "choose">) {
     setIsAddWorkerMenuOpen(false);
@@ -491,6 +498,25 @@ export function WorkersPage() {
                               />
                             ) : "No probe available",
                           },
+                          ...(intelBackendDetails ? [
+                            {
+                              label: "QSV usable",
+                              value: <WorkerStatusIndicator label={intelQsvStatus?.usable ? "Yes" : "No"} status={intelQsvStatus?.status ?? "failed"} />,
+                            },
+                            {
+                              label: "VAAPI usable",
+                              value: <WorkerStatusIndicator label={intelVaapiStatus?.usable ? "Yes" : "No"} status={intelVaapiStatus?.status ?? "failed"} />,
+                            },
+                            {
+                              label: "Selected Intel backend",
+                              value: selectedIntelBackend ? selectedIntelBackend.toUpperCase() : "Not selected",
+                            },
+                            {
+                              label: "Fallback reason",
+                              value: intelFallbackReason ?? "No Intel backend fallback recorded.",
+                              span: "full" as const,
+                            },
+                          ] : []),
                         ]}
                       />
                       {selectedHardwareBackendProbe ? (
@@ -1368,6 +1394,22 @@ function isUnavailableMetric(value: string) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readStringValue(value: unknown) {
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function readNestedBackendStatus(details: Record<string, unknown>, key: "qsv" | "vaapi") {
+  const nested = details[key];
+  if (!nested || typeof nested !== "object" || Array.isArray(nested)) {
+    return null;
+  }
+  const payload = nested as Record<string, unknown>;
+  return {
+    usable: payload.usable === true,
+    status: readStringValue(payload.status) ?? (payload.usable === true ? "healthy" : "failed"),
+  };
 }
 
 function buildWorkerStatusRollup(
