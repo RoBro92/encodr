@@ -11,7 +11,6 @@ import { ScheduleWindowsEditor } from "../../components/ScheduleWindowsEditor";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
-  useBatchPlanMutation,
   useCreateBatchJobsMutation,
   useCreateDryRunJobsMutation,
   useCreateWatchedJobMutation,
@@ -30,7 +29,7 @@ import type { FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } fro
 import { formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
-type LibraryTab = "browse" | "scan" | "dry-run" | "batch-plan";
+type LibraryTab = "browse" | "scan" | "dry-run" | "jobs-created";
 type RootKind = "movies" | "tv";
 type PollingSchedule = "continuous" | "daily" | "overnight" | "weekend";
 
@@ -194,6 +193,7 @@ export function FilesPage() {
   const [watcherDraft, setWatcherDraft] = useState<WatcherDraft | null>(null);
   const [dryRunModalOpen, setDryRunModalOpen] = useState(false);
   const [dryRunWorkerId, setDryRunWorkerId] = useState("");
+  const [backupPolicy, setBackupPolicy] = useState("keep");
   const [dryRunScheduleConflict, setDryRunScheduleConflict] = useState<{
     worker_id: string;
     worker_name: string;
@@ -213,7 +213,6 @@ export function FilesPage() {
   const dryRunJobsQuery = useJobsQuery({ job_kind: "dry_run", limit: 100 });
   const scanMutation = useScanFolderMutation();
   const createDryRunJobsMutation = useCreateDryRunJobsMutation();
-  const batchPlanMutation = useBatchPlanMutation();
   const batchJobsMutation = useCreateBatchJobsMutation();
   const createWatchedJobMutation = useCreateWatchedJobMutation();
   const updateLibraryRootsMutation = useUpdateLibraryRootsMutation();
@@ -378,9 +377,9 @@ export function FilesPage() {
         : "No folder selected";
   const selectionScopeCopy =
     selectedPaths.length > 0
-      ? "Dry run, plan, or create jobs for the selected files."
+      ? "Dry run or create jobs for the selected files."
       : selectedFolder
-        ? "Dry run, plan, or create jobs for the whole folder."
+        ? "Dry run or create jobs for the whole folder."
         : "Choose a folder to begin.";
 
   const workerOptions = workers.map((worker) => ({
@@ -723,8 +722,8 @@ export function FilesPage() {
     }
     setSelectedFolder(path);
     setSelectedPaths([]);
-    setActiveTab("batch-plan");
-    await batchJobsMutation.mutateAsync({ folder_path: path, summary_only: true });
+    setActiveTab("jobs-created");
+    await batchJobsMutation.mutateAsync({ folder_path: path, summary_only: true, backup_policy: backupPolicy });
   }
 
   function openWatcherDraft(item?: WatchedJob) {
@@ -816,27 +815,19 @@ export function FilesPage() {
     }
   }
 
-  function runBatchPlan() {
-    if (!activeSelection) {
-      return;
-    }
-    setActiveTab("batch-plan");
-    batchPlanMutation.mutate(activeSelection);
-  }
-
   function runBatchJobs() {
     if (!activeSelection) {
       return;
     }
-    setActiveTab("batch-plan");
-    batchJobsMutation.mutate(activeSelection);
+    setActiveTab("jobs-created");
+    batchJobsMutation.mutate({ ...activeSelection, backup_policy: backupPolicy });
   }
 
   const tabs: Array<{ key: LibraryTab; label: string }> = [
     { key: "browse", label: "Browse" },
     { key: "scan", label: "Scan Results" },
     { key: "dry-run", label: "Dry Run" },
-    { key: "batch-plan", label: "Batch Plan" },
+    { key: "jobs-created", label: "Jobs Created" },
   ];
 
   return (
@@ -875,11 +866,8 @@ export function FilesPage() {
       {createDryRunJobsMutation.error instanceof Error ? (
         <ErrorPanel title="Dry run failed" message={createDryRunJobsMutation.error.message} />
       ) : null}
-      {batchPlanMutation.error instanceof Error ? (
-        <ErrorPanel title="Batch plan failed" message={batchPlanMutation.error.message} />
-      ) : null}
       {batchJobsMutation.error instanceof Error ? (
-        <ErrorPanel title="Batch job creation failed" message={batchJobsMutation.error.message} />
+        <ErrorPanel title="Job creation failed" message={batchJobsMutation.error.message} />
       ) : null}
       {createWatchedJobMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to create watched job" message={createWatchedJobMutation.error.message} />
@@ -1260,7 +1248,7 @@ export function FilesPage() {
 
       <CollapsibleSection
         title="Advanced Options"
-        subtitle="Manual browsing, selection, dry-run analysis, and batch job tools"
+        subtitle="Manual browsing, selection, dry-run analysis, and job creation"
       >
         <div className="library-advanced-toolbar">
           <div className="library-advanced-toolbar-left">
@@ -1269,6 +1257,14 @@ export function FilesPage() {
             <span className="muted-copy">{selectionScopeLabel}</span>
           </div>
           <div className="library-advanced-toolbar-actions">
+            <label className="field field-inline">
+              <span>Backup policy</span>
+              <select value={backupPolicy} onChange={(event) => setBackupPolicy(event.target.value)}>
+                <option value="keep">Keep backup</option>
+                <option value="keep_for_1_day">Keep for 1 day</option>
+                <option value="delete_after_success">Delete after success</option>
+              </select>
+            </label>
             <button
               className="button button-secondary button-small"
               type="button"
@@ -1284,14 +1280,6 @@ export function FilesPage() {
               disabled={!activeSelection || createDryRunJobsMutation.isPending}
             >
               {createDryRunJobsMutation.isPending ? "Starting…" : "Dry Run"}
-            </button>
-            <button
-              className="button button-secondary button-small"
-              type="button"
-              onClick={runBatchPlan}
-              disabled={!activeSelection || batchPlanMutation.isPending}
-            >
-              {batchPlanMutation.isPending ? "Planning…" : "Batch Plan"}
             </button>
             <button
               className="button button-primary button-small"
@@ -1631,75 +1619,42 @@ export function FilesPage() {
             )
           ) : null}
 
-          {currentTab === "batch-plan" ? (
-            batchPlanMutation.data || batchJobsMutation.data ? (
+          {currentTab === "jobs-created" ? (
+            batchJobsMutation.data ? (
               <div className="card-stack">
-                {batchPlanMutation.data ? (
-                  <div className="card-stack">
-                    <div className="info-strip">
-                      <strong>Saved plans</strong>
-                      <span>These plans were written to Encodr history.</span>
+                <div className="card-stack">
+                  <div className="info-strip">
+                    <strong>Jobs created</strong>
+                    <span>Blocked items still need review or protection approval.</span>
+                  </div>
+                  <div className="metric-grid">
+                    <div className="metric-panel">
+                      <span className="metric-label">Created</span>
+                      <strong>{batchJobsMutation.data.created_count}</strong>
                     </div>
-                    <div className="badge-list">
-                      {batchPlanMutation.data.actions.map((item) => (
-                        <div key={item.value} className="metric-pill">
-                          <StatusBadge value={String(item.value)} />
-                          <strong>{item.count}</strong>
-                        </div>
-                      ))}
-                    </div>
-                    <div className="list-stack">
-                      {batchPlanMutation.data.items.map((item) => (
-                        <Link key={item.tracked_file.id} className="list-row" to={APP_ROUTES.fileDetail(item.tracked_file.id)}>
-                          <div>
-                            <strong>{item.tracked_file.source_filename}</strong>
-                            <p>{item.tracked_file.source_path}</p>
-                          </div>
-                          <div className="list-row-meta">
-                            <StatusBadge value={item.latest_plan_snapshot.action} />
-                            <span>{titleCase(item.latest_plan_snapshot.confidence)}</span>
-                          </div>
-                        </Link>
-                      ))}
+                    <div className="metric-panel">
+                      <span className="metric-label">Blocked</span>
+                      <strong>{batchJobsMutation.data.blocked_count}</strong>
                     </div>
                   </div>
-                ) : null}
-
-                {batchJobsMutation.data ? (
-                  <div className="card-stack">
-                    <div className="info-strip">
-                      <strong>Jobs created</strong>
-                      <span>Blocked items still need review or protection approval.</span>
-                    </div>
-                    <div className="metric-grid">
-                      <div className="metric-panel">
-                        <span className="metric-label">Created</span>
-                        <strong>{batchJobsMutation.data.created_count}</strong>
-                      </div>
-                      <div className="metric-panel">
-                        <span className="metric-label">Blocked</span>
-                        <strong>{batchJobsMutation.data.blocked_count}</strong>
-                      </div>
-                    </div>
-                    <div className="list-stack">
-                      {batchJobsMutation.data.items.map((item) => (
-                        <div key={item.source_path} className="list-row">
-                          <div>
-                            <strong>{item.source_path.split("/").pop()}</strong>
-                            <p>{item.message ?? item.source_path}</p>
-                          </div>
-                          <div className="list-row-meta">
-                            <StatusBadge value={item.status} />
-                            {item.job ? <Link className="text-link" to={APP_ROUTES.jobDetail(item.job.id)}>Open job</Link> : null}
-                          </div>
+                  <div className="list-stack">
+                    {batchJobsMutation.data.items.map((item) => (
+                      <div key={item.source_path} className="list-row">
+                        <div>
+                          <strong>{item.source_path.split("/").pop()}</strong>
+                          <p>{item.message ?? item.source_path}</p>
                         </div>
-                      ))}
-                    </div>
+                        <div className="list-row-meta">
+                          <StatusBadge value={item.status} />
+                          {item.job ? <Link className="text-link" to={APP_ROUTES.jobDetail(item.job.id)}>Open job</Link> : null}
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ) : null}
+                </div>
               </div>
             ) : (
-              <EmptyState title="No batch results yet" message="Run Batch Plan or Create Jobs when you are ready to save work." />
+              <EmptyState title="No jobs created yet" message="Run Create Jobs when you are ready to save work." />
             )
           ) : null}
         </div>

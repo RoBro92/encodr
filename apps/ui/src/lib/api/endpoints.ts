@@ -11,10 +11,12 @@ import type {
   BootstrapStatus,
   BatchPlanResponse,
   BatchJobCreateResponse,
+  BulkJobActionResponse,
   CreateJobPayload,
   CreateDryRunJobsPayload,
   CreateBatchJobsPayload,
   CurrentUser,
+  DiagnosticLogsResponse,
   EffectiveConfig,
   ExecutionPreferencesResponse,
   FileDetail,
@@ -24,6 +26,7 @@ import type {
   FolderScanSummary,
   ScanRecordListResponse,
   JobDetail,
+  JobBackupListResponse,
   JobListResponse,
   LibraryRoots,
   LoginPayload,
@@ -217,6 +220,26 @@ export function cancelJob(client: ApiClient, jobId: string): Promise<JobDetail> 
   return client.request<JobDetail>(`/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
+export function clearQueue(client: ApiClient): Promise<BulkJobActionResponse> {
+  return client.request<BulkJobActionResponse>("/jobs/clear-queue", { method: "POST" });
+}
+
+export function clearFailedJobs(client: ApiClient): Promise<BulkJobActionResponse> {
+  return client.request<BulkJobActionResponse>("/jobs/clear-failed", { method: "POST" });
+}
+
+export function listJobBackups(client: ApiClient): Promise<JobBackupListResponse> {
+  return client.request<JobBackupListResponse>("/jobs/backups");
+}
+
+export function deleteJobBackup(client: ApiClient, jobId: string): Promise<unknown> {
+  return client.request<unknown>(`/jobs/${jobId}/backup`, { method: "DELETE" });
+}
+
+export function restoreJobBackup(client: ApiClient, jobId: string): Promise<unknown> {
+  return client.request<unknown>(`/jobs/${jobId}/backup/restore`, { method: "POST" });
+}
+
 export function listWorkers(client: ApiClient): Promise<WorkerInventoryListResponse> {
   return client.request<WorkerInventoryListResponse>("/workers");
 }
@@ -395,6 +418,20 @@ export function getUpdateStatus(client: ApiClient): Promise<UpdateStatus> {
 
 export function checkUpdateStatus(client: ApiClient): Promise<UpdateStatus> {
   return client.request<UpdateStatus>("/system/update/check", { method: "POST" });
+}
+
+export function getDiagnosticLogs(
+  client: ApiClient,
+  query: Record<string, string | number | undefined>,
+): Promise<DiagnosticLogsResponse> {
+  const search = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") {
+      search.set(key, String(value));
+    }
+  });
+  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  return client.request<DiagnosticLogsResponse>(`/system/logs${suffix}`);
 }
 
 export function getEffectiveConfig(client: ApiClient): Promise<EffectiveConfig> {

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.schemas.worker import (
     DevicePathStatusResponse,
@@ -79,3 +79,18 @@ class UpdateStatusResponse(BaseModel):
     error: str | None = None
     download_url: str | None = None
     release_notes_url: str | None = None
+
+
+class DiagnosticLogEventResponse(BaseModel):
+    timestamp: str
+    level: str
+    component: str
+    logger: str
+    message: str
+    fields: dict = Field(default_factory=dict)
+
+
+class DiagnosticLogsResponse(BaseModel):
+    retention_days: int
+    log_dir: str
+    items: list[DiagnosticLogEventResponse]

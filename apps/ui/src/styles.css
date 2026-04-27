@@ -1002,6 +1002,92 @@ pre {
   flex: 0 0 auto;
 }
 
+.jobs-tab-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: var(--space-2);
+  margin-bottom: var(--space-4);
+}
+
+.jobs-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  background: var(--bg-panel-strong);
+  color: var(--text-muted);
+  cursor: pointer;
+  font-weight: 700;
+  padding: 8px 12px;
+}
+
+.jobs-tab span {
+  color: var(--text-subtle);
+  font-size: 0.82rem;
+}
+
+.jobs-tab-active {
+  border-color: color-mix(in srgb, var(--color-primary) 42%, var(--border));
+  color: var(--text);
+}
+
+.explained-status-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--bg-panel-strong);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+  line-height: 1;
+  padding: 6px 9px;
+}
+
+.explained-status-badge span {
+  color: var(--text-subtle);
+  font-weight: 700;
+}
+
+.explained-status-badge strong {
+  color: var(--text);
+  font-weight: 800;
+}
+
+.explained-status-badge-success {
+  border-color: color-mix(in srgb, var(--color-success) 32%, var(--border));
+}
+
+.explained-status-badge-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 36%, var(--border));
+}
+
+.explained-status-badge-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 36%, var(--border));
+}
+
+.explained-status-badge-active,
+.explained-status-badge-info {
+  border-color: color-mix(in srgb, var(--color-primary) 34%, var(--border));
+}
+
+.backup-list {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.backup-list-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: var(--space-4);
+  align-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  padding: var(--space-4);
+  background: var(--bg-panel-strong);
+}
+
 .action-group {
   justify-items: end;
   gap: 6px;
@@ -2533,6 +2619,89 @@ pre {
   justify-content: flex-end;
   margin-top: auto;
   padding-top: 4px;
+}
+
+.settings-diagnostics-stack {
+  display: grid;
+  gap: var(--space-3);
+}
+
+.settings-diagnostics-controls {
+  display: flex;
+  align-items: end;
+  flex-wrap: wrap;
+  gap: var(--space-3);
+}
+
+.settings-diagnostics-controls .field {
+  min-width: 180px;
+}
+
+.toggle-row {
+  display: inline-flex;
+  align-items: center;
+  gap: var(--space-2);
+  color: var(--text-muted);
+  font-size: 0.9rem;
+  font-weight: 600;
+  padding-bottom: 9px;
+}
+
+.settings-log-list {
+  display: grid;
+  max-height: 320px;
+  overflow-y: auto;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel-strong);
+}
+
+.settings-log-row {
+  display: grid;
+  grid-template-columns: 170px 82px 110px minmax(0, 1fr);
+  gap: var(--space-3);
+  align-items: start;
+  padding: 9px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 0.84rem;
+}
+
+.settings-log-row:last-child {
+  border-bottom: 0;
+}
+
+.settings-log-row span,
+.settings-log-row em {
+  color: var(--text-subtle);
+  font-style: normal;
+}
+
+.settings-log-row strong {
+  color: var(--text-muted);
+  font-size: 0.76rem;
+  letter-spacing: 0.06em;
+}
+
+.settings-log-row p {
+  margin: 0;
+  overflow-wrap: anywhere;
+}
+
+.settings-log-row-error strong,
+.settings-log-row-critical strong {
+  color: var(--color-danger);
+}
+
+.settings-log-row-warning strong {
+  color: var(--color-warning);
+}
+
+.settings-diagnostics-empty {
+  padding: var(--space-4);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-lg);
+  background: var(--bg-panel-strong);
+  color: var(--text-muted);
 }
 
 .changelog-modal-backdrop {
@@ -5107,6 +5276,11 @@ pre {
   .queue-job-card-state {
     justify-items: start;
     text-align: left;
+  }
+
+  .backup-list-row,
+  .settings-log-row {
+    grid-template-columns: 1fr;
   }
 
   .job-drawer-header,

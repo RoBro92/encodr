@@ -308,6 +308,14 @@ export type JobSummary = {
   interrupted_at: string | null;
   interruption_reason: string | null;
   interruption_retryable: boolean;
+  cleared_at: string | null;
+  cleared_reason: string | null;
+  cancellation_requested_at: string | null;
+  cancellation_reason: string | null;
+  backup_policy: string;
+  backup_retention_until: string | null;
+  backup_deleted_at: string | null;
+  backup_restored_at: string | null;
   watched_job_id: string | null;
   requested_worker_type: string | null;
   created_at: string;
@@ -357,6 +365,29 @@ export type CreateDryRunJobsPayload = FileSelectionPayload & {
   preferred_backend_override?: string;
   schedule_windows?: ScheduleWindow[];
   ignore_worker_schedule?: boolean;
+};
+
+export type BulkJobActionResponse = {
+  status: string;
+  affected_count: number;
+  affected_job_ids: string[];
+};
+
+export type JobBackup = {
+  job_id: string;
+  tracked_file_id: string;
+  source_path: string | null;
+  source_filename: string | null;
+  backup_path: string;
+  backup_policy: string;
+  created_at: string | null;
+  retention_until: string | null;
+  deleted_at: string | null;
+  restored_at: string | null;
+};
+
+export type JobBackupListResponse = {
+  items: JobBackup[];
 };
 
 export type DryRunJobCreateResponse = {
@@ -553,6 +584,21 @@ export type UpdateStatus = {
   error: string | null;
   download_url: string | null;
   release_notes_url: string | null;
+};
+
+export type DiagnosticLogEvent = {
+  timestamp: string;
+  level: string;
+  component: string;
+  logger: string;
+  message: string;
+  fields: Record<string, unknown>;
+};
+
+export type DiagnosticLogsResponse = {
+  retention_days: number;
+  log_dir: string;
+  items: DiagnosticLogEvent[];
 };
 
 export type WorkerSelfTestCheck = {
@@ -930,6 +976,7 @@ export type CreateJobPayload = {
   pinned_worker_id?: string | null;
   preferred_backend_override?: string | null;
   schedule_windows?: ScheduleWindow[];
+  backup_policy?: string;
 };
 
 export type CreateBatchJobsPayload = FileSelectionPayload & {
@@ -937,6 +984,7 @@ export type CreateBatchJobsPayload = FileSelectionPayload & {
   pinned_worker_id?: string | null;
   preferred_backend_override?: string | null;
   schedule_windows?: ScheduleWindow[];
+  backup_policy?: string;
   summary_only?: boolean;
 };
 

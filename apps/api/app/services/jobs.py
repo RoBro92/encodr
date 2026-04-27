@@ -1,15 +1,30 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import logging
+from pathlib import Path
+import shutil
 from typing import Callable
 
 from sqlalchemy.orm import Session
 
 from app.services.errors import ApiConflictError, ApiNotFoundError
 from encodr_core.planning import ProcessingPlan
-from encodr_db.models import Job, JobKind, JobStatus, ManualReviewDecisionType, PlanSnapshot, TrackedFile, WorkerType
+from encodr_db.models import (
+    ComplianceState,
+    FileLifecycleState,
+    Job,
+    JobKind,
+    JobStatus,
+    ManualReviewDecisionType,
+    PlanSnapshot,
+    TrackedFile,
+    WorkerType,
+)
 from encodr_db.repositories import JobRepository, ManualReviewDecisionRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import LocalWorkerLoop
+
+logger = logging.getLogger("encodr.jobs")
 
 
 class JobsService:
@@ -21,6 +36,7 @@ class JobsService:
         job_kind: JobKind | None = None,
         tracked_file_id: str | None = None,
         worker_name: str | None = None,
+        include_cleared: bool = False,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Job]:
@@ -29,6 +45,7 @@ class JobsService:
             job_kind=job_kind,
             tracked_file_id=tracked_file_id,
             worker_name=worker_name,
+            include_cleared=include_cleared,
             limit=limit,
             offset=offset,
         )
@@ -54,6 +71,7 @@ class JobsService:
         job_kind: JobKind = JobKind.EXECUTION,
         analysis_payload: dict | None = None,
         ignore_worker_schedule: bool = False,
+        backup_policy: str = "keep",
     ) -> Job:
         tracked_file, plan_snapshot = self._resolve_target(
             session,
@@ -77,13 +95,23 @@ class JobsService:
             job_kind=job_kind,
             analysis_payload=analysis_payload,
             ignore_worker_schedule=ignore_worker_schedule,
+            backup_policy=backup_policy,
+        )
+        logger.info(
+            "job created",
+            extra={
+                "job_id": job.id,
+                "tracked_file_id": job.tracked_file_id,
+                "job_kind": job.job_kind.value,
+                "backup_policy": job.backup_policy,
+            },
         )
         return job
 
     def retry_job(self, session: Session, *, job_id: str) -> Job:
         original_job = self.get_job(session, job_id=job_id)
-        if original_job.status not in {JobStatus.FAILED, JobStatus.MANUAL_REVIEW, JobStatus.SKIPPED, JobStatus.INTERRUPTED}:
-            raise ApiConflictError("Only failed, interrupted, manual-review, or skipped jobs can be retried.")
+        if original_job.status not in {JobStatus.FAILED, JobStatus.MANUAL_REVIEW, JobStatus.SKIPPED, JobStatus.INTERRUPTED, JobStatus.CANCELLED}:
+            raise ApiConflictError("Only failed, interrupted, cancelled, manual-review, or skipped jobs can be retried.")
         self._validate_review_gate(
             session,
             tracked_file=original_job.tracked_file,
@@ -102,6 +130,7 @@ class JobsService:
             job_kind=original_job.job_kind,
             analysis_payload=original_job.analysis_payload,
             ignore_worker_schedule=original_job.ignore_worker_schedule,
+            backup_policy=original_job.backup_policy,
         )
 
     def cancel_job(
@@ -112,7 +141,7 @@ class JobsService:
         local_worker_loop: LocalWorkerLoop,
     ) -> Job:
         job = self.get_job(session, job_id=job_id)
-        if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.SKIPPED, JobStatus.MANUAL_REVIEW}:
+        if job.status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED, JobStatus.MANUAL_REVIEW}:
             raise ApiConflictError("This job can no longer be cancelled.")
 
         jobs = JobRepository(session)
@@ -125,6 +154,7 @@ class JobsService:
                 job.tracked_file,
                 ProcessingPlan.model_validate(job.plan_snapshot.payload),
             )
+            logger.info("queued job cancelled", extra={"job_id": job.id, "status": job.status.value})
             return job
 
         assigned_worker = (
@@ -133,12 +163,86 @@ class JobsService:
             else None
         )
         if assigned_worker is not None and assigned_worker.worker_type != WorkerType.LOCAL:
-            raise ApiConflictError("Running remote jobs cannot yet be cancelled safely.")
+            jobs.mark_cancellation_requested(
+                job,
+                requested_at=cancelled_at,
+                reason=(
+                    "Cancellation requested for the remote worker. The current worker agent "
+                    "does not support safe in-flight process termination yet."
+                ),
+            )
+            logger.warning("remote job cancellation requested", extra={"job_id": job.id, "worker_id": job.assigned_worker_id})
+            return job
         if job.job_kind == JobKind.DRY_RUN:
             raise ApiConflictError("Running dry run analysis cannot yet be cancelled safely.")
         if not local_worker_loop.request_cancel(job.id):
             raise ApiConflictError("The local worker is not actively processing this job.")
         jobs.mark_cancelling(job, requested_at=cancelled_at)
+        logger.info("local running job cancellation requested", extra={"job_id": job.id})
+        return job
+
+    def clear_queue(self, session: Session) -> list[Job]:
+        cleared_at = datetime.now(timezone.utc)
+        jobs = JobRepository(session)
+        cancelled = jobs.clear_queue(cleared_at=cleared_at)
+        tracked_files = TrackedFileRepository(session)
+        for job in cancelled:
+            tracked_files.update_file_state_from_plan_result(
+                job.tracked_file,
+                ProcessingPlan.model_validate(job.plan_snapshot.payload),
+            )
+        logger.info("queue cleared", extra={"affected_count": len(cancelled)})
+        return cancelled
+
+    def clear_failed_history(self, session: Session) -> list[Job]:
+        jobs = JobRepository(session).clear_failed_history(cleared_at=datetime.now(timezone.utc))
+        logger.info("failed job history cleared", extra={"affected_count": len(jobs)})
+        return jobs
+
+    def list_backups(self, session: Session) -> list[Job]:
+        return JobRepository(session).list_backup_jobs()
+
+    def cleanup_expired_backups(self, session: Session, *, now: datetime | None = None) -> list[Job]:
+        jobs = JobRepository(session).cleanup_expired_backups(now=now)
+        if jobs:
+            logger.info("expired backups deleted", extra={"affected_count": len(jobs)})
+        return jobs
+
+    def delete_backup(self, session: Session, *, job_id: str) -> Job:
+        job = self.get_job(session, job_id=job_id)
+        backup_path = _backup_path_for_job(job)
+        if not backup_path.exists():
+            raise ApiNotFoundError("Backup file could not be found.")
+        backup_path.unlink()
+        job.backup_deleted_at = datetime.now(timezone.utc)
+        logger.info("backup deleted", extra={"job_id": job.id, "backup_path": backup_path.as_posix()})
+        session.flush()
+        return job
+
+    def restore_backup(self, session: Session, *, job_id: str) -> Job:
+        job = self.get_job(session, job_id=job_id)
+        backup_path = _backup_path_for_job(job)
+        if not backup_path.exists():
+            raise ApiNotFoundError("Backup file could not be found.")
+        source_path = Path(job.tracked_file.source_path)
+        replacement_path = Path(job.final_output_path or job.tracked_file.source_path)
+        if replacement_path.exists():
+            restored_replacement = replacement_path.with_name(
+                f"{replacement_path.stem}.encodr-restored-replacement{replacement_path.suffix}"
+            )
+            if restored_replacement.exists():
+                raise ApiConflictError("A previous restored replacement file already exists.")
+            shutil.move(replacement_path.as_posix(), restored_replacement.as_posix())
+        if source_path.exists() and source_path != replacement_path:
+            raise ApiConflictError("The original path is occupied and cannot be restored safely.")
+        shutil.move(backup_path.as_posix(), source_path.as_posix())
+        job.backup_restored_at = datetime.now(timezone.utc)
+        job.tracked_file.lifecycle_state = FileLifecycleState.MANUAL_REVIEW
+        job.tracked_file.compliance_state = ComplianceState.MANUAL_REVIEW
+        job.tracked_file.last_processed_policy_version = None
+        job.tracked_file.last_processed_profile_name = None
+        logger.warning("backup restored and file returned to manual review", extra={"job_id": job.id, "backup_path": backup_path.as_posix()})
+        session.flush()
         return job
 
     def create_batch_jobs(
@@ -154,6 +258,7 @@ class JobsService:
         job_kind: JobKind = JobKind.EXECUTION,
         analysis_payload_factory: Callable[[str, TrackedFile, PlanSnapshot], dict | None] | None = None,
         ignore_worker_schedule: bool = False,
+        backup_policy: str = "keep",
     ) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
         for source_path, tracked_file, plan_snapshot in planned_targets:
@@ -174,6 +279,7 @@ class JobsService:
                         else None
                     ),
                     ignore_worker_schedule=ignore_worker_schedule,
+                    backup_policy=backup_policy,
                 )
                 results.append({
                     "source_path": source_path,
@@ -298,3 +404,9 @@ class JobsService:
         if value.tzinfo is None:
             return value.replace(tzinfo=timezone.utc)
         return value
+
+
+def _backup_path_for_job(job: Job) -> Path:
+    if not job.original_backup_path:
+        raise ApiNotFoundError("No backup is recorded for this job.")
+    return Path(job.original_backup_path)

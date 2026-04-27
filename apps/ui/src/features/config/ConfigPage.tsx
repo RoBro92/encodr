@@ -7,7 +7,9 @@ import { LoadingBlock } from "../../components/LoadingBlock";
 import { PageHeader } from "../../components/PageHeader";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
+import { useSession } from "../auth/AuthProvider";
 import {
+  useDiagnosticLogsQuery,
   useLibraryRootsQuery,
   useProcessingRulesQuery,
   useRuntimeStatusQuery,
@@ -18,6 +20,7 @@ import {
   useUpdateProcessingRulesMutation,
 } from "../../lib/api/hooks";
 import type {
+  DiagnosticLogEvent,
   ProcessingRules,
   ProcessingRuleset,
   ProcessingRuleValues,
@@ -79,11 +82,22 @@ export function ConfigPage() {
   const [rulesDraft, setRulesDraft] = useState<ProcessingRules | null>(null);
   const [persistedRules, setPersistedRules] = useState<ProcessingRules | null>(null);
   const [isChangelogModalOpen, setIsChangelogModalOpen] = useState(false);
+  const [diagnosticLevel, setDiagnosticLevel] = useState("");
+  const [diagnosticComponent, setDiagnosticComponent] = useState("");
+  const [diagnosticRange, setDiagnosticRange] = useState("last_day");
+  const [diagnosticRedactPaths, setDiagnosticRedactPaths] = useState(true);
+  const [diagnosticDownloadError, setDiagnosticDownloadError] = useState<string | null>(null);
+  const { apiClient } = useSession();
   const rootsQuery = useLibraryRootsQuery();
   const rulesQuery = useProcessingRulesQuery();
   const runtimeQuery = useRuntimeStatusQuery();
   const storageQuery = useStorageStatusQuery();
   const updateStatusQuery = useUpdateStatusQuery();
+  const diagnosticLogsQuery = useDiagnosticLogsQuery({
+    level: diagnosticLevel || undefined,
+    component: diagnosticComponent || undefined,
+    limit: 100,
+  });
   const { mutate: refreshUpdateStatus } = useCheckUpdateStatusMutation();
   const updateRefreshRequestedRef = useRef(false);
   const updateRootsMutation = useUpdateLibraryRootsMutation();
@@ -145,6 +159,30 @@ export function ConfigPage() {
       return payload;
     }, { movies: null, movies_4k: null, tv: null, tv_4k: null });
   };
+
+  async function downloadDiagnosticBundle() {
+    setDiagnosticDownloadError(null);
+    try {
+      const params = new URLSearchParams({
+        time_range: diagnosticRange,
+        redact_paths: diagnosticRedactPaths ? "true" : "false",
+      });
+      const response = await apiClient.stream(`/system/diagnostics/bundle?${params.toString()}`, {
+        headers: { Accept: "application/zip" },
+      });
+      const blob = await response.blob();
+      const url = window.URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `encodr-diagnostics-${diagnosticRange}.zip`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      window.URL.revokeObjectURL(url);
+    } catch (error) {
+      setDiagnosticDownloadError(error instanceof Error ? error.message : "Diagnostic bundle download failed.");
+    }
+  }
 
   return (
     <div className="page-stack">
@@ -250,6 +288,67 @@ export function ConfigPage() {
           </SectionCard>
         </div>
       </section>
+
+      <SectionCard title="Diagnostics" subtitle="Recent structured logs and support bundle export.">
+        <div className="settings-diagnostics-stack">
+          <div className="settings-diagnostics-controls">
+            <SettingsDataItem label="Retention" value="7 days" />
+            <label className="field">
+              <span>Component</span>
+              <select value={diagnosticComponent} onChange={(event) => setDiagnosticComponent(event.target.value)}>
+                <option value="">All components</option>
+                <option value="api">API</option>
+                <option value="worker">Worker</option>
+                <option value="worker-agent">Worker agent</option>
+                <option value="system">System</option>
+              </select>
+            </label>
+            <label className="field">
+              <span>Level</span>
+              <select value={diagnosticLevel} onChange={(event) => setDiagnosticLevel(event.target.value)}>
+                <option value="">All levels</option>
+                <option value="error">Errors</option>
+                <option value="warning">Warnings</option>
+                <option value="info">Info</option>
+                <option value="debug">Debug</option>
+              </select>
+            </label>
+            <button className="button button-secondary button-small" type="button" onClick={() => void diagnosticLogsQuery.refetch()}>
+              Refresh
+            </button>
+          </div>
+
+          <div className="settings-diagnostics-controls">
+            <label className="field">
+              <span>Bundle range</span>
+              <select value={diagnosticRange} onChange={(event) => setDiagnosticRange(event.target.value)}>
+                <option value="last_hour">Last hour</option>
+                <option value="last_6_hours">Last 6 hours</option>
+                <option value="last_day">Last day</option>
+                <option value="last_week">Last week</option>
+              </select>
+            </label>
+            <label className="toggle-row">
+              <input
+                type="checkbox"
+                checked={diagnosticRedactPaths}
+                onChange={(event) => setDiagnosticRedactPaths(event.target.checked)}
+              />
+              <span>Redact paths and file names</span>
+            </label>
+            <button className="button button-primary button-small" type="button" onClick={() => void downloadDiagnosticBundle()}>
+              Download bundle
+            </button>
+          </div>
+
+          {diagnosticDownloadError ? <ErrorPanel title="Diagnostic export failed" message={diagnosticDownloadError} /> : null}
+          {diagnosticLogsQuery.error instanceof Error ? (
+            <ErrorPanel title="Unable to load logs" message={diagnosticLogsQuery.error.message} />
+          ) : null}
+
+          <DiagnosticLogList items={diagnosticLogsQuery.data?.items ?? []} loading={diagnosticLogsQuery.isLoading} />
+        </div>
+      </SectionCard>
 
       {isChangelogModalOpen ? (
         <ChangelogModal
@@ -422,6 +521,27 @@ function SettingsDataItem({ label, value }: { label: string; value: ReactNode })
   );
 }
 
+function DiagnosticLogList({ items, loading }: { items: DiagnosticLogEvent[]; loading: boolean }) {
+  if (loading) {
+    return <LoadingBlock label="Loading recent logs" />;
+  }
+  if (items.length === 0) {
+    return <div className="settings-diagnostics-empty">No matching log events yet.</div>;
+  }
+  return (
+    <div className="settings-log-list" role="log" aria-label="Recent diagnostic events">
+      {items.map((item, index) => (
+        <div key={`${item.timestamp}-${item.component}-${index}`} className={`settings-log-row settings-log-row-${item.level}`}>
+          <span>{formatDiagnosticTimestamp(item.timestamp)}</span>
+          <strong>{item.level.toUpperCase()}</strong>
+          <em>{item.component}</em>
+          <p>{item.message}</p>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function MarkdownContent({ source }: { source: string }) {
   const blocks = parseMarkdownBlocks(source);
   return (
@@ -558,6 +678,14 @@ function formatDisplayDate(value: string | null) {
     return value;
   }
   return `${match[3]}-${match[2]}-${match[1]}`;
+}
+
+function formatDiagnosticTimestamp(value: string) {
+  const parsed = new Date(value);
+  if (Number.isNaN(parsed.getTime())) {
+    return value;
+  }
+  return parsed.toLocaleString();
 }
 
 function ProcessingRulesSection({

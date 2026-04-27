@@ -35,6 +35,24 @@ export function mockFetchRoutes(routes: MockRoute[]) {
   const fetchMock = vi.fn(async (input: RequestInfo | URL, init?: RequestInit) => {
     const method = (init?.method ?? "GET").toUpperCase();
     const url = typeof input === "string" ? input : input.toString();
+    if (method === "GET" && url.includes("/api/system/logs")) {
+      return new Response(JSON.stringify({ retention_days: 7, log_dir: "/data/logs", items: [] }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
+    if (method === "GET" && url.includes("/api/jobs/backups")) {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     const route = routes.find((candidate) => {
       const methodMatches = (candidate.method ?? "GET").toUpperCase() === method;
       if (!methodMatches) {

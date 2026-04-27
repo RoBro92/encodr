@@ -12,7 +12,7 @@ from app.core.worker_auth import load_worker_auth_runtime_settings
 from encodr_core.config import ConfigBundle, load_config_bundle
 from encodr_core.probe import FFprobeClient
 from encodr_db.runtime import LocalWorkerLoop, WorkerExecutionService, WorkerStatusTracker
-from encodr_shared import UpdateCheckSettings, UpdateChecker, read_version
+from encodr_shared import UpdateCheckSettings, UpdateChecker, configure_component_logging, read_version
 
 APP_VERSION = read_version()
 
@@ -24,6 +24,12 @@ def create_app(
     worker_execution_service: WorkerExecutionService | None = None,
 ) -> FastAPI:
     bundle = config_bundle or load_config_bundle()
+    configure_component_logging(
+        component="api",
+        log_dir=bundle.app.data_dir / "logs",
+        level=bundle.app.log_level.value,
+        retention_days=bundle.app.diagnostics.retention_days,
+    )
     app = FastAPI(
         title="encodr API",
         version=APP_VERSION,

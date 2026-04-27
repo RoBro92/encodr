@@ -16,6 +16,7 @@ class CreateJobRequest(BaseModel):
     pinned_worker_id: str | None = None
     preferred_backend_override: str | None = None
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
+    backup_policy: str = "keep"
 
     @model_validator(mode="after")
     def validate_target(self) -> "CreateJobRequest":
@@ -33,6 +34,7 @@ class CreateBatchJobsRequest(BaseModel):
     pinned_worker_id: str | None = None
     preferred_backend_override: str | None = None
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
+    backup_policy: str = "keep"
     summary_only: bool = False
 
     @model_validator(mode="after")
@@ -103,6 +105,44 @@ class DryRunJobCreateResponse(BaseModel):
     items: list[BatchJobItemResponse]
 
 
+class BulkJobActionResponse(BaseModel):
+    status: str
+    affected_count: int
+    affected_job_ids: list[str] = Field(default_factory=list)
+
+
+class JobBackupResponse(BaseModel):
+    job_id: str
+    tracked_file_id: str
+    source_path: str | None = None
+    source_filename: str | None = None
+    backup_path: str
+    backup_policy: str
+    created_at: datetime | None = None
+    retention_until: datetime | None = None
+    deleted_at: datetime | None = None
+    restored_at: datetime | None = None
+
+    @classmethod
+    def from_model(cls, job: Job) -> "JobBackupResponse":
+        return cls(
+            job_id=job.id,
+            tracked_file_id=job.tracked_file_id,
+            source_path=job.tracked_file.source_path if job.tracked_file is not None else None,
+            source_filename=job.tracked_file.source_filename if job.tracked_file is not None else None,
+            backup_path=job.original_backup_path or "",
+            backup_policy=job.backup_policy,
+            created_at=job.completed_at,
+            retention_until=job.backup_retention_until,
+            deleted_at=job.backup_deleted_at,
+            restored_at=job.backup_restored_at,
+        )
+
+
+class JobBackupListResponse(BaseModel):
+    items: list[JobBackupResponse]
+
+
 class JobSummaryResponse(BaseModel):
     id: str
     tracked_file_id: str
@@ -156,6 +196,14 @@ class JobSummaryResponse(BaseModel):
     interrupted_at: datetime | None = None
     interruption_reason: str | None = None
     interruption_retryable: bool = True
+    cleared_at: datetime | None = None
+    cleared_reason: str | None = None
+    cancellation_requested_at: datetime | None = None
+    cancellation_reason: str | None = None
+    backup_policy: str
+    backup_retention_until: datetime | None = None
+    backup_deleted_at: datetime | None = None
+    backup_restored_at: datetime | None = None
     watched_job_id: str | None = None
     requested_worker_type: str | None = None
     created_at: datetime
@@ -224,6 +272,14 @@ class JobSummaryResponse(BaseModel):
             interrupted_at=job.interrupted_at,
             interruption_reason=job.interruption_reason,
             interruption_retryable=job.interruption_retryable,
+            cleared_at=job.cleared_at,
+            cleared_reason=job.cleared_reason,
+            cancellation_requested_at=job.cancellation_requested_at,
+            cancellation_reason=job.cancellation_reason,
+            backup_policy=job.backup_policy,
+            backup_retention_until=job.backup_retention_until,
+            backup_deleted_at=job.backup_deleted_at,
+            backup_restored_at=job.backup_restored_at,
             watched_job_id=job.watched_job_id,
             requested_worker_type=job.requested_worker_type.value if job.requested_worker_type is not None else None,
             created_at=job.created_at,

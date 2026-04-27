@@ -440,11 +440,15 @@ class WorkerExecutionService:
             )
         except ExecutionCancelledError as error:
             completed_at = datetime.now(timezone.utc)
+            staged_output_path = error.details.get("output_path")
+            if staged_output_path:
+                _delete_file_if_present(staged_output_path)
+                logger.info("cancelled staged output removed", extra={"job_id": job.id, "staged_output_path": staged_output_path})
             result = ExecutionResult(
                 mode="cancelled",
                 status="cancelled",
                 command=error.command or [],
-                output_path=None,
+                output_path=Path(staged_output_path) if staged_output_path else None,
                 stdout=error.details.get("stdout"),
                 stderr=error.details.get("stderr"),
                 failure_message="Cancelled by operator.",
@@ -512,6 +516,16 @@ class WorkerExecutionService:
 
         job_repository.mark_result(job, result)
         tracked_file_repository.update_file_state_from_execution_result(job.tracked_file, plan, result)
+        logger.info(
+            "job execution finished",
+            extra={
+                "job_id": job.id,
+                "status": result.status,
+                "failure_category": result.failure_category,
+                "replacement_status": result.replacement.status if result.replacement is not None else None,
+                "backup_path": str(result.original_backup_path) if result.original_backup_path is not None else None,
+            },
+        )
         session.flush()
         return result
 
@@ -1009,6 +1023,7 @@ class LocalWorkerLoop:
                 )
 
             plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
+            _apply_job_backup_policy(plan, job)
             media_file = MediaFile.model_validate(job.plan_snapshot.probe_snapshot.payload)
             backend_preview = (
                 _preview_local_backend(
@@ -1174,6 +1189,27 @@ def file_size_or_none(path: Path | str | None) -> int | None:
     if not resolved.exists() or not resolved.is_file():
         return None
     return resolved.stat().st_size
+
+
+def _delete_file_if_present(path: Path | str | None) -> None:
+    if path is None:
+        return
+    try:
+        resolved = Path(path)
+        if resolved.exists() and resolved.is_file():
+            resolved.unlink()
+    except OSError:
+        return
+
+
+def _apply_job_backup_policy(plan: ProcessingPlan, job: Job) -> None:
+    policy = (job.backup_policy or "keep").strip().lower()
+    if policy in {"delete_after_success", "no_backup", "delete_backup_after_success"}:
+        plan.replace.delete_replaced_source = True
+    elif policy in {"keep", "keep_backup", "keep_for_1_day", "keep_for_one_day"}:
+        plan.replace.delete_replaced_source = False
+    else:
+        plan.replace.delete_replaced_source = bool(job.delete_replaced_source)
 
 
 def _job_is_locally_compatible(

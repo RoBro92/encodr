@@ -26,6 +26,7 @@ class JobStatus(StrEnum):
     COMPLETED = "completed"
     FAILED = "failed"
     INTERRUPTED = "interrupted"
+    CANCELLED = "cancelled"
     SKIPPED = "skipped"
     MANUAL_REVIEW = "manual_review"
 

@@ -12,11 +12,14 @@ from app.core.dependencies import get_config_bundle, get_local_worker_loop, get_
 from app.schemas.jobs import (
     BatchJobCreateResponse,
     BatchJobItemResponse,
+    BulkJobActionResponse,
     CreateBatchJobsRequest,
     CreateDryRunJobsRequest,
     CreateJobRequest,
     DryRunJobCreateResponse,
     JobDetailResponse,
+    JobBackupListResponse,
+    JobBackupResponse,
     JobListResponse,
     JobSummaryResponse,
 )
@@ -82,6 +85,7 @@ def list_jobs(
     job_kind: JobKind | None = None,
     file_id: str | None = None,
     worker_name: str | None = None,
+    include_cleared: bool = False,
     limit: int | None = 50,
     offset: int = 0,
     session: Session = Depends(get_session),
@@ -94,6 +98,7 @@ def list_jobs(
         job_kind=job_kind,
         tracked_file_id=file_id,
         worker_name=worker_name,
+        include_cleared=include_cleared,
         limit=limit,
         offset=offset,
     )
@@ -141,6 +146,100 @@ async def stream_job_progress(
     )
 
 
+def _is_progress_stream_candidate(job) -> bool:
+    return job.status in {
+        JobStatus.PENDING,
+        JobStatus.SCHEDULED,
+        JobStatus.RUNNING,
+        JobStatus.COMPLETED,
+        JobStatus.FAILED,
+        JobStatus.INTERRUPTED,
+        JobStatus.CANCELLED,
+        JobStatus.MANUAL_REVIEW,
+        JobStatus.SKIPPED,
+    }
+
+
+@router.post("/clear-queue", response_model=BulkJobActionResponse)
+def clear_queue(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> BulkJobActionResponse:
+    del current_user
+    try:
+        jobs = JobsService().clear_queue(session)
+        session.commit()
+        return BulkJobActionResponse(
+            status="cleared",
+            affected_count=len(jobs),
+            affected_job_ids=[job.id for job in jobs],
+        )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@router.post("/clear-failed", response_model=BulkJobActionResponse)
+def clear_failed_jobs(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> BulkJobActionResponse:
+    del current_user
+    try:
+        jobs = JobsService().clear_failed_history(session)
+        session.commit()
+        return BulkJobActionResponse(
+            status="cleared",
+            affected_count=len(jobs),
+            affected_job_ids=[job.id for job in jobs],
+        )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@router.get("/backups", response_model=JobBackupListResponse)
+def list_job_backups(
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> JobBackupListResponse:
+    del current_user
+    jobs = JobsService().list_backups(session)
+    return JobBackupListResponse(items=[JobBackupResponse.from_model(job) for job in jobs])
+
+
+@router.delete("/{job_id}/backup", response_model=JobBackupResponse)
+def delete_job_backup(
+    job_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> JobBackupResponse:
+    del current_user
+    try:
+        job = JobsService().delete_backup(session, job_id=job_id)
+        session.commit()
+        return JobBackupResponse.from_model(job)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@router.post("/{job_id}/backup/restore", response_model=JobBackupResponse)
+def restore_job_backup(
+    job_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> JobBackupResponse:
+    del current_user
+    try:
+        job = JobsService().restore_backup(session, job_id=job_id)
+        session.commit()
+        return JobBackupResponse.from_model(job)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
 @router.get("/{job_id}", response_model=JobDetailResponse)
 def get_job_detail(
     job_id: str,
@@ -162,19 +261,6 @@ def get_job_detail(
         return JobDetailResponse(**detail)
     except ApiServiceError as error:
         _raise_service_error(error)
-
-
-def _is_progress_stream_candidate(job) -> bool:
-    return job.status in {
-        JobStatus.PENDING,
-        JobStatus.SCHEDULED,
-        JobStatus.RUNNING,
-        JobStatus.COMPLETED,
-        JobStatus.FAILED,
-        JobStatus.INTERRUPTED,
-        JobStatus.MANUAL_REVIEW,
-        JobStatus.SKIPPED,
-    }
 
 
 @router.get("/{job_id}/artwork")
@@ -229,6 +315,7 @@ def create_job(
             pinned_worker_id=payload.pinned_worker_id,
             preferred_backend_override=payload.preferred_backend_override,
             schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
+            backup_policy=payload.backup_policy,
         )
         session.commit()
         return JobDetailResponse.from_model(job)
@@ -331,6 +418,7 @@ def create_batch_jobs(
                 pinned_worker_id=payload.pinned_worker_id,
                 preferred_backend_override=payload.preferred_backend_override,
                 schedule_windows=schedule_windows,
+                backup_policy=payload.backup_policy,
             )
             for result in batch_results:
                 total_files += 1

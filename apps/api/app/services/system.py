@@ -248,15 +248,15 @@ class SystemService:
         oldest_pending_age_seconds = self.age_seconds(oldest_pending, now)
         last_completed_age_seconds = self.age_seconds(last_completed, now)
 
-        if running_count > 0:
-            status = HealthStatus.DEGRADED
-            summary = "The local worker is currently processing jobs."
-        elif failed_count > 0 or manual_review_count > 0:
+        if failed_count > 0 or manual_review_count > 0:
             status = HealthStatus.DEGRADED
             summary = "Recent job history includes failures or manual review outcomes."
         elif pending_count > 10:
             status = HealthStatus.DEGRADED
             summary = "Pending jobs are building up."
+        elif running_count > 0:
+            status = HealthStatus.HEALTHY
+            summary = "The queue is active and workers are processing jobs."
         else:
             status = HealthStatus.HEALTHY
             summary = "Queue health is within expected bounds."
