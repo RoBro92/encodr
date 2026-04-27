@@ -1,3 +1,5 @@
+# syntax=docker/dockerfile:1.7
+
 FROM python:3.12-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
@@ -18,8 +20,9 @@ COPY packages/shared /app/packages/shared
 COPY apps/worker /app/apps/worker
 COPY VERSION /app/VERSION
 
-RUN pip install --no-cache-dir "psycopg[binary]>=3.1,<4.0" \
-    && pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install "psycopg[binary]>=3.1,<4.0" \
+    && pip install \
         -e /app/packages/core \
         -e /app/packages/db \
         -e /app/packages/shared \

@@ -17,12 +17,19 @@ permissions:
   packages: write
 
 jobs:
-  publish-release:
+  resolve-release:
     runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.tag.outputs.tag }}
+      version: ${{ steps.tag.outputs.version }}
+      release_name: ${{ steps.tag.outputs.release_name }}
+      prerelease: ${{ steps.tag.outputs.prerelease }}
+      target_sha: ${{ steps.tag.outputs.target_sha }}
+      owner: ${{ steps.tag.outputs.owner }}
 
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v6
         with:
           fetch-depth: 0
 
@@ -41,9 +48,14 @@ jobs:
             exit 1
           fi
 
+          target_sha="$(git rev-list -n 1 "refs/tags/${tag}")"
+          owner="${GITHUB_REPOSITORY_OWNER,,}"
+
           echo "tag=${tag}" >> "${GITHUB_OUTPUT}"
           echo "version=${tag#v}" >> "${GITHUB_OUTPUT}"
           echo "release_name=Encodr ${tag}" >> "${GITHUB_OUTPUT}"
+          echo "target_sha=${target_sha}" >> "${GITHUB_OUTPUT}"
+          echo "owner=${owner}" >> "${GITHUB_OUTPUT}"
           if [[ "${tag}" == *-* ]]; then
             echo "prerelease=true" >> "${GITHUB_OUTPUT}"
           else
@@ -54,99 +66,99 @@ jobs:
         shell: bash
         run: git rev-parse "refs/tags/${{ steps.tag.outputs.tag }}"
 
-      - name: Check out release tag
-        shell: bash
-        run: git checkout --detach "refs/tags/${{ steps.tag.outputs.tag }}"
+  build-images:
+    name: build-${{ matrix.name }}
+    needs: resolve-release
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: api
+            image: encodr-api
+            dockerfile: infra/docker/api.Dockerfile
+            cache_scope: encodr-api
+          - name: ui
+            image: encodr-ui
+            dockerfile: infra/docker/ui.Dockerfile
+            cache_scope: encodr-ui
+          - name: worker
+            image: encodr-worker
+            dockerfile: infra/docker/worker.Dockerfile
+            cache_scope: encodr-worker
+          - name: worker-agent
+            image: encodr-worker-agent
+            dockerfile: infra/docker/worker-agent.Dockerfile
+            cache_scope: encodr-worker-agent
 
-      - name: Resolve GHCR image tags
-        id: images
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.resolve-release.outputs.tag }}
+
+      - name: Resolve image tags
+        id: image-tags
         shell: bash
+        env:
+          OWNER: ${{ needs.resolve-release.outputs.owner }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+          RELEASE_VERSION: ${{ needs.resolve-release.outputs.version }}
+          PRERELEASE: ${{ needs.resolve-release.outputs.prerelease }}
+          IMAGE_NAME: ${{ matrix.image }}
         run: |
           set -euo pipefail
 
-          owner="${GITHUB_REPOSITORY_OWNER,,}"
-          release_tag="${{ steps.tag.outputs.tag }}"
-          release_version="${{ steps.tag.outputs.version }}"
-          prerelease="${{ steps.tag.outputs.prerelease }}"
-
-          emit_tags() {
-            local output_name="$1"
-            local image_name="$2"
-
-            {
-              echo "${output_name}<<EOF"
-              echo "ghcr.io/${owner}/${image_name}:${release_tag}"
-              if [[ "${release_version}" != "${release_tag}" ]]; then
-                echo "ghcr.io/${owner}/${image_name}:${release_version}"
-              fi
-              if [[ "${prerelease}" == "false" ]]; then
-                echo "ghcr.io/${owner}/${image_name}:latest"
-              fi
-              echo "EOF"
-            } >> "${GITHUB_OUTPUT}"
-          }
-
-          echo "owner=${owner}" >> "${GITHUB_OUTPUT}"
-          emit_tags "api_tags" "encodr-api"
-          emit_tags "ui_tags" "encodr-ui"
-          emit_tags "worker_tags" "encodr-worker"
-          emit_tags "worker_agent_tags" "encodr-worker-agent"
+          {
+            echo "tags<<EOF"
+            echo "ghcr.io/${OWNER}/${IMAGE_NAME}:${RELEASE_TAG}"
+            if [[ "${RELEASE_VERSION}" != "${RELEASE_TAG}" ]]; then
+              echo "ghcr.io/${OWNER}/${IMAGE_NAME}:${RELEASE_VERSION}"
+            fi
+            if [[ "${PRERELEASE}" == "false" ]]; then
+              echo "ghcr.io/${OWNER}/${IMAGE_NAME}:latest"
+            fi
+            echo "EOF"
+          } >> "${GITHUB_OUTPUT}"
 
       - name: Set up QEMU
-        uses: docker/setup-qemu-action@v3
+        uses: docker/setup-qemu-action@v4
 
       - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
+        uses: docker/setup-buildx-action@v4
 
       - name: Log in to GitHub Container Registry
-        uses: docker/login-action@v3
+        uses: docker/login-action@v4
         with:
           registry: ghcr.io
           username: ${{ github.actor }}
           password: ${{ github.token }}
 
-      - name: Publish API image
-        uses: docker/build-push-action@v6
+      - name: Publish image
+        uses: docker/build-push-action@v7
         with:
           context: .
-          file: infra/docker/api.Dockerfile
+          file: ${{ matrix.dockerfile }}
           platforms: linux/amd64,linux/arm64
           push: true
-          tags: ${{ steps.images.outputs.api_tags }}
+          tags: ${{ steps.image-tags.outputs.tags }}
+          cache-from: type=gha,scope=${{ matrix.cache_scope }}
+          cache-to: type=gha,mode=max,scope=${{ matrix.cache_scope }}
 
-      - name: Publish UI image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: infra/docker/ui.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.images.outputs.ui_tags }}
+  publish-release:
+    needs:
+      - resolve-release
+      - build-images
+    runs-on: ubuntu-latest
 
-      - name: Publish worker image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: infra/docker/worker.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.images.outputs.worker_tags }}
-
-      - name: Publish worker-agent image
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: infra/docker/worker-agent.Dockerfile
-          platforms: linux/amd64,linux/arm64
-          push: true
-          tags: ${{ steps.images.outputs.worker_agent_tags }}
-
+    steps:
       - name: Create or update GitHub release
         env:
           GH_TOKEN: ${{ github.token }}
-          RELEASE_TAG: ${{ steps.tag.outputs.tag }}
-          RELEASE_NAME: ${{ steps.tag.outputs.release_name }}
-          RELEASE_PRERELEASE: ${{ steps.tag.outputs.prerelease }}
+          RELEASE_TAG: ${{ needs.resolve-release.outputs.tag }}
+          RELEASE_NAME: ${{ needs.resolve-release.outputs.release_name }}
+          RELEASE_PRERELEASE: ${{ needs.resolve-release.outputs.prerelease }}
+          RELEASE_TARGET_SHA: ${{ needs.resolve-release.outputs.target_sha }}
         shell: bash
         run: |
           set -euo pipefail
@@ -157,7 +169,7 @@ jobs:
             -H "Accept: application/vnd.github+json" \
             "/repos/${GITHUB_REPOSITORY}/releases/generate-notes" \
             -f tag_name="${RELEASE_TAG}" \
-            -f target_commitish="$(git rev-list -n 1 "refs/tags/${RELEASE_TAG}")" \
+            -f target_commitish="${RELEASE_TARGET_SHA}" \
             --jq '.body' > "${NOTES_FILE}"
 
           cat >> "${NOTES_FILE}" <<'EOF'
