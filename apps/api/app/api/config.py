@@ -61,6 +61,7 @@ class UpdateProcessingRulesetRequest(BaseModel):
     keep_one_full_preferred_subtitle: bool | None = None
     drop_other_subtitles: bool | None = None
     handling_mode: str | None = None
+    quality_preset: str | None = None
     target_quality_mode: str | None = None
     target_crf: int | None = None
     max_allowed_video_reduction_percent: int | None = None
@@ -95,6 +96,8 @@ class UpdateProcessingRulesetRequest(BaseModel):
             self.handling_mode = "strip_only" if self.four_k_mode == "strip_only" else "transcode"
         if self.target_quality_mode is None:
             self.target_quality_mode = "high_quality"
+        if self.quality_preset is None:
+            self.quality_preset = self.target_quality_mode
         if self.max_allowed_video_reduction_percent is None:
             self.max_allowed_video_reduction_percent = 35
         if self.low_bitrate_skip_threshold_1080p_mbps is None:

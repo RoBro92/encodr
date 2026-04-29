@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 import { useEffect, useMemo, useRef, useState } from "react";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
@@ -37,7 +37,8 @@ type ReviewDecisionAction =
 export function ReviewPage() {
   const { itemId } = useParams();
   const navigate = useNavigate();
-  const [status, setStatus] = useState("open");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const status = normaliseReviewStatusFilter(searchParams.get("status"));
   const [protectedOnly, setProtectedOnly] = useState("");
   const [is4k, setIs4k] = useState("");
   const [recentFailuresOnly, setRecentFailuresOnly] = useState(false);
@@ -133,7 +134,19 @@ export function ReviewPage() {
 
   function closeDrawer() {
     setDecisionNote("");
-    navigate(APP_ROUTES.review);
+    navigate(reviewRouteWithStatus(status));
+  }
+
+  function updateStatusFilter(nextStatus: string) {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (nextStatus) {
+        next.set("status", nextStatus);
+      } else {
+        next.delete("status");
+      }
+      return next;
+    });
   }
 
   return (
@@ -173,7 +186,7 @@ export function ReviewPage() {
             <div className="review-filter-row">
               <label className="field">
                 <span>Review status</span>
-                <select value={status} onChange={(event) => setStatus(event.target.value)}>
+                <select value={status} onChange={(event) => updateStatusFilter(event.target.value)}>
                   <option value="">Any</option>
                   <option value="open">Open</option>
                   <option value="approved">Approved</option>
@@ -224,7 +237,7 @@ export function ReviewPage() {
                     <Link
                       key={item.id}
                       className={`review-inbox-item${isActive ? " review-inbox-item-active" : ""}`}
-                      to={APP_ROUTES.reviewDetail(item.id)}
+                      to={reviewDetailRouteWithStatus(item.id, status)}
                     >
                       <div className="review-inbox-main">
                         <div className="review-inbox-heading">
@@ -568,6 +581,23 @@ function summariseReviewItems(
     protected: items.filter((item) => item.protected_state.is_protected).length,
     held: items.filter((item) => item.review_status === "held").length,
   };
+}
+
+function normaliseReviewStatusFilter(value: string | null) {
+  if (!value) {
+    return "open";
+  }
+  return ["open", "approved", "held", "rejected", "resolved"].includes(value) ? value : "open";
+}
+
+function reviewRouteWithStatus(status: string) {
+  return status ? `${APP_ROUTES.review}?status=${encodeURIComponent(status)}` : APP_ROUTES.review;
+}
+
+function reviewDetailRouteWithStatus(itemId: string, status: string) {
+  return status
+    ? `${APP_ROUTES.reviewDetail(itemId)}?status=${encodeURIComponent(status)}`
+    : APP_ROUTES.reviewDetail(itemId);
 }
 
 function reviewPriorityLabel(item: {

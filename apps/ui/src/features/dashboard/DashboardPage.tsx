@@ -135,20 +135,23 @@ export function DashboardPage() {
           </div>
 
           <div className="dashboard-outcome-top">
-            <div className={`dashboard-outcome-card${manualReviewCount > 0 ? " dashboard-outcome-card-attention" : ""}`}>
+            <Link
+              className={`dashboard-outcome-card${manualReviewCount > 0 ? " dashboard-outcome-card-attention" : ""}`}
+              to={`${APP_ROUTES.review}?status=open`}
+            >
               <span className="metric-label">Manual Review</span>
               <strong>{formatInteger(manualReviewCount)}</strong>
-            </div>
-            <div className="dashboard-outcome-card">
+            </Link>
+            <Link className="dashboard-outcome-card" to={APP_ROUTES.jobs}>
               <span className="metric-label">Total Transcodes</span>
               <strong>{formatInteger(totalTranscodes)}</strong>
-            </div>
+            </Link>
           </div>
 
           <div className="dashboard-breakdown-grid">
-            <StatusSummaryCard label="Failed" value={failedJobCount} tone="danger" />
-            <StatusSummaryCard label="Interrupted" value={interruptedJobCount} tone="warning" />
-            <StatusSummaryCard label="Running" value={runningJobCount} tone="success" />
+            <StatusSummaryCard label="Failed" value={failedJobCount} tone="danger" to={`${APP_ROUTES.jobs}?status=failed`} />
+            <StatusSummaryCard label="Interrupted" value={interruptedJobCount} tone="warning" to={`${APP_ROUTES.jobs}?status=interrupted`} />
+            <StatusSummaryCard label="Running" value={runningJobCount} tone="success" to={`${APP_ROUTES.jobs}?status=running`} />
           </div>
         </article>
 
@@ -219,16 +222,18 @@ function StatusSummaryCard({
   label,
   value,
   tone,
+  to,
 }: {
   label: string;
   value: number;
   tone: "danger" | "warning" | "success";
+  to: string;
 }) {
   return (
-    <div className={`dashboard-breakdown-card dashboard-breakdown-card-${tone}`}>
+    <Link className={`dashboard-breakdown-card dashboard-breakdown-card-${tone}`} to={to}>
       <span className="metric-label">{label}</span>
       <strong>{formatInteger(value)}</strong>
-    </div>
+    </Link>
   );
 }
 

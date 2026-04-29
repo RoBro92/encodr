@@ -158,6 +158,116 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByLabelText(/probe source path/i)).not.toBeInTheDocument();
   });
 
+  it("opens dashboard outcome cards with URL status filters", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: /failed\s+2/i }));
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^status$/i)).toHaveValue("failed");
+    expect(screen.getByRole("tab", { name: /failed \/ cancelled/i })).toHaveAttribute("aria-selected", "true");
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs?status=failed"),
+        expect.anything(),
+      );
+    });
+  });
+
+  it("opens the manual review dashboard card with the open review filter", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      {
+        method: "GET",
+        path: "/api/review/items",
+        body: {
+          items: [reviewItemDetail()],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("link", { name: /manual review\s+1/i }));
+
+    expect(await screen.findByRole("heading", { name: /^review$/i })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Open")).toBeInTheDocument();
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/review/items?status=open"),
+        expect.anything(),
+      );
+    });
+  });
+
+  it("uses URL status filters when loading jobs and review directly", async () => {
+    const jobFetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [{ ...jobDetail(), status: "failed", failure_message: "Probe failed" }],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    const jobsView = renderApp({ route: "/jobs?status=failed", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    expect(screen.getByLabelText(/^status$/i)).toHaveValue("failed");
+    await waitFor(() => {
+      expect(jobFetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs?status=failed"),
+        expect.anything(),
+      );
+    });
+
+    jobsView.unmount();
+    resetBrowserState();
+    const reviewFetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/review/items",
+        body: {
+          items: [{ ...reviewItemDetail(), review_status: "held" }],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/review?status=held", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^review$/i })).toBeInTheDocument();
+    expect(screen.getByDisplayValue("Held")).toBeInTheDocument();
+    await waitFor(() => {
+      expect(reviewFetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/review/items?status=held"),
+        expect.anything(),
+      );
+    });
+  });
+
   it("keeps the storage warning visible when setup is incomplete", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
@@ -359,6 +469,85 @@ describe("Encodr UI shell", () => {
             movies: {
               ...processingRules().movies.current,
               target_video_codec: "h264",
+            },
+            movies_4k: null,
+            tv: null,
+            tv_4k: null,
+          }),
+        }),
+      );
+    });
+  });
+
+  it("applies quality presets and switches to custom after manual edits", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      { method: "PUT", path: "/api/config/setup/processing-rules", body: processingRules() },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+    const presetSelect = screen.getByLabelText(/^Movies quality preset$/i) as HTMLSelectElement;
+    const crfInput = screen.getByLabelText(/^Movies effective CRF$/i) as HTMLInputElement;
+    const maxReductionInput = screen.getByLabelText(/^Movies max video reduction$/i) as HTMLInputElement;
+    const low1080pInput = screen.getByLabelText(/^Movies low-bitrate skip 1080p$/i) as HTMLInputElement;
+    const low720pInput = screen.getByLabelText(/^Movies low-bitrate skip 720p$/i) as HTMLInputElement;
+    const min1080pInput = screen.getByLabelText(/^Movies minimum output 1080p$/i) as HTMLInputElement;
+    const min720pInput = screen.getByLabelText(/^Movies minimum output 720p$/i) as HTMLInputElement;
+    const outputGrowthInput = screen.getByLabelText(/^Movies output larger than input guard$/i) as HTMLInputElement;
+
+    expect(presetSelect.value).toBe("custom");
+    expect(screen.getByText(/presets set recommended values/i)).toBeInTheDocument();
+
+    await userEvent.selectOptions(presetSelect, "efficient");
+
+    expect(presetSelect.value).toBe("efficient");
+    expect(crfInput.value).toBe("23");
+    expect(maxReductionInput.value).toBe("70");
+    expect(low1080pInput.value).toBe("2.5");
+    expect(low720pInput.value).toBe("1.25");
+    expect(min1080pInput.value).toBe("1.75");
+    expect(min720pInput.value).toBe("0.9");
+    expect(outputGrowthInput.value).toBe("10");
+
+    await userEvent.clear(crfInput);
+    await userEvent.type(crfInput, "24");
+
+    expect(presetSelect.value).toBe("custom");
+
+    await userEvent.selectOptions(presetSelect, "balanced");
+
+    expect(presetSelect.value).toBe("balanced");
+    expect(crfInput.value).toBe("21");
+    expect(maxReductionInput.value).toBe("60");
+    expect(min1080pInput.value).toBe("2");
+
+    await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/config/setup/processing-rules"),
+        expect.objectContaining({
+          method: "PUT",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            movies: {
+              ...processingRules().movies.current,
+              quality_preset: "balanced",
+              target_quality_mode: "balanced",
+              target_crf: 21,
+              max_allowed_video_reduction_percent: 60,
+              low_bitrate_skip_threshold_1080p_mbps: 3,
+              low_bitrate_skip_threshold_720p_mbps: 1.5,
+              minimum_output_bitrate_1080p_mbps: 2,
+              minimum_output_bitrate_720p_mbps: 1,
+              output_larger_than_input_review_percent: 5,
             },
             movies_4k: null,
             tv: null,
@@ -2129,6 +2318,7 @@ function processingRules() {
       profile_name: "tv-default",
       current: {
         ...processingRuleValues(),
+        quality_preset: "balanced",
         target_quality_mode: "balanced",
         max_allowed_video_reduction_percent: 30,
       },
@@ -2177,6 +2367,7 @@ function processingRuleValues() {
     preserve_atmos: true,
     preferred_subtitle_languages: ["eng"],
     handling_mode: "transcode",
+    quality_preset: "custom",
     target_quality_mode: "high_quality",
     target_crf: 21,
     max_allowed_video_reduction_percent: 35,

@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import { Link, useNavigate, useParams } from "react-router-dom";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router-dom";
 
 import { CollapsibleSection } from "../../components/CollapsibleSection";
 import { EmptyState } from "../../components/EmptyState";
@@ -62,7 +62,8 @@ export function JobsPage() {
   useJobProgressStream();
   const { jobId } = useParams();
   const navigate = useNavigate();
-  const [status, setStatus] = useState("");
+  const [searchParams, setSearchParams] = useSearchParams();
+  const status = normaliseStatusFilter(searchParams.get("status"));
   const [fileId, setFileId] = useState("");
   const [fileSearch, setFileSearch] = useState("");
   const [createFromFileId, setCreateFromFileId] = useState("");
@@ -122,7 +123,19 @@ export function JobsPage() {
   const selectedJobId = detail?.id;
 
   function closeDrawer() {
-    navigate(APP_ROUTES.jobs);
+    navigate(jobsRouteWithStatus(status));
+  }
+
+  function updateStatusFilter(nextStatus: string) {
+    setSearchParams((current) => {
+      const next = new URLSearchParams(current);
+      if (nextStatus) {
+        next.set("status", nextStatus);
+      } else {
+        next.delete("status");
+      }
+      return next;
+    });
   }
 
   useEffect(() => {
@@ -151,6 +164,12 @@ export function JobsPage() {
       setJobsTab(tabForJob(detail));
     }
   }, [detail?.id, detail?.status, detail?.failure_category]);
+
+  useEffect(() => {
+    if (!jobId) {
+      setJobsTab(tabForStatus(status));
+    }
+  }, [jobId, status]);
 
   if (jobsQuery.isLoading || filterFilesQuery.isLoading || createFilesQuery.isLoading) {
     return <LoadingBlock label="Loading jobs" />;
@@ -237,7 +256,7 @@ export function JobsPage() {
           <div className="jobs-control-group jobs-control-group-filters">
             <label className="field">
               <span>Status</span>
-              <select aria-label="Status" value={status} onChange={(event) => setStatus(event.target.value)}>
+              <select aria-label="Status" value={status} onChange={(event) => updateStatusFilter(event.target.value)}>
                 {JOB_STATUS_OPTIONS.map((option) => (
                   <option key={option.value || "any"} value={option.value}>
                     {option.label}
@@ -380,7 +399,7 @@ export function JobsPage() {
                                 <div className="queue-job-card-header">
                                   <div className="queue-job-card-title-block">
                                     <div className="queue-job-card-title-row">
-                                      <Link className="queue-job-card-title text-link" to={APP_ROUTES.jobDetail(item.id)}>
+                                      <Link className="queue-job-card-title text-link" to={jobDetailRouteWithStatus(item.id, status)}>
                                         <strong>{jobPrimaryLabel(item, files)}</strong>
                                       </Link>
                                       <JobStatusBadgeRow job={item} />
@@ -411,7 +430,7 @@ export function JobsPage() {
                               </div>
                             </div>
                             <div className="section-card-actions queue-job-card-actions">
-                              <Link className="button button-secondary button-small" to={APP_ROUTES.jobDetail(item.id)}>
+                              <Link className="button button-secondary button-small" to={jobDetailRouteWithStatus(item.id, status)}>
                                 Open
                               </Link>
                               {canCancelJob(item, localWorkerId) ? (
@@ -1253,6 +1272,31 @@ function tabForJob(job: JobSummary | JobDetail): JobsTab {
     return "problem";
   }
   return "active";
+}
+
+function tabForStatus(status: string): JobsTab {
+  if (["completed", "skipped"].includes(status)) {
+    return "completed";
+  }
+  if (["failed", "interrupted", "cancelled", "manual_review"].includes(status)) {
+    return "problem";
+  }
+  return "active";
+}
+
+function normaliseStatusFilter(value: string | null) {
+  const allowed = new Set(JOB_STATUS_OPTIONS.map((option) => option.value));
+  return value && allowed.has(value) ? value : "";
+}
+
+function jobsRouteWithStatus(status: string) {
+  return status ? `${APP_ROUTES.jobs}?status=${encodeURIComponent(status)}` : APP_ROUTES.jobs;
+}
+
+function jobDetailRouteWithStatus(jobId: string, status: string) {
+  return status
+    ? `${APP_ROUTES.jobDetail(jobId)}?status=${encodeURIComponent(status)}`
+    : APP_ROUTES.jobDetail(jobId);
 }
 
 function jobsTabTitle(tab: JobsTab) {

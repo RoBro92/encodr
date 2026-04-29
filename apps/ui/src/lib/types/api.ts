@@ -949,6 +949,7 @@ export type ProcessingRuleValues = {
   preserve_atmos: boolean;
   preferred_subtitle_languages: string[];
   handling_mode: string;
+  quality_preset: string;
   target_quality_mode: string;
   target_crf: number | null;
   max_allowed_video_reduction_percent: number;

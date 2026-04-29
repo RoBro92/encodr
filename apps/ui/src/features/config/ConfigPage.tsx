@@ -27,6 +27,15 @@ import type {
 
 type PickerTarget = "movies" | "tv" | null;
 type RulesetKey = "movies" | "movies_4k" | "tv" | "tv_4k";
+type QualityPresetKey = "high_quality" | "balanced" | "efficient" | "custom";
+type QualityLimitField =
+  | "target_crf"
+  | "max_allowed_video_reduction_percent"
+  | "low_bitrate_skip_threshold_1080p_mbps"
+  | "low_bitrate_skip_threshold_720p_mbps"
+  | "minimum_output_bitrate_1080p_mbps"
+  | "minimum_output_bitrate_720p_mbps"
+  | "output_larger_than_input_review_percent";
 
 const VIDEO_CODEC_OPTIONS = [
   { label: "H.265 / HEVC", value: "hevc" },
@@ -47,11 +56,73 @@ const HANDLING_MODE_OPTIONS = [
   { label: "Preserve video", value: "preserve_video" },
 ];
 
-const QUALITY_MODE_OPTIONS = [
+const QUALITY_MODE_OPTIONS: Array<{ label: string; value: QualityPresetKey; disabled?: boolean }> = [
   { label: "High quality", value: "high_quality" },
   { label: "Balanced", value: "balanced" },
   { label: "Efficient", value: "efficient" },
+  { label: "Custom", value: "custom", disabled: true },
 ];
+
+const QUALITY_PRESET_LIMITS: Record<"movies" | "tv", Record<Exclude<QualityPresetKey, "custom">, Pick<ProcessingRuleValues, QualityLimitField>>> = {
+  movies: {
+    high_quality: {
+      target_crf: 19,
+      max_allowed_video_reduction_percent: 45,
+      low_bitrate_skip_threshold_1080p_mbps: 4,
+      low_bitrate_skip_threshold_720p_mbps: 2,
+      minimum_output_bitrate_1080p_mbps: 3,
+      minimum_output_bitrate_720p_mbps: 1.5,
+      output_larger_than_input_review_percent: 5,
+    },
+    balanced: {
+      target_crf: 21,
+      max_allowed_video_reduction_percent: 60,
+      low_bitrate_skip_threshold_1080p_mbps: 3,
+      low_bitrate_skip_threshold_720p_mbps: 1.5,
+      minimum_output_bitrate_1080p_mbps: 2,
+      minimum_output_bitrate_720p_mbps: 1,
+      output_larger_than_input_review_percent: 5,
+    },
+    efficient: {
+      target_crf: 23,
+      max_allowed_video_reduction_percent: 70,
+      low_bitrate_skip_threshold_1080p_mbps: 2.5,
+      low_bitrate_skip_threshold_720p_mbps: 1.25,
+      minimum_output_bitrate_1080p_mbps: 1.75,
+      minimum_output_bitrate_720p_mbps: 0.9,
+      output_larger_than_input_review_percent: 10,
+    },
+  },
+  tv: {
+    high_quality: {
+      target_crf: 20,
+      max_allowed_video_reduction_percent: 50,
+      low_bitrate_skip_threshold_1080p_mbps: 3.5,
+      low_bitrate_skip_threshold_720p_mbps: 1.75,
+      minimum_output_bitrate_1080p_mbps: 2.5,
+      minimum_output_bitrate_720p_mbps: 1.25,
+      output_larger_than_input_review_percent: 5,
+    },
+    balanced: {
+      target_crf: 22,
+      max_allowed_video_reduction_percent: 65,
+      low_bitrate_skip_threshold_1080p_mbps: 3,
+      low_bitrate_skip_threshold_720p_mbps: 1.5,
+      minimum_output_bitrate_1080p_mbps: 1.75,
+      minimum_output_bitrate_720p_mbps: 1,
+      output_larger_than_input_review_percent: 5,
+    },
+    efficient: {
+      target_crf: 24,
+      max_allowed_video_reduction_percent: 75,
+      low_bitrate_skip_threshold_1080p_mbps: 2.25,
+      low_bitrate_skip_threshold_720p_mbps: 1,
+      minimum_output_bitrate_1080p_mbps: 1.5,
+      minimum_output_bitrate_720p_mbps: 0.8,
+      output_larger_than_input_review_percent: 10,
+    },
+  },
+};
 
 const COMMON_LANGUAGE_OPTIONS = ["eng", "jpn", "spa", "fra", "deu", "ita"];
 
@@ -978,6 +1049,8 @@ function RulesetEditor({
   );
   const summary = summariseRuleset(ruleset.current);
   const transcodeEnabled = ruleset.current.handling_mode === "transcode";
+  const displayedQualityPreset = qualityPresetForDisplay(rulesetKey, ruleset.current);
+  const updateQualityLimit = (values: ProcessingRuleValues) => onChange(markQualityPresetCustom(values));
 
   return (
     <div className="settings-rules-editor">
@@ -1063,15 +1136,20 @@ function RulesetEditor({
         </div>
         <div className="settings-rules-fields settings-rules-fields-three">
           <label className="field">
-            <span>Quality mode</span>
+            <span>Quality preset</span>
             <select
-              aria-label={`${label} quality mode`}
-              value={ruleset.current.target_quality_mode}
-              onChange={(event) => onChange({ ...ruleset.current, target_quality_mode: event.target.value })}
+              aria-label={`${label} quality preset`}
+              value={displayedQualityPreset}
+              onChange={(event) => {
+                const preset = event.target.value as QualityPresetKey;
+                if (preset !== "custom") {
+                  onChange(applyQualityPreset(rulesetKey, ruleset.current, preset));
+                }
+              }}
               disabled={!transcodeEnabled}
             >
               {QUALITY_MODE_OPTIONS.map((option) => (
-                <option key={option.value} value={option.value}>
+                <option key={option.value} value={option.value} disabled={option.disabled}>
                   {option.label}
                 </option>
               ))}
@@ -1088,7 +1166,7 @@ function RulesetEditor({
               value={ruleset.current.target_crf ?? ""}
               placeholder="Profile default"
               onChange={(event) =>
-                onChange({
+                updateQualityLimit({
                   ...ruleset.current,
                   target_crf: clampOptionalInt(event.target.value, ruleset.current.target_crf, 0, 51),
                 })}
@@ -1105,7 +1183,7 @@ function RulesetEditor({
               max={100}
               value={ruleset.current.max_allowed_video_reduction_percent}
               onChange={(event) =>
-                onChange({
+                updateQualityLimit({
                   ...ruleset.current,
                   max_allowed_video_reduction_percent: clampPercentage(event.target.value, ruleset.current.max_allowed_video_reduction_percent),
                 })}
@@ -1122,7 +1200,7 @@ function RulesetEditor({
               step="0.25"
               value={ruleset.current.low_bitrate_skip_threshold_1080p_mbps}
               onChange={(event) =>
-                onChange({
+                updateQualityLimit({
                   ...ruleset.current,
                   low_bitrate_skip_threshold_1080p_mbps: clampDecimal(event.target.value, ruleset.current.low_bitrate_skip_threshold_1080p_mbps),
                 })}
@@ -1139,7 +1217,7 @@ function RulesetEditor({
               step="0.25"
               value={ruleset.current.low_bitrate_skip_threshold_720p_mbps}
               onChange={(event) =>
-                onChange({
+                updateQualityLimit({
                   ...ruleset.current,
                   low_bitrate_skip_threshold_720p_mbps: clampDecimal(event.target.value, ruleset.current.low_bitrate_skip_threshold_720p_mbps),
                 })}
@@ -1156,7 +1234,7 @@ function RulesetEditor({
               step="0.25"
               value={ruleset.current.minimum_output_bitrate_1080p_mbps}
               onChange={(event) =>
-                onChange({
+                updateQualityLimit({
                   ...ruleset.current,
                   minimum_output_bitrate_1080p_mbps: clampDecimal(event.target.value, ruleset.current.minimum_output_bitrate_1080p_mbps),
                 })}
@@ -1173,7 +1251,7 @@ function RulesetEditor({
               step="0.25"
               value={ruleset.current.minimum_output_bitrate_720p_mbps}
               onChange={(event) =>
-                onChange({
+                updateQualityLimit({
                   ...ruleset.current,
                   minimum_output_bitrate_720p_mbps: clampDecimal(event.target.value, ruleset.current.minimum_output_bitrate_720p_mbps),
                 })}
@@ -1190,7 +1268,7 @@ function RulesetEditor({
               max={100}
               value={ruleset.current.output_larger_than_input_review_percent ?? ""}
               onChange={(event) =>
-                onChange({
+                updateQualityLimit({
                   ...ruleset.current,
                   output_larger_than_input_review_percent: clampOptionalInt(
                     event.target.value,
@@ -1204,7 +1282,7 @@ function RulesetEditor({
           </label>
         </div>
         <p className="muted-copy">
-          CRF controls encode quality. The reduction and output growth values are review safeguards, not size targets.
+          Presets set recommended values. Editing values switches to Custom. CRF controls encode quality. The reduction and output growth values are review safeguards, not size targets.
         </p>
       </div>
 
@@ -1403,6 +1481,62 @@ function clampDecimal(raw: string, fallback: number) {
   return Math.max(0, Math.round(parsed * 100) / 100);
 }
 
+function applyQualityPreset(
+  rulesetKey: RulesetKey,
+  values: ProcessingRuleValues,
+  preset: Exclude<QualityPresetKey, "custom">,
+): ProcessingRuleValues {
+  return {
+    ...values,
+    ...QUALITY_PRESET_LIMITS[qualityPresetFamily(rulesetKey)][preset],
+    quality_preset: preset,
+    target_quality_mode: preset,
+  };
+}
+
+function markQualityPresetCustom(values: ProcessingRuleValues): ProcessingRuleValues {
+  return {
+    ...values,
+    quality_preset: "custom",
+  };
+}
+
+function qualityPresetForDisplay(rulesetKey: RulesetKey, values: ProcessingRuleValues): QualityPresetKey {
+  const storedPreset = normaliseQualityPreset(values.quality_preset);
+  if (storedPreset === "custom") {
+    return "custom";
+  }
+  if (storedPreset && qualityPresetMatches(rulesetKey, values, storedPreset)) {
+    return storedPreset;
+  }
+  return "custom";
+}
+
+function normaliseQualityPreset(value: string | undefined): QualityPresetKey | null {
+  if (value === "high_quality" || value === "balanced" || value === "efficient" || value === "custom") {
+    return value;
+  }
+  return null;
+}
+
+function qualityPresetMatches(
+  rulesetKey: RulesetKey,
+  values: ProcessingRuleValues,
+  preset: Exclude<QualityPresetKey, "custom">,
+) {
+  const expected = QUALITY_PRESET_LIMITS[qualityPresetFamily(rulesetKey)][preset];
+  return (
+    values.target_quality_mode === preset &&
+    (Object.entries(expected) as Array<[QualityLimitField, number | null]>).every(
+      ([field, expectedValue]) => values[field] === expectedValue,
+    )
+  );
+}
+
+function qualityPresetFamily(rulesetKey: RulesetKey): "movies" | "tv" {
+  return rulesetKey.startsWith("tv") ? "tv" : "movies";
+}
+
 function summariseRuleset(values: ProcessingRuleValues) {
   const audioSummary = values.keep_only_preferred_audio_languages
     ? `${formatLanguageList(values.preferred_audio_languages)} audio only`
@@ -1447,6 +1581,8 @@ function formatQualityMode(value: string) {
       return "Efficient";
     case "balanced":
       return "Balanced";
+    case "custom":
+      return "Custom";
     default:
       return "High-quality";
   }
