@@ -1,5 +1,34 @@
 # Changelog
 
+## 0.3.8 - 2026-04-29
+
+This release hardens Encodr for pre-production use, with safer job handling, clearer worker setup, better quality decisions, and more dependable release packaging.
+
+- added quality-aware processing controls so Encodr can make clearer keep, review, or transcode decisions based on configured expectations
+- added dashboard and queue filtering improvements so operators can find active, completed, failed, cancelled, and review work more quickly
+- improved worker health reporting so local and remote worker readiness is easier to understand before jobs are assigned
+- made cancellation safer so cancelled work does not falsely report that media was untouched when replacement has already completed
+- prevented duplicate active jobs for the same tracked file while still allowing new work after previous jobs finish
+- tightened worker assignment so jobs are claimed by one eligible worker at a time
+- improved remote worker onboarding so default installs no longer start an automatic remote worker, and remote workers must be added intentionally
+- improved remote worker credential handling so pairing details are not kept around longer than needed after setup
+- made default Docker Compose startup safer by keeping database and Redis ports internal unless a local override is used
+- improved verification for non-English audio and subtitle preferences so selected language intent is checked more accurately
+- fixed profile path matching so similarly named folders do not accidentally receive the wrong processing profile
+- improved sign-in/session behavior, including clearer wrong-password messages instead of object-shaped error text
+- reduced unnecessary background refresh work for live job progress while keeping the UI responsive
+- strengthened release validation so images are not published unless the release checks pass first
+- updated deployment, worker, and security documentation to match the safer default startup and remote worker setup flow
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - `bash -n install.sh`
+  - `bash -n encodr`
+  - `bash -n infra/scripts/*.sh`
+  - GitHub CI for backend, UI, and sanity checks
+
 ## 0.3.7.1 - 2026-04-27
 
 This release candidate tightens queue control, processed-file safety, backup handling, diagnostics logging, and Settings diagnostics presentation before public release.
