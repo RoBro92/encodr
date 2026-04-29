@@ -14,7 +14,7 @@ from app.capabilities import (
     build_worker_health,
     build_runtime_summary,
 )
-from app.client import WorkerApiClient
+from app.client import WorkerAgentHttpError, WorkerApiClient
 from app.config import WorkerAgentSettings
 from app.execution import RemoteExecutionService
 from encodr_shared import collect_runtime_telemetry
@@ -55,6 +55,14 @@ class WorkerAgentService:
         self.settings.worker_token_file.parent.mkdir(parents=True, exist_ok=True)
         self.settings.worker_token_file.write_text(token, encoding="utf-8")
         self.settings.worker_token_file.chmod(stat.S_IRUSR | stat.S_IWUSR)
+
+    def clear_stored_worker_token(self) -> None:
+        if self.settings.worker_token_file is None:
+            return
+        try:
+            self.settings.worker_token_file.unlink()
+        except FileNotFoundError:
+            return
 
     def load_runtime_configuration(self) -> dict[str, object]:
         if self.settings.runtime_config_file is None or not self.settings.runtime_config_file.exists():
@@ -154,10 +162,17 @@ class WorkerAgentService:
 
     def heartbeat(self) -> dict:
         session = self.ensure_registered()
-        response = self.api_client.heartbeat(
-            worker_token=session.worker_token,
-            payload=self.build_heartbeat_payload(),
-        )
+        try:
+            response = self.api_client.heartbeat(
+                worker_token=session.worker_token,
+                payload=self.build_heartbeat_payload(),
+            )
+        except WorkerAgentHttpError as error:
+            session = self._reregister_after_auth_failure(error)
+            response = self.api_client.heartbeat(
+                worker_token=session.worker_token,
+                payload=self.build_heartbeat_payload(),
+            )
         runtime_configuration = self._resolve_runtime_configuration(
             response,
             fallback=session.runtime_configuration,
@@ -180,10 +195,17 @@ class WorkerAgentService:
 
     def process_once(self) -> dict | None:
         session = self.ensure_registered()
-        heartbeat = self.api_client.heartbeat(
-            worker_token=session.worker_token,
-            payload=self.build_heartbeat_payload(),
-        )
+        try:
+            heartbeat = self.api_client.heartbeat(
+                worker_token=session.worker_token,
+                payload=self.build_heartbeat_payload(),
+            )
+        except WorkerAgentHttpError as error:
+            session = self._reregister_after_auth_failure(error)
+            heartbeat = self.api_client.heartbeat(
+                worker_token=session.worker_token,
+                payload=self.build_heartbeat_payload(),
+            )
         runtime_configuration = self._resolve_runtime_configuration(
             heartbeat,
             fallback=session.runtime_configuration,
@@ -202,7 +224,11 @@ class WorkerAgentService:
             allow_cpu_fallback=execution_preferences["allow_cpu_fallback"],
             runtime_configuration=runtime_configuration,
         )
-        assignment = self.api_client.request_job(worker_token=session.worker_token)
+        try:
+            assignment = self.api_client.request_job(worker_token=session.worker_token)
+        except WorkerAgentHttpError as error:
+            session = self._reregister_after_auth_failure(error)
+            assignment = self.api_client.request_job(worker_token=session.worker_token)
         if assignment.get("status") != "assigned" or assignment.get("job") is None:
             return None
 
@@ -316,6 +342,14 @@ class WorkerAgentService:
             )
         except Exception:
             return
+
+    def _reregister_after_auth_failure(self, error: WorkerAgentHttpError) -> WorkerSession:
+        if error.status_code != 401:
+            raise error
+        if not self.settings.registration_secret and not self.settings.pairing_token:
+            raise error
+        self.clear_stored_worker_token()
+        return self.register()
 
     def _resolve_execution_preferences(
         self,

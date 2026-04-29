@@ -12,3 +12,4 @@
 - Rich rename execution is limited even though rename templates exist.
 - External artwork support is limited to local-sidecar/operational display paths.
 - Automatic rollback is not implemented for failed updates; operator validation is still required.
+- Checked-in end-to-end coverage is currently backend-style vertical smoke testing; browser E2E with Playwright is recommended before a larger public release.

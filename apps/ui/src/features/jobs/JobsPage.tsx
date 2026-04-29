@@ -25,7 +25,7 @@ import {
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
 import type { FileSummary, JobBackup, JobDetail, JobSummary } from "../../lib/types/api";
-import { formatBytes, formatDateTime, formatDurationSeconds, titleCase } from "../../lib/utils/format";
+import { formatBitrate, formatBytes, formatDateTime, formatDurationSeconds, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
 const JOB_STATUS_OPTIONS = [
@@ -405,6 +405,9 @@ export function JobsPage() {
                                 {item.status === "completed" ? (
                                   <p className="queue-job-card-message">{replacementSummary(item)}</p>
                                 ) : null}
+                                {item.status === "skipped" ? (
+                                  <p className="queue-job-card-message">{skippedReason(item)}</p>
+                                ) : null}
                               </div>
                             </div>
                             <div className="section-card-actions queue-job-card-actions">
@@ -439,9 +442,9 @@ export function JobsPage() {
           <LoadingBlock label="Loading backups" />
         ) : jobBackupsQuery.data?.items.length ? (
           <div className="backup-list" role="list" aria-label="Job backups">
-            {jobBackupsQuery.data.items.map((item) => (
+            {jobBackupsQuery.data.items.map((item, index) => (
               <BackupRow
-                key={item.job_id}
+                key={`${item.job_id || "backup"}:${item.backup_path || index}`}
                 item={item}
                 onDelete={() => {
                   if (window.confirm("Delete this backup file? This cannot be undone.")) {
@@ -810,6 +813,23 @@ function JobDetailDrawer({
                         { label: "Estimated output size", value: formatBytes(detail.analysis_payload.estimated_output_size_bytes) },
                         { label: "Estimated saved", value: formatBytes(detail.analysis_payload.estimated_space_saved_bytes) },
                         { label: "Video handling", value: titleCase(detail.analysis_payload.video_handling) },
+                        { label: "Source video bitrate", value: formatBitrate(detail.analysis_payload.source_video_bitrate_bps) },
+                        { label: "Estimated output bitrate", value: formatBitrate(detail.analysis_payload.estimated_output_video_bitrate_bps) },
+                        { label: "Effective CRF", value: detail.analysis_payload.target_crf ?? <MutedValue>Profile default</MutedValue> },
+                        { label: "Low-bitrate skip threshold", value: formatBitrate(detail.analysis_payload.low_bitrate_skip_threshold_bps) },
+                        { label: "Minimum output bitrate", value: formatBitrate(detail.analysis_payload.minimum_output_bitrate_bps) },
+                        {
+                          label: "Reduction review threshold",
+                          value: detail.analysis_payload.max_allowed_video_reduction_percent == null
+                            ? <MutedValue>Not configured</MutedValue>
+                            : `${detail.analysis_payload.max_allowed_video_reduction_percent}%`,
+                        },
+                        {
+                          label: "Output growth review",
+                          value: detail.analysis_payload.output_larger_than_input_review_percent == null
+                            ? <MutedValue>Not configured</MutedValue>
+                            : `${detail.analysis_payload.output_larger_than_input_review_percent}%`,
+                        },
                         { label: "Audio tracks removed", value: detail.analysis_payload.audio_tracks_removed_count },
                         { label: "Subtitle tracks removed", value: detail.analysis_payload.subtitle_tracks_removed_count },
                         { label: "Would trigger manual review", value: detail.analysis_payload.requires_review ? "Yes" : "No" },
@@ -820,6 +840,12 @@ function JobDetailDrawer({
                             : <MutedValue>Not available</MutedValue>,
                         },
                         { label: "Summary", value: detail.analysis_payload.summary },
+                        {
+                          label: "Decision reasons",
+                          value: detail.analysis_payload.reason_messages?.length
+                            ? detail.analysis_payload.reason_messages.join(" • ")
+                            : <MutedValue>Not available</MutedValue>,
+                        },
                       ]}
                     />
                   </CollapsibleSection>
@@ -1522,9 +1548,13 @@ function jobStatusExplanation(job: JobSummary | JobDetail) {
     return job.failure_message ?? "The job failed.";
   }
   if (status === "skipped") {
-    return "Skipped because no replacement work was required.";
+    return skippedReason(job);
   }
   return "Job lifecycle status.";
+}
+
+function skippedReason(job: JobSummary | JobDetail) {
+  return (job.plan_reason_messages ?? []).find(Boolean) ?? "Skipped because no replacement work was required.";
 }
 
 function statusToneForValue(value: string): "neutral" | "info" | "success" | "warning" | "danger" {

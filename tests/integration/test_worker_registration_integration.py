@@ -75,6 +75,25 @@ def test_worker_registration_fails_with_invalid_secret(
         )
 
 
+def test_invalid_registration_secret_marks_existing_remote_worker_failed(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+    assert context.client.post("/api/worker/register", json=registration_payload("valid-secret")).status_code == 201
+
+    response = context.client.post("/api/worker/register", json=registration_payload("wrong-secret"))
+
+    assert response.status_code == 401
+    with session_factory() as session:
+        worker = WorkerRepository(session).get_by_key("remote-amd-01")
+        assert worker is not None
+        assert worker.registration_status.value == "unknown"
+        assert worker.last_health_status.value == "failed"
+        assert "invalid registration secret" in (worker.last_health_summary or "")
+
+
 def test_worker_heartbeat_succeeds_with_valid_worker_token(
     tmp_path: Path,
     repo_root: Path,

@@ -26,7 +26,7 @@ import {
 } from "../../lib/api/hooks";
 import { ApiError } from "../../lib/api/client";
 import type { FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
-import { formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
+import { formatBitrate, formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
 type LibraryTab = "browse" | "scan" | "dry-run" | "jobs-created";
@@ -1596,12 +1596,15 @@ export function FilesPage() {
                         {item.analysis_payload ? (
                           <p>
                             {titleCase(item.analysis_payload.planned_action)} • {titleCase(item.analysis_payload.video_handling)} •
-                            Estimated {formatBytes(item.analysis_payload.estimated_output_size_bytes)}
+                            Estimated {formatBytes(item.analysis_payload.estimated_output_size_bytes)} • Source {formatBitrate(item.analysis_payload.source_video_bitrate_bps)}
                           </p>
                         ) : (
                           <p>{titleCase(item.status)}{item.worker_name ? ` • ${item.worker_name}` : ""}</p>
                         )}
                         {item.analysis_payload?.summary ? <p>{item.analysis_payload.summary}</p> : null}
+                        {item.analysis_payload?.reason_messages?.length ? (
+                          <p>{item.analysis_payload.reason_messages.join(" • ")}</p>
+                        ) : null}
                       </div>
                       <div className="list-row-meta">
                         <StatusBadge value={item.status} />

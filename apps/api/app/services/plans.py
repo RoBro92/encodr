@@ -17,7 +17,11 @@ from encodr_core.config.base import (
     deduplicate_preserving_order,
 )
 from encodr_core.media.models import MediaFile
-from encodr_core.config.profiles import ProfileConfig
+from encodr_core.config.profiles import (
+    ProfileConfig,
+    ProfileFourKVideoRules,
+    ProfileNonFourKVideoRules,
+)
 from encodr_core.planning import build_processing_plan
 from encodr_db.models import PlanSnapshot, ProbeSnapshot, TrackedFile
 from encodr_db.repositories import PlanSnapshotRepository, TrackedFileRepository
@@ -107,14 +111,24 @@ class PlansService:
             update={
                 "preferred_codec": VideoCodec(rules["target_video_codec"]),
                 "quality_mode": quality_mode,
+                "quality_crf": rules["target_crf"],
                 "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                "minimum_output_bitrate_1080p_mbps": rules["minimum_output_bitrate_1080p_mbps"],
+                "minimum_output_bitrate_720p_mbps": rules["minimum_output_bitrate_720p_mbps"],
+                "output_larger_than_input_review_percent": rules["output_larger_than_input_review_percent"],
             }
         )
         non_4k_rules = policy.video.non_4k.model_copy(
             update={
                 "preferred_codec": VideoCodec(rules["target_video_codec"]),
                 "quality_mode": quality_mode,
+                "quality_crf": rules["target_crf"],
                 "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                "low_bitrate_skip_threshold_1080p_mbps": rules["low_bitrate_skip_threshold_1080p_mbps"],
+                "low_bitrate_skip_threshold_720p_mbps": rules["low_bitrate_skip_threshold_720p_mbps"],
+                "minimum_output_bitrate_1080p_mbps": rules["minimum_output_bitrate_1080p_mbps"],
+                "minimum_output_bitrate_720p_mbps": rules["minimum_output_bitrate_720p_mbps"],
+                "output_larger_than_input_review_percent": rules["output_larger_than_input_review_percent"],
             }
         )
         if media_file.is_4k:
@@ -214,11 +228,17 @@ class PlansService:
             if next_video.non_4k is None:
                 next_video = next_video.model_copy(
                     update={
-                        "non_4k": {
-                            "preferred_codec": VideoCodec(rules["target_video_codec"]),
-                            "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
-                            "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
-                        }
+                        "non_4k": ProfileNonFourKVideoRules(
+                            preferred_codec=VideoCodec(rules["target_video_codec"]),
+                            quality_mode=VideoQualityMode(rules["target_quality_mode"]),
+                            quality_crf=rules["target_crf"],
+                            max_video_reduction_percent=rules["max_allowed_video_reduction_percent"],
+                            low_bitrate_skip_threshold_1080p_mbps=rules["low_bitrate_skip_threshold_1080p_mbps"],
+                            low_bitrate_skip_threshold_720p_mbps=rules["low_bitrate_skip_threshold_720p_mbps"],
+                            minimum_output_bitrate_1080p_mbps=rules["minimum_output_bitrate_1080p_mbps"],
+                            minimum_output_bitrate_720p_mbps=rules["minimum_output_bitrate_720p_mbps"],
+                            output_larger_than_input_review_percent=rules["output_larger_than_input_review_percent"],
+                        )
                     }
                 )
             else:
@@ -228,7 +248,13 @@ class PlansService:
                             update={
                                 "preferred_codec": VideoCodec(rules["target_video_codec"]),
                                 "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
+                                "quality_crf": rules["target_crf"],
                                 "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                                "low_bitrate_skip_threshold_1080p_mbps": rules["low_bitrate_skip_threshold_1080p_mbps"],
+                                "low_bitrate_skip_threshold_720p_mbps": rules["low_bitrate_skip_threshold_720p_mbps"],
+                                "minimum_output_bitrate_1080p_mbps": rules["minimum_output_bitrate_1080p_mbps"],
+                                "minimum_output_bitrate_720p_mbps": rules["minimum_output_bitrate_720p_mbps"],
+                                "output_larger_than_input_review_percent": rules["output_larger_than_input_review_percent"],
                             }
                         )
                     }
@@ -236,15 +262,19 @@ class PlansService:
             if next_video.four_k is None:
                 next_video = next_video.model_copy(
                     update={
-                        "four_k": {
-                            "preferred_codec": VideoCodec(rules["target_video_codec"]),
-                            "mode": FourKMode.POLICY_CONTROLLED
+                        "four_k": ProfileFourKVideoRules(
+                            preferred_codec=VideoCodec(rules["target_video_codec"]),
+                            mode=FourKMode.POLICY_CONTROLLED
                             if RuleHandlingMode(rules["handling_mode"]) == RuleHandlingMode.TRANSCODE
                             else FourKMode.STRIP_ONLY,
-                            "allow_transcode": RuleHandlingMode(rules["handling_mode"]) == RuleHandlingMode.TRANSCODE,
-                            "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
-                            "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
-                        }
+                            allow_transcode=RuleHandlingMode(rules["handling_mode"]) == RuleHandlingMode.TRANSCODE,
+                            quality_mode=VideoQualityMode(rules["target_quality_mode"]),
+                            quality_crf=rules["target_crf"],
+                            max_video_reduction_percent=rules["max_allowed_video_reduction_percent"],
+                            minimum_output_bitrate_1080p_mbps=rules["minimum_output_bitrate_1080p_mbps"],
+                            minimum_output_bitrate_720p_mbps=rules["minimum_output_bitrate_720p_mbps"],
+                            output_larger_than_input_review_percent=rules["output_larger_than_input_review_percent"],
+                        )
                     }
                 )
             else:
@@ -261,7 +291,11 @@ class PlansService:
                                 "remove_non_english_audio": rules["keep_only_preferred_audio_languages"],
                                 "remove_non_english_subtitles": rules["drop_other_subtitles"],
                                 "quality_mode": VideoQualityMode(rules["target_quality_mode"]),
+                                "quality_crf": rules["target_crf"],
                                 "max_video_reduction_percent": rules["max_allowed_video_reduction_percent"],
+                                "minimum_output_bitrate_1080p_mbps": rules["minimum_output_bitrate_1080p_mbps"],
+                                "minimum_output_bitrate_720p_mbps": rules["minimum_output_bitrate_720p_mbps"],
+                                "output_larger_than_input_review_percent": rules["output_larger_than_input_review_percent"],
                             }
                         )
                     }

@@ -28,6 +28,7 @@ from encodr_core.execution import (
     calculate_media_savings,
     normalise_backend_preference,
 )
+from encodr_core.execution.safety import evaluate_execution_safety
 from encodr_core.media.models import MediaFile
 from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload, build_processing_plan
 from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
@@ -725,9 +726,13 @@ class WorkerExecutionService:
                 completed_at=datetime.now(timezone.utc),
             )
 
+        safety_metrics = {
+            **metrics,
+            "output_size_bytes": metrics.get("output_size_bytes") or staged_metrics["output_size_bytes"],
+        }
         compression_failure = self._compression_safety_failure(
             plan=plan,
-            metrics=metrics,
+            metrics=safety_metrics,
             staged_result=staged_result,
             verification=verification,
         )
@@ -821,35 +826,10 @@ class WorkerExecutionService:
         staged_result: ExecutionResult,
         verification: VerificationResult,
     ) -> ExecutionResult | None:
-        limit = plan.video.max_allowed_video_reduction_percent
-        if not plan.video.transcode_required or limit is None:
+        failure = evaluate_execution_safety(plan=plan, metrics=metrics)
+        if failure is None:
             return None
-        reduction = metrics.get("compression_reduction_percent")
         completed_at = datetime.now(timezone.utc)
-        if reduction is None:
-            return ExecutionResult(
-                mode=staged_result.mode,
-                status="manual_review",
-                command=staged_result.command,
-                output_path=staged_result.output_path,
-                stdout=staged_result.stdout,
-                stderr=staged_result.stderr,
-                exit_code=staged_result.exit_code,
-                failure_message="Video reduction could not be measured safely, so the output requires manual review.",
-                failure_category="compression_safety_unmeasurable",
-                requested_backend=staged_result.requested_backend,
-                actual_backend=staged_result.actual_backend,
-                actual_accelerator=staged_result.actual_accelerator,
-                backend_fallback_used=staged_result.backend_fallback_used,
-                backend_selection_reason=staged_result.backend_selection_reason,
-                verification=verification,
-                replacement=ReplacementResult.not_required(),
-                started_at=staged_result.started_at,
-                completed_at=completed_at,
-                **metrics,
-            )
-        if reduction <= limit:
-            return None
         return ExecutionResult(
             mode=staged_result.mode,
             status="manual_review",
@@ -858,11 +838,8 @@ class WorkerExecutionService:
             stdout=staged_result.stdout,
             stderr=staged_result.stderr,
             exit_code=staged_result.exit_code,
-            failure_message=(
-                f"Video compression reduced the picture by {reduction:.1f}% which exceeds the "
-                f"configured safety limit of {limit}%."
-            ),
-            failure_category="compression_safety_exceeded",
+            failure_message=failure.message,
+            failure_category=failure.category,
             requested_backend=staged_result.requested_backend,
             actual_backend=staged_result.actual_backend,
             actual_accelerator=staged_result.actual_accelerator,

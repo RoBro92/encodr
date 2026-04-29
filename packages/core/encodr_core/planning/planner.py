@@ -4,6 +4,12 @@ from pathlib import Path
 
 from encodr_core.config.base import FourKMode, OutputContainer, PolicyDecision
 from encodr_core.config.bootstrap import ConfigBundle
+from encodr_core.media.quality import (
+    format_bitrate,
+    is_low_bitrate_source,
+    low_bitrate_threshold_bps,
+    minimum_output_bitrate_bps,
+)
 from encodr_core.media.models import MediaFile, VideoStream
 from encodr_core.planning.enums import (
     ConfidenceLevel,
@@ -163,7 +169,12 @@ def build_video_plan(
                 target_codec=None,
                 transcode_required=False,
                 quality_mode=None,
+                quality_crf=None,
+                source_bitrate_bps=None,
+                low_bitrate_skip_threshold_bps=None,
+                minimum_output_bitrate_bps=None,
                 max_allowed_video_reduction_percent=None,
+                output_larger_than_input_review_percent=None,
             ),
             reasons,
             True,
@@ -200,7 +211,16 @@ def build_4k_video_plan(
                 target_codec=video_stream.codec_name,
                 transcode_required=False,
                 quality_mode=rules.quality_mode.value,
+                quality_crf=rules.quality_crf,
+                source_bitrate_bps=video_stream.bit_rate,
+                low_bitrate_skip_threshold_bps=None,
+                minimum_output_bitrate_bps=minimum_output_bitrate_bps(
+                    video_stream,
+                    floor_1080p_mbps=rules.minimum_output_bitrate_1080p_mbps,
+                    floor_720p_mbps=rules.minimum_output_bitrate_720p_mbps,
+                ),
                 max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+                output_larger_than_input_review_percent=rules.output_larger_than_input_review_percent,
             ),
             reasons,
             False,
@@ -222,7 +242,16 @@ def build_4k_video_plan(
                 target_codec=video_stream.codec_name,
                 transcode_required=False,
                 quality_mode=rules.quality_mode.value,
+                quality_crf=rules.quality_crf,
+                source_bitrate_bps=video_stream.bit_rate,
+                low_bitrate_skip_threshold_bps=None,
+                minimum_output_bitrate_bps=minimum_output_bitrate_bps(
+                    video_stream,
+                    floor_1080p_mbps=rules.minimum_output_bitrate_1080p_mbps,
+                    floor_720p_mbps=rules.minimum_output_bitrate_720p_mbps,
+                ),
                 max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+                output_larger_than_input_review_percent=rules.output_larger_than_input_review_percent,
             ),
             reasons,
             True,
@@ -243,8 +272,13 @@ def build_4k_video_plan(
         reasons.append(
             make_reason(
                 "video_reduction_limit_applies",
-                "Compression safety will be checked after encoding using video-only reduction.",
+                "Compression safety will be checked after encoding using video-only reduction and bitrate safeguards.",
                 max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+                minimum_output_bitrate_bps=minimum_output_bitrate_bps(
+                    video_stream,
+                    floor_1080p_mbps=rules.minimum_output_bitrate_1080p_mbps,
+                    floor_720p_mbps=rules.minimum_output_bitrate_720p_mbps,
+                ),
             )
         )
 
@@ -256,7 +290,16 @@ def build_4k_video_plan(
             target_codec=target_codec,
             transcode_required=transcode_required,
             quality_mode=rules.quality_mode.value,
+            quality_crf=rules.quality_crf,
+            source_bitrate_bps=video_stream.bit_rate,
+            low_bitrate_skip_threshold_bps=None,
+            minimum_output_bitrate_bps=minimum_output_bitrate_bps(
+                video_stream,
+                floor_1080p_mbps=rules.minimum_output_bitrate_1080p_mbps,
+                floor_720p_mbps=rules.minimum_output_bitrate_720p_mbps,
+            ),
             max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+            output_larger_than_input_review_percent=rules.output_larger_than_input_review_percent,
         ),
         reasons,
         False,
@@ -271,8 +314,32 @@ def build_non_4k_video_plan(
     reasons: list[PlanReason] = []
     transcode_required = False
     target_codec = rules.preferred_codec.value
+    source_bitrate = video_stream.bit_rate
+    low_threshold = low_bitrate_threshold_bps(
+        video_stream,
+        threshold_1080p_mbps=rules.low_bitrate_skip_threshold_1080p_mbps,
+        threshold_720p_mbps=rules.low_bitrate_skip_threshold_720p_mbps,
+    )
+    minimum_output_bitrate = minimum_output_bitrate_bps(
+        video_stream,
+        floor_1080p_mbps=rules.minimum_output_bitrate_1080p_mbps,
+        floor_720p_mbps=rules.minimum_output_bitrate_720p_mbps,
+    )
+    low_bitrate_source = is_low_bitrate_source(video_stream, low_threshold)
 
-    if video_stream.codec_name != target_codec:
+    if low_bitrate_source:
+        reasons.append(
+            make_reason(
+                "video_skip_low_bitrate_source",
+                "Source bitrate is already low; transcoding may reduce quality.",
+                source_bitrate_bps=source_bitrate,
+                low_bitrate_skip_threshold_bps=low_threshold,
+                source_bitrate=format_bitrate(source_bitrate),
+                threshold=format_bitrate(low_threshold),
+            )
+        )
+
+    if not low_bitrate_source and video_stream.codec_name != target_codec:
         transcode_required = True
         reasons.append(
             make_reason(
@@ -284,7 +351,7 @@ def build_non_4k_video_plan(
         )
 
     max_bitrate = rules.max_video_bitrate_mbps * 1_000_000
-    if video_stream.bit_rate is not None and video_stream.bit_rate > max_bitrate:
+    if not low_bitrate_source and video_stream.bit_rate is not None and video_stream.bit_rate > max_bitrate:
         transcode_required = True
         reasons.append(
             make_reason(
@@ -295,7 +362,7 @@ def build_non_4k_video_plan(
             )
         )
 
-    if video_stream.width is not None and video_stream.width > rules.max_width:
+    if not low_bitrate_source and video_stream.width is not None and video_stream.width > rules.max_width:
         transcode_required = True
         reasons.append(
             make_reason(
@@ -310,10 +377,19 @@ def build_non_4k_video_plan(
         reasons.append(
             make_reason(
                 "video_reduction_limit_applies",
-                "Compression safety will be checked after encoding using video-only reduction.",
+                "Compression safety will be checked after encoding using video-only reduction and bitrate safeguards.",
                 max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+                minimum_output_bitrate_bps=minimum_output_bitrate,
             )
         )
+        if rules.output_larger_than_input_review_percent is not None:
+            reasons.append(
+                make_reason(
+                    "output_larger_than_input_guard_applies",
+                    "Output size will be checked after encoding and sent to review if it grows beyond the configured guard.",
+                    output_larger_than_input_review_percent=rules.output_larger_than_input_review_percent,
+                )
+            )
 
     return (
         VideoPlan(
@@ -323,7 +399,12 @@ def build_non_4k_video_plan(
             target_codec=target_codec,
             transcode_required=transcode_required,
             quality_mode=rules.quality_mode.value,
+            quality_crf=rules.quality_crf,
+            source_bitrate_bps=source_bitrate,
+            low_bitrate_skip_threshold_bps=low_threshold,
+            minimum_output_bitrate_bps=minimum_output_bitrate,
             max_allowed_video_reduction_percent=rules.max_video_reduction_percent,
+            output_larger_than_input_review_percent=rules.output_larger_than_input_review_percent,
         ),
         reasons,
         False,

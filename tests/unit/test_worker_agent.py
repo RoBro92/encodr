@@ -18,7 +18,7 @@ import app.version as worker_agent_version  # type: ignore  # noqa: E402
 import app.capabilities as worker_agent_capabilities  # type: ignore  # noqa: E402
 import app.execution as worker_agent_execution  # type: ignore  # noqa: E402
 from app.capabilities import build_capability_summary, build_worker_health  # type: ignore  # noqa: E402
-from app.client import WorkerApiClient  # type: ignore  # noqa: E402
+from app.client import WorkerAgentHttpError, WorkerApiClient  # type: ignore  # noqa: E402
 from app.config import load_settings  # type: ignore  # noqa: E402
 from app.execution import RemoteExecutionService  # type: ignore  # noqa: E402
 from app.service import WorkerAgentService  # type: ignore  # noqa: E402
@@ -128,6 +128,41 @@ def test_worker_agent_uses_existing_token_without_reregistering(tmp_path: Path) 
     assert heartbeat["worker_key"] == "remote-amd-01"
     assert len(requester.calls) == 1
     assert requester.calls[0]["bearer_token"] == "persisted-token"
+
+
+def test_worker_agent_reregisters_when_stored_token_is_rejected(tmp_path: Path) -> None:
+    requester = FakeRequester()
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("stale-token", encoding="utf-8")
+
+    def request_json(*, method: str, url: str, body: dict | None = None, bearer_token: str | None = None) -> dict:
+        requester.calls.append({"method": method, "url": url, "body": body, "bearer_token": bearer_token})
+        if url.endswith("/worker/heartbeat") and bearer_token == "stale-token":
+            raise WorkerAgentHttpError(401, "Invalid worker credentials.")
+        return FakeRequester.request_json(requester, method=method, url=url, body=body, bearer_token=bearer_token)
+
+    requester.request_json = request_json  # type: ignore[attr-defined]
+    client = WorkerApiClient(base_url="http://encodr.test/api", requester=requester)
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_KEY": "remote-amd-01",
+            "ENCODR_WORKER_AGENT_DISPLAY_NAME": "Remote AMD Worker",
+            "ENCODR_WORKER_AGENT_REGISTRATION_SECRET": "bootstrap-secret",
+            "ENCODR_WORKER_AGENT_TOKEN_FILE": str(token_file),
+        }
+    )
+    service = WorkerAgentService(settings=settings, api_client=client)
+
+    heartbeat = service.heartbeat()
+
+    assert heartbeat["worker_key"] == "remote-amd-01"
+    assert token_file.read_text(encoding="utf-8") == "issued-token"
+    endpoints = [call["url"].rsplit("/", maxsplit=1)[-1] for call in requester.calls]
+    assert endpoints[0] == "heartbeat"
+    assert "register" in endpoints
+    heartbeat_calls = [call for call in requester.calls if call["url"].endswith("/worker/heartbeat")]
+    assert heartbeat_calls[-1]["bearer_token"] == "issued-token"
 
 
 def test_worker_agent_registration_payload_is_built_from_settings(tmp_path: Path) -> None:

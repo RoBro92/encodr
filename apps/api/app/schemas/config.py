@@ -112,7 +112,13 @@ class ProcessingRuleValuesResponse(BaseModel):
     preferred_subtitle_languages: list[str]
     handling_mode: str
     target_quality_mode: str
+    target_crf: int | None = None
     max_allowed_video_reduction_percent: int
+    low_bitrate_skip_threshold_1080p_mbps: float
+    low_bitrate_skip_threshold_720p_mbps: float
+    minimum_output_bitrate_1080p_mbps: float
+    minimum_output_bitrate_720p_mbps: float
+    output_larger_than_input_review_percent: int | None = None
 
 
 class ProcessingRulesetResponse(BaseModel):

@@ -48,9 +48,15 @@ class ProfileNonFourKVideoRules(ConfigModel):
     preferred_codec: VideoCodec | None = None
     allow_transcode: bool | None = None
     quality_mode: VideoQualityMode | None = None
+    quality_crf: int | None = Field(default=None, ge=0, le=51)
     max_video_reduction_percent: NonNegativeInt | None = None
     max_video_bitrate_mbps: PositiveInt | None = None
     max_width: PositiveInt | None = None
+    low_bitrate_skip_threshold_1080p_mbps: float | None = Field(default=None, ge=0)
+    low_bitrate_skip_threshold_720p_mbps: float | None = Field(default=None, ge=0)
+    minimum_output_bitrate_1080p_mbps: float | None = Field(default=None, ge=0)
+    minimum_output_bitrate_720p_mbps: float | None = Field(default=None, ge=0)
+    output_larger_than_input_review_percent: int | None = Field(default=None, ge=0, le=100)
 
 
 class ProfileFourKVideoRules(ConfigModel):
@@ -60,7 +66,11 @@ class ProfileFourKVideoRules(ConfigModel):
     preserve_original_audio: bool | None = None
     allow_transcode: bool | None = None
     quality_mode: VideoQualityMode | None = None
+    quality_crf: int | None = Field(default=None, ge=0, le=51)
     max_video_reduction_percent: NonNegativeInt | None = None
+    minimum_output_bitrate_1080p_mbps: float | None = Field(default=None, ge=0)
+    minimum_output_bitrate_720p_mbps: float | None = Field(default=None, ge=0)
+    output_larger_than_input_review_percent: int | None = Field(default=None, ge=0, le=100)
     remove_non_english_audio: bool | None = None
     remove_non_english_subtitles: bool | None = None
 

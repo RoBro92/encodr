@@ -106,6 +106,7 @@ def build_execution_command_plan(
             quality_flags_for_backend(
                 accelerator=backend_selection.accelerator,
                 quality_mode=plan.video.quality_mode,
+                quality_crf=plan.video.quality_crf,
             )
         )
         mode = "transcode"

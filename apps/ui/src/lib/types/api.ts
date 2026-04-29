@@ -203,7 +203,9 @@ export type DryRunItem = {
   requires_review: boolean;
   is_protected: boolean;
   reason_codes: string[];
+  reason_messages: string[];
   warning_codes: string[];
+  warning_messages: string[];
   selected_audio_stream_indices: number[];
   selected_subtitle_stream_indices: number[];
 };
@@ -227,7 +229,9 @@ export type DryRunAnalysis = {
   requires_review: boolean;
   is_protected: boolean;
   reason_codes: string[];
+  reason_messages: string[];
   warning_codes: string[];
+  warning_messages: string[];
   selected_audio_stream_indices: number[];
   selected_subtitle_stream_indices: number[];
   output_filename: string;
@@ -238,6 +242,13 @@ export type DryRunAnalysis = {
   subtitle_tracks_removed_count: number;
   summary: string;
   video_handling: string;
+  source_video_bitrate_bps: number | null;
+  estimated_output_video_bitrate_bps: number | null;
+  target_crf: number | null;
+  low_bitrate_skip_threshold_bps: number | null;
+  minimum_output_bitrate_bps: number | null;
+  max_allowed_video_reduction_percent: number | null;
+  output_larger_than_input_review_percent: number | null;
   manual_review_triggered: boolean;
   manual_review_reasons: string[];
 };
@@ -296,6 +307,8 @@ export type JobSummary = {
   compression_reduction_percent: number | null;
   audio_tracks_removed_count: number;
   subtitle_tracks_removed_count: number;
+  plan_reason_codes: string[];
+  plan_reason_messages: string[];
   analysis_payload: DryRunAnalysis | null;
   assigned_worker_id: string | null;
   last_worker_id: string | null;
@@ -937,7 +950,13 @@ export type ProcessingRuleValues = {
   preferred_subtitle_languages: string[];
   handling_mode: string;
   target_quality_mode: string;
+  target_crf: number | null;
   max_allowed_video_reduction_percent: number;
+  low_bitrate_skip_threshold_1080p_mbps: number;
+  low_bitrate_skip_threshold_720p_mbps: number;
+  minimum_output_bitrate_1080p_mbps: number;
+  minimum_output_bitrate_720p_mbps: number;
+  output_larger_than_input_review_percent: number | null;
 };
 
 export type ProcessingRuleset = {

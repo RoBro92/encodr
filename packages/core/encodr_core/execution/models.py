@@ -35,6 +35,8 @@ class ExecutionResult(ConfigModel):
     video_input_size_bytes: int | None = None
     video_output_size_bytes: int | None = None
     video_space_saved_bytes: int | None = None
+    source_video_bitrate_bps: int | None = None
+    output_video_bitrate_bps: int | None = None
     non_video_space_saved_bytes: int | None = None
     compression_reduction_percent: float | None = None
     exit_code: int | None = None

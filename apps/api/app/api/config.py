@@ -62,7 +62,13 @@ class UpdateProcessingRulesetRequest(BaseModel):
     drop_other_subtitles: bool | None = None
     handling_mode: str | None = None
     target_quality_mode: str | None = None
+    target_crf: int | None = None
     max_allowed_video_reduction_percent: int | None = None
+    low_bitrate_skip_threshold_1080p_mbps: float | None = None
+    low_bitrate_skip_threshold_720p_mbps: float | None = None
+    minimum_output_bitrate_1080p_mbps: float | None = None
+    minimum_output_bitrate_720p_mbps: float | None = None
+    output_larger_than_input_review_percent: int | None = None
     keep_english_audio_only: bool | None = None
     keep_one_full_english_subtitle: bool | None = None
     four_k_mode: str | None = None
@@ -91,6 +97,16 @@ class UpdateProcessingRulesetRequest(BaseModel):
             self.target_quality_mode = "high_quality"
         if self.max_allowed_video_reduction_percent is None:
             self.max_allowed_video_reduction_percent = 35
+        if self.low_bitrate_skip_threshold_1080p_mbps is None:
+            self.low_bitrate_skip_threshold_1080p_mbps = 3.0
+        if self.low_bitrate_skip_threshold_720p_mbps is None:
+            self.low_bitrate_skip_threshold_720p_mbps = 1.5
+        if self.minimum_output_bitrate_1080p_mbps is None:
+            self.minimum_output_bitrate_1080p_mbps = 1.75
+        if self.minimum_output_bitrate_720p_mbps is None:
+            self.minimum_output_bitrate_720p_mbps = 1.0
+        if self.output_larger_than_input_review_percent is None:
+            self.output_larger_than_input_review_percent = 5
         return self
 
 

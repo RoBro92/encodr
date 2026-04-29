@@ -257,6 +257,23 @@ class WorkerRepository:
         self.session.flush()
         return worker
 
+    def mark_auth_failed(
+        self,
+        worker_key: str,
+        *,
+        reason: str,
+        failed_at: datetime,
+    ) -> Worker | None:
+        worker = self.get_by_key(worker_key)
+        if worker is None or worker.worker_type != WorkerType.REMOTE:
+            return None
+        worker.registration_status = WorkerRegistrationStatus.UNKNOWN
+        worker.last_seen_at = failed_at
+        worker.last_health_status = WorkerHealthStatus.FAILED
+        worker.last_health_summary = f"Worker authentication failed: {reason}"
+        self.session.flush()
+        return worker
+
     def set_enabled(
         self,
         worker: Worker,

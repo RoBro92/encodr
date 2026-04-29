@@ -120,6 +120,27 @@ def test_transcode_plan_builds_expected_ffmpeg_command() -> None:
     assert command_plan.output_path == Path("/scratch/encodr/Example Film (2024).job-456.tmp.mkv")
 
 
+def test_transcode_plan_respects_configured_crf_override() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    profile = bundle.profiles["movies-default"]
+    assert profile.video is not None
+    assert profile.video.non_4k is not None
+    profile.video.non_4k.quality_crf = 22
+    media = parse_fixture("film_1080p.json")
+    plan = build_processing_plan(media, bundle, source_path="/media/Movies/Example Film (2024).mkv")
+
+    command_plan = build_execution_command_plan(
+        plan,
+        input_path=media.file_path,
+        scratch_dir="/scratch/encodr",
+        ffmpeg_path="/usr/bin/ffmpeg",
+        job_id="job-crf",
+    )
+
+    crf_index = command_plan.command.index("-crf")
+    assert command_plan.command[crf_index + 1] == "22"
+
+
 def test_ffmpeg_failure_marks_job_failed(tmp_path: Path) -> None:
     with database_session() as session:
         bundle = load_config_bundle(project_root=REPO_ROOT)
@@ -241,7 +262,7 @@ def test_compression_safety_uses_video_reduction_only_and_blocks_excessive_loss(
         output_media = media.model_copy(deep=True)
         output_media.container.size_bytes = max((media.container.size_bytes or 0) // 3, 1)
         output_media.video_streams[0].codec_name = "hevc"
-        output_media.video_streams[0].bit_rate = max((media.video_streams[0].bit_rate or 0) // 4, 1)
+        output_media.video_streams[0].bit_rate = 1_000_000
 
         job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
         plan.video.max_allowed_video_reduction_percent = 10
@@ -264,10 +285,92 @@ def test_compression_safety_uses_video_reduction_only_and_blocks_excessive_loss(
 
         refreshed_job = session.get(Job, job.id)
         assert result.status == "manual_review"
-        assert result.failure_category == "compression_safety_exceeded"
+        assert result.failure_category == "compression_safety_bitrate_floor"
         assert refreshed_job.status == JobStatus.MANUAL_REVIEW
         assert refreshed_job.compression_reduction_percent is not None
         assert refreshed_job.compression_reduction_percent > 10
+        assert source_path.read_text(encoding="utf-8") == "original"
+
+
+def test_high_video_reduction_with_safe_output_bitrate_is_accepted(tmp_path: Path) -> None:
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        staged_path = tmp_path / "scratch" / "safe-compressed-output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        output_media = media.model_copy(deep=True)
+        output_media.container.size_bytes = max((media.container.size_bytes or 0) // 3, 1)
+        output_media.video_streams[0].codec_name = "hevc"
+        output_media.video_streams[0].bit_rate = 2_500_000
+
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        plan.video.max_allowed_video_reduction_percent = 10
+
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=PassingVerifierWithProbeClient(output_media),
+            replacement_service=StaticReplacementService.succeeded(source_path),
+        )
+        jobs = JobRepository(session)
+        jobs.mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed_job = session.get(Job, job.id)
+        assert result.status == "completed"
+        assert refreshed_job.status == JobStatus.COMPLETED
+        assert refreshed_job.compression_reduction_percent is not None
+        assert refreshed_job.compression_reduction_percent > 10
+
+
+def test_output_larger_than_input_guard_sends_result_to_review(tmp_path: Path) -> None:
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        staged_path = tmp_path / "scratch" / "larger-output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        output_media = media.model_copy(deep=True)
+        output_media.container.size_bytes = int((media.container.size_bytes or 1) * 1.10)
+        output_media.video_streams[0].codec_name = "hevc"
+        output_media.video_streams[0].bit_rate = media.video_streams[0].bit_rate
+
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        plan.video.output_larger_than_input_review_percent = 5
+
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=PassingVerifierWithProbeClient(output_media),
+            replacement_service=ReplacementService(),
+        )
+        jobs = JobRepository(session)
+        jobs.mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed_job = session.get(Job, job.id)
+        assert result.status == "manual_review"
+        assert result.failure_category == "output_larger_than_input"
+        assert refreshed_job.status == JobStatus.MANUAL_REVIEW
         assert source_path.read_text(encoding="utf-8") == "original"
 
 

@@ -138,6 +138,8 @@ class DryRunItemResponse(BaseModel):
     source_path: str
     file_name: str
     action: str
+    reason_messages: list[str] = Field(default_factory=list)
+    warning_messages: list[str] = Field(default_factory=list)
     confidence: str
     requires_review: bool
     is_protected: bool

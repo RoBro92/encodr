@@ -68,9 +68,15 @@ class NonFourKVideoRules(ConfigModel):
     preferred_codec: VideoCodec = VideoCodec.HEVC
     allow_transcode: bool = True
     quality_mode: VideoQualityMode = VideoQualityMode.HIGH_QUALITY
+    quality_crf: int | None = Field(default=None, ge=0, le=51)
     max_video_reduction_percent: NonNegativeInt = 35
     max_video_bitrate_mbps: PositiveInt
     max_width: PositiveInt
+    low_bitrate_skip_threshold_1080p_mbps: float = Field(default=3.0, ge=0)
+    low_bitrate_skip_threshold_720p_mbps: float = Field(default=1.5, ge=0)
+    minimum_output_bitrate_1080p_mbps: float = Field(default=1.75, ge=0)
+    minimum_output_bitrate_720p_mbps: float = Field(default=1.0, ge=0)
+    output_larger_than_input_review_percent: int | None = Field(default=5, ge=0, le=100)
 
     @field_validator("decision_order")
     @classmethod
@@ -96,7 +102,11 @@ class FourKVideoRules(ConfigModel):
     preserve_original_audio: bool = True
     allow_transcode: bool = False
     quality_mode: VideoQualityMode = VideoQualityMode.HIGH_QUALITY
+    quality_crf: int | None = Field(default=None, ge=0, le=51)
     max_video_reduction_percent: NonNegativeInt = 20
+    minimum_output_bitrate_1080p_mbps: float = Field(default=1.75, ge=0)
+    minimum_output_bitrate_720p_mbps: float = Field(default=1.0, ge=0)
+    output_larger_than_input_review_percent: int | None = Field(default=5, ge=0, le=100)
     remove_non_english_audio: bool = True
     remove_non_english_subtitles: bool = True
 

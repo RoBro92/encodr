@@ -33,6 +33,14 @@ export function formatBytes(value: number | null | undefined): string {
   return `${amount.toFixed(amount >= 10 || unitIndex === 0 ? 0 : 1)} ${units[unitIndex]}`;
 }
 
+export function formatBitrate(value: number | null | undefined): string {
+  if (value == null || Number.isNaN(value)) {
+    return "Not available";
+  }
+  const mbps = value / 1_000_000;
+  return `${mbps >= 10 ? mbps.toFixed(1) : mbps.toFixed(2)} Mbps`;
+}
+
 export function titleCase(value: string): string {
   return value
     .split(/[_\s-]+/)
