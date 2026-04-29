@@ -111,6 +111,7 @@ class ProcessingRuleValuesResponse(BaseModel):
     preserve_atmos: bool
     preferred_subtitle_languages: list[str]
     handling_mode: str
+    quality_preset: str
     target_quality_mode: str
     target_crf: int | None = None
     max_allowed_video_reduction_percent: int

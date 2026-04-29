@@ -80,3 +80,35 @@ def test_execution_preferences_default_and_persist(tmp_path: Path) -> None:
         "allow_cpu_fallback": False,
     }
     assert service.get_execution_preferences() == updated
+
+
+def test_processing_rules_quality_preset_persists_with_values(tmp_path: Path) -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+
+    with import_api_module("app.services.setup") as setup_module:
+        service = setup_module.SetupStateService(config_bundle=bundle)
+
+    service.state_path = tmp_path / "setup-state.json"
+
+    current = dict(service.get_processing_rules()["movies"]["current"])
+    current.update(
+        {
+            "quality_preset": "custom",
+            "target_quality_mode": "balanced",
+            "target_crf": 24,
+            "max_allowed_video_reduction_percent": 72,
+        }
+    )
+
+    updated = service.update_processing_rules(
+        movies=current,
+        movies_4k=None,
+        tv=None,
+        tv_4k=None,
+    )
+
+    assert updated["movies"]["current"]["quality_preset"] == "custom"
+    assert updated["movies"]["current"]["target_quality_mode"] == "balanced"
+    assert updated["movies"]["current"]["target_crf"] == 24
+    assert updated["movies"]["current"]["max_allowed_video_reduction_percent"] == 72
+    assert service.rules_for_ruleset("movies")["quality_preset"] == "custom"

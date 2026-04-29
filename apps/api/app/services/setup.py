@@ -23,6 +23,7 @@ LANGUAGE_CODE_RE = re.compile(r"^[a-z]{3}$")
 
 RulesetName = Literal["movies", "movies_4k", "tv", "tv_4k"]
 ExecutionBackendPreference = Literal["cpu_only", "prefer_intel_igpu", "prefer_nvidia_gpu", "prefer_amd_gpu"]
+QualityPreset = Literal["high_quality", "balanced", "efficient", "custom"]
 
 
 class ProcessingRuleValues(TypedDict):
@@ -38,6 +39,7 @@ class ProcessingRuleValues(TypedDict):
     keep_one_full_preferred_subtitle: bool
     drop_other_subtitles: bool
     handling_mode: str
+    quality_preset: QualityPreset
     target_quality_mode: str
     target_crf: int | None
     max_allowed_video_reduction_percent: int
@@ -304,6 +306,7 @@ class SetupStateService:
             "keep_one_full_preferred_subtitle": subtitle_rules.keep_one_full_preferred_subtitle,
             "drop_other_subtitles": subtitle_rules.drop_other_subtitles,
             "handling_mode": handling_mode,
+            "quality_preset": quality_mode,
             "target_quality_mode": quality_mode,
             "target_crf": target_crf,
             "max_allowed_video_reduction_percent": max_reduction,
@@ -352,6 +355,9 @@ class SetupStateService:
             quality_mode = VideoQualityMode(str(payload["target_quality_mode"]).strip().lower()).value
         except (KeyError, ValueError) as error:
             raise ApiValidationError("Processing rules contain an unsupported value.") from error
+        quality_preset = str(payload.get("quality_preset") or quality_mode).strip().lower()
+        if quality_preset not in {"high_quality", "balanced", "efficient", "custom"}:
+            raise ApiValidationError("Processing rules contain an unsupported quality preset.")
 
         preferred_audio_languages = self._validate_language_list(payload.get("preferred_audio_languages"))
         preferred_subtitle_languages = self._validate_language_list(payload.get("preferred_subtitle_languages"))
@@ -395,6 +401,7 @@ class SetupStateService:
             "keep_one_full_preferred_subtitle": bool(payload.get("keep_one_full_preferred_subtitle", True)),
             "drop_other_subtitles": bool(payload.get("drop_other_subtitles", True)),
             "handling_mode": handling_mode,
+            "quality_preset": quality_preset,
             "target_quality_mode": quality_mode,
             "target_crf": target_crf,
             "max_allowed_video_reduction_percent": max_reduction,
