@@ -5,6 +5,7 @@ import builtins
 import os
 from pathlib import Path
 import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -419,7 +420,12 @@ def test_command_update_prompts_for_restart_after_successful_apply(
         ),
     )
     monkeypatch.setattr(encodr_cli, "apply_archive_update", lambda **_kwargs: None)
-    monkeypatch.setattr(encodr_cli, "command_doctor", lambda _args: 0)
+    monkeypatch.setattr(
+        encodr_cli,
+        "command_doctor",
+        lambda _args: pytest.fail("update must run doctor in a fresh CLI process"),
+    )
+    monkeypatch.setattr(encodr_cli, "run_updated_doctor", lambda _project_root: 0)
     monkeypatch.setattr(encodr_cli, "detect_restart_environment", lambda: "lxc")
     monkeypatch.setattr(builtins, "input", lambda _prompt="": "n")
 
@@ -440,6 +446,59 @@ def test_command_update_prompts_for_restart_after_successful_apply(
     assert commands == [["docker", "compose", "-f", "docker-compose.yml", "up", "-d", "--build"]]
     assert "A restart of this LXC container may still be needed" in output
     assert "Restart later if newly mounted storage or hardware devices are not visible yet." in output
+
+
+def test_run_updated_doctor_invokes_installed_launcher(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+    launcher = project_root / "encodr"
+    launcher.write_text("#!/usr/bin/env bash\n", encoding="utf-8")
+    commands: list[tuple[list[str], Path]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append((command, kwargs["cwd"]))
+        return SimpleNamespace(returncode=0)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = encodr_cli.run_updated_doctor(project_root)
+
+    assert result == 0
+    assert commands == [([str(launcher), "doctor"], project_root)]
+
+
+def test_run_updated_doctor_falls_back_to_python_cli(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    project_root = tmp_path / "encodr"
+    project_root.mkdir(parents=True, exist_ok=True)
+    commands: list[tuple[list[str], Path]] = []
+
+    def fake_run(command: list[str], **kwargs):
+        commands.append((command, kwargs["cwd"]))
+        return SimpleNamespace(returncode=1)
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    result = encodr_cli.run_updated_doctor(project_root)
+
+    assert result == 1
+    assert commands == [
+        (
+            [
+                sys.executable,
+                str(project_root / "encodr_cli.py"),
+                "--project-root",
+                str(project_root),
+                "doctor",
+            ],
+            project_root,
+        )
+    ]
 
 
 def test_prompt_for_restart_after_update_reboots_when_confirmed(

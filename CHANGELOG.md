@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.3.8.1 - 2026-04-29
+
+This hotfix restores the update path for installs moving onto the 0.3.8 release line.
+
+- fixed an update-time configuration error that could stop `encodr update --apply` while checking bundled profile files
+- kept bundled movie and TV profiles compatible with older updater checks
+- changed future updates so the post-update health check runs through the newly installed CLI instead of the older updater process
+- revalidated with:
+  - `pytest -q`
+  - `bash -n install.sh`
+  - `bash -n encodr`
+
 ## 0.3.8 - 2026-04-29
 
 This release hardens Encodr for pre-production use, with safer job handling, clearer worker setup, better quality decisions, and more dependable release packaging.
