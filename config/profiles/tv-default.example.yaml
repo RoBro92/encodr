@@ -4,7 +4,6 @@ profile:
   video:
     non_4k:
       preferred_codec: hevc
-      quality_crf: 22
       max_video_bitrate_mbps: 8
   renaming:
     template: "{{ series_title }}/Season {{ season_number }}/{{ series_title }} - s{{ season_number_padded }}e{{ episode_number_padded }} - {{ episode_title }}"

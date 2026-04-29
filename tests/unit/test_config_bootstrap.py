@@ -30,6 +30,14 @@ def test_loads_repository_root_config_bundle() -> None:
     assert "tv-default" in bundle.profiles
 
 
+def test_shipped_profile_examples_remain_readable_by_legacy_updater() -> None:
+    profiles_dir = REPO_ROOT / "config" / "profiles"
+
+    for profile_path in profiles_dir.glob("*.example.yaml"):
+        contents = profile_path.read_text(encoding="utf-8")
+        assert "quality_crf:" not in contents
+
+
 def test_loads_non_example_config_files(tmp_path: Path) -> None:
     config_dir = copy_example_config_tree(tmp_path)
     materialise_primary_config_files(config_dir)

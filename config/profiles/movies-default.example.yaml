@@ -4,7 +4,6 @@ profile:
   video:
     non_4k:
       preferred_codec: hevc
-      quality_crf: 21
       max_video_bitrate_mbps: 14
   renaming:
     template: "{{ title }} ({{ year }})"

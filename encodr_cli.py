@@ -386,7 +386,7 @@ def command_update(args: argparse.Namespace) -> int:
         env=compose_env(project_root),
         check=True,
     )
-    doctor_result = command_doctor(args)
+    doctor_result = run_updated_doctor(project_root)
     prompt_for_restart_after_update()
     return doctor_result
 
@@ -862,6 +862,23 @@ def apply_archive_update(*, project_root: Path, download_url: str) -> None:
         children = [child for child in extract_dir.iterdir() if not child.name.startswith(".")]
         source_root = children[0] if len(children) == 1 and children[0].is_dir() else extract_dir
         sync_release_tree(source_root=source_root, target_root=project_root)
+
+
+def run_updated_doctor(project_root: Path) -> int:
+    cli_script = project_root / "encodr"
+    if cli_script.exists():
+        command = [str(cli_script), "doctor"]
+    else:
+        command = [
+            sys.executable,
+            str(project_root / "encodr_cli.py"),
+            "--project-root",
+            str(project_root),
+            "doctor",
+        ]
+
+    result = subprocess.run(command, cwd=project_root, check=False)
+    return int(result.returncode)
 
 
 def sync_release_tree(*, source_root: Path, target_root: Path) -> None:
