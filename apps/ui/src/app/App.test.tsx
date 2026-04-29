@@ -218,6 +218,33 @@ describe("Encodr UI shell", () => {
     });
   });
 
+  it("allows the review status URL filter to be cleared to Any", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/review/items",
+        body: {
+          items: [reviewItemDetail()],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/review?status=open", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^review$/i })).toBeInTheDocument();
+    await userEvent.selectOptions(screen.getByLabelText(/^review status$/i), "");
+
+    expect(screen.getByLabelText(/^review status$/i)).toHaveValue("");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/review/items?limit=100"),
+        expect.anything(),
+      );
+    });
+  });
+
   it("uses URL status filters when loading jobs and review directly", async () => {
     const jobFetchMock = mockFetchRoutes([
       {

@@ -143,7 +143,7 @@ export function ReviewPage() {
       if (nextStatus) {
         next.set("status", nextStatus);
       } else {
-        next.delete("status");
+        next.set("status", "any");
       }
       return next;
     });
@@ -587,17 +587,18 @@ function normaliseReviewStatusFilter(value: string | null) {
   if (!value) {
     return "open";
   }
+  if (value === "any") {
+    return "";
+  }
   return ["open", "approved", "held", "rejected", "resolved"].includes(value) ? value : "open";
 }
 
 function reviewRouteWithStatus(status: string) {
-  return status ? `${APP_ROUTES.review}?status=${encodeURIComponent(status)}` : APP_ROUTES.review;
+  return `${APP_ROUTES.review}?status=${encodeURIComponent(status || "any")}`;
 }
 
 function reviewDetailRouteWithStatus(itemId: string, status: string) {
-  return status
-    ? `${APP_ROUTES.reviewDetail(itemId)}?status=${encodeURIComponent(status)}`
-    : APP_ROUTES.reviewDetail(itemId);
+  return `${APP_ROUTES.reviewDetail(itemId)}?status=${encodeURIComponent(status || "any")}`;
 }
 
 function reviewPriorityLabel(item: {
