@@ -31,6 +31,11 @@ Object.defineProperty(window, "localStorage", {
   configurable: true,
 });
 
+Object.defineProperty(window, "sessionStorage", {
+  value: createStorageMock(),
+  configurable: true,
+});
+
 afterEach(() => {
   cleanup();
 });

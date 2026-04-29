@@ -278,7 +278,7 @@ export function WorkersPage() {
         {noWorkersConfigured ? (
           <EmptyState
             title="No workers configured"
-            message="Add this host as a worker or pair a remote worker when you are ready to give Encodr execution capacity."
+            message="Add this host as a worker or pair a remote worker when you are ready to assin jobs."
           />
         ) : (
           <div className="record-list worker-inventory-list" role="list" aria-label="Workers list">
@@ -1213,6 +1213,10 @@ function BootstrapResultPanel({ result }: { result: RemoteWorkerOnboardingRespon
         <strong>{result.worker.display_name}</strong>
         <span>Pending pairing until {formatDateTime(result.pairing_token_expires_at)}</span>
       </div>
+      <label className="field">
+        <span>Pairing token</span>
+        <input readOnly value={result.pairing_token} />
+      </label>
       <label className="field">
         <span>Bootstrap command</span>
         <textarea readOnly value={result.bootstrap_command} rows={7} />

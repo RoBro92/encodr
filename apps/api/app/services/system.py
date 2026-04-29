@@ -406,7 +406,7 @@ class SystemService:
             "environment": self.config_bundle.app.environment.value,
             "db_reachable": db_reachable,
             "schema_reachable": schema_reachable,
-            "auth_enabled": self.config_bundle.app.auth.enabled,
+            "auth_enabled": True,
             "api_base_path": self.config_bundle.app.api.base_path,
             "standard_media_root": self.STANDARD_MEDIA_ROOT,
             "scratch_dir": self.config_bundle.app.scratch_dir.as_posix(),

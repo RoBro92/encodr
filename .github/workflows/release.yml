@@ -66,9 +66,67 @@ jobs:
         shell: bash
         run: git rev-parse "refs/tags/${{ steps.tag.outputs.tag }}"
 
+  validate-release:
+    needs: resolve-release
+    runs-on: ubuntu-latest
+    timeout-minutes: 35
+
+    steps:
+      - name: Check out release tag
+        uses: actions/checkout@v6
+        with:
+          ref: refs/tags/${{ needs.resolve-release.outputs.tag }}
+
+      - name: Set up Python
+        uses: actions/setup-python@v6
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: |
+            apps/api/pyproject.toml
+            packages/core/pyproject.toml
+            packages/db/pyproject.toml
+            packages/shared/pyproject.toml
+
+      - name: Install backend dependencies
+        run: |
+          python -m pip install --upgrade pip
+          python -m pip install \
+            pytest \
+            "psycopg[binary]>=3.1,<4.0" \
+            -e ./packages/core[dev] \
+            -e ./packages/shared \
+            -e ./packages/db[dev] \
+            -e ./apps/api[dev]
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: "20"
+          cache: npm
+          cache-dependency-path: apps/ui/package-lock.json
+
+      - name: Install UI dependencies
+        working-directory: apps/ui
+        run: npm ci
+
+      - name: Run release gate
+        run: bash infra/scripts/release-check.sh
+
+      - name: Run additional syntax checks
+        run: |
+          python -m compileall encodr_cli.py
+          bash -n install.sh
+          bash -n encodr
+          for script in infra/scripts/*.sh; do
+            bash -n "$script"
+          done
+
   build-images:
     name: build-${{ matrix.name }}
-    needs: resolve-release
+    needs:
+      - resolve-release
+      - validate-release
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

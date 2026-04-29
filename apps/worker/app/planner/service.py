@@ -1,3 +1,5 @@
+"""Compatibility wrapper around the core processing planner."""
+
 from __future__ import annotations
 
 from pathlib import Path
@@ -14,4 +16,3 @@ def build_media_processing_plan(
     source_path: Path | str | None = None,
 ) -> ProcessingPlan:
     return build_processing_plan(media_file, config_bundle, source_path=source_path)
-

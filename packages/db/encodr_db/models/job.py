@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text
+from sqlalchemy import BigInteger, Boolean, DateTime, Float, ForeignKey, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin, json_type
@@ -24,6 +24,13 @@ class Job(Base, IdMixin, TimestampMixin):
         Index("ix_jobs_status_created_at", "status", "created_at"),
         Index("ix_jobs_started_at", "started_at"),
         Index("ix_jobs_completed_at", "completed_at"),
+        Index(
+            "uq_jobs_one_active_per_tracked_file",
+            "tracked_file_id",
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'scheduled', 'running') AND cleared_at IS NULL"),
+            sqlite_where=text("status IN ('pending', 'scheduled', 'running') AND cleared_at IS NULL"),
+        ),
     )
 
     tracked_file_id: Mapped[str] = mapped_column(

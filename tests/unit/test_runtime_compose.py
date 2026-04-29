@@ -54,6 +54,7 @@ def test_render_runtime_compose_includes_dri_and_nvidia_configuration() -> None:
     assert "/sys/class/drm:/sys/class/drm:ro" in rendered
     assert "gpus: all" in rendered
     assert "NVIDIA_DRIVER_CAPABILITIES: compute,utility,video" in rendered
+    assert "  worker-agent:" not in rendered
 
 
 def test_write_runtime_compose_files_writes_yaml_and_profile_json(

@@ -167,6 +167,33 @@ def test_job_creation_from_latest_plan_works(
         assert session.query(Job).count() == 1
 
 
+def test_duplicate_active_job_creation_returns_conflict(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Duplicate Job Film (2024).mkv", contents="job")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    context.app.state.probe_client_factory = lambda: StaticProbeClient(media)
+    file_id = context.client.post(
+        "/api/files/plan",
+        json={"source_path": source_path.as_posix()},
+        headers=auth.headers,
+    ).json()["tracked_file"]["id"]
+
+    first_response = context.client.post("/api/jobs", json={"tracked_file_id": file_id}, headers=auth.headers)
+    second_response = context.client.post("/api/jobs", json={"tracked_file_id": file_id}, headers=auth.headers)
+
+    assert first_response.status_code == 201
+    assert second_response.status_code == 409
+    assert "active job already exists" in second_response.json()["detail"]
+    with session_factory() as session:
+        assert session.query(Job).count() == 1
+
+
 def test_retry_endpoint_creates_new_job_record(
     tmp_path: Path,
     repo_root: Path,
@@ -198,6 +225,31 @@ def test_retry_endpoint_creates_new_job_record(
         assert len(jobs) == 2
         assert jobs[0].status == JobStatus.FAILED
         assert jobs[1].status == JobStatus.PENDING
+
+
+def test_retry_endpoint_blocks_when_active_job_exists(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Retry Duplicate Film (2024).mkv", contents="retry")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        session.commit()
+
+    first_retry = context.client.post(f"/api/jobs/{persisted.job.id}/retry", headers=auth.headers)
+    second_retry = context.client.post(f"/api/jobs/{persisted.job.id}/retry", headers=auth.headers)
+
+    assert first_retry.status_code == 201
+    assert second_retry.status_code == 409
+    assert "active job already exists" in second_retry.json()["detail"]
+    with session_factory() as session:
+        assert session.query(Job).count() == 2
 
 
 def test_cancel_endpoint_marks_pending_job_cancelled_without_execution(
@@ -903,6 +955,40 @@ def test_batch_plan_and_job_creation_from_folder_persist_results_without_bypassi
     with session_factory() as session:
         assert session.query(TrackedFile).count() == 2
         assert session.query(PlanSnapshot).count() >= 2
+        assert session.query(Job).count() == 1
+
+
+def test_batch_job_creation_reports_existing_active_job_as_blocked(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _ = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Batch Duplicate (2024).mkv", contents="film")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    context.app.state.probe_client_factory = lambda: StaticProbeClient(media)
+    file_id = context.client.post(
+        "/api/files/plan",
+        json={"source_path": source_path.as_posix()},
+        headers=auth.headers,
+    ).json()["tracked_file"]["id"]
+    assert context.client.post("/api/jobs", json={"tracked_file_id": file_id}, headers=auth.headers).status_code == 201
+
+    batch_response = context.client.post(
+        "/api/jobs/batch",
+        json={"folder_path": (layout.source_dir / "Movies").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert batch_response.status_code == 201
+    payload = batch_response.json()
+    assert payload["created_count"] == 0
+    assert payload["blocked_count"] == 1
+    assert payload["items"][0]["status"] == "blocked"
+    assert "active job already exists" in payload["items"][0]["message"]
+    with session_factory() as session:
         assert session.query(Job).count() == 1
 
 

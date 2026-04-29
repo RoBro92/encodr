@@ -89,6 +89,22 @@ def test_runtime_endpoint_returns_health_summary_and_queue_state(
     assert payload["queue_health"]["manual_review_count"] == 1
 
 
+def test_runtime_endpoint_reports_auth_enforced_when_config_flag_is_false(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _, _, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    bundle.app.auth.enabled = False
+    auth = authenticate(context)
+
+    response = context.client.get("/api/system/runtime", headers=auth.headers)
+
+    assert response.status_code == 200
+    assert response.json()["auth_enabled"] is True
+    assert context.client.get("/api/system/runtime").status_code == 401
+
+
 def test_worker_self_test_endpoint_returns_structured_result(
     tmp_path: Path,
     repo_root: Path,

@@ -154,7 +154,7 @@ export function ReviewPage() {
       <PageHeader
         eyebrow="Review"
         title="Review"
-        description="See why automation paused, inspect the latest context, then take a decision."
+        description="See why automation paused, inspect the latest context, then make a decision."
       />
 
       {mutationError instanceof Error ? (

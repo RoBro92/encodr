@@ -442,6 +442,7 @@ def create_remote_worker_onboarding(
         return RemoteWorkerOnboardingResponse(
             worker=WorkerInventoryDetailResponse(**result["worker"]),
             status=result["status"],
+            pairing_token=result["pairing_token"],
             pairing_token_expires_at=result["pairing_token_expires_at"],
             bootstrap_command=result["bootstrap_command"],
             uninstall_command=result["uninstall_command"],

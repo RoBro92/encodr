@@ -966,7 +966,6 @@ export function FilesPage() {
             <div className="section-card-header">
               <div>
                 <h2>Processing dashboard</h2>
-                <p>{activeRootLabel} stats are scoped to this library profile.</p>
               </div>
               <button
                 className="button button-primary"
@@ -1041,7 +1040,7 @@ export function FilesPage() {
 
         <SectionCard
           title="Active Watchers"
-          subtitle="Queue or stage new files automatically from SSD or library folders."
+          subtitle="Queue or stage new files automatically library folders."
           actions={
             <button className="button button-primary button-small" type="button" onClick={() => openWatcherDraft()}>
               Add watched job
@@ -1184,7 +1183,7 @@ export function FilesPage() {
 
             {watchedJobs.length === 0 ? (
               <div className="library-watchers-empty">
-                <EmptyState title="No watched folders yet" message="Create a watched job to queue or stage new files automatically from an SSD or library path." />
+                <EmptyState title="No watched folders yet" message="Create a watched job to queue or stage new files." />
               </div>
             ) : (
               <div className="list-stack">
@@ -1248,7 +1247,7 @@ export function FilesPage() {
 
       <CollapsibleSection
         title="Advanced Options"
-        subtitle="Manual browsing, selection, dry-run analysis, and job creation"
+        subtitle="Manual browsing, selection, dry run analysis, and job creation"
       >
         <div className="library-advanced-toolbar">
           <div className="library-advanced-toolbar-left">

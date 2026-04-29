@@ -94,6 +94,7 @@ def select_audio_streams(
             intent=AudioSelectionIntent(
                 selected_stream_indices=[],
                 dropped_stream_indices=[stream.index for stream in media_file.audio_streams],
+                required_language_codes=[],
                 commentary_removed_stream_indices=commentary_removed,
                 available_preferred_language_stream_indices=[stream.index for stream in preferred_streams],
                 missing_required_audio=True,
@@ -114,6 +115,7 @@ def select_audio_streams(
             intent=AudioSelectionIntent(
                 selected_stream_indices=[],
                 dropped_stream_indices=[stream.index for stream in media_file.audio_streams],
+                required_language_codes=[],
                 commentary_removed_stream_indices=commentary_removed,
                 available_preferred_language_stream_indices=[stream.index for stream in preferred_streams],
                 missing_required_audio=True,
@@ -204,6 +206,7 @@ def select_audio_streams(
     intent = AudioSelectionIntent(
         selected_stream_indices=selected_indices,
         dropped_stream_indices=dropped_indices,
+        required_language_codes=unique_languages(stream.language for stream in selected),
         primary_stream_index=selected[0].index if selected else None,
         preserved_atmos_stream_indices=preserved_atmos,
         preserved_surround_stream_indices=preserved_surround,
@@ -332,6 +335,8 @@ def select_subtitle_streams(
     intent = SubtitleSelectionIntent(
         selected_stream_indices=selected_indices,
         dropped_stream_indices=dropped_indices,
+        required_language_codes=unique_languages(stream.language for stream in selected),
+        required_forced_language_codes=unique_languages(stream.language for stream in forced_candidates),
         forced_stream_indices=[stream.index for stream in forced_candidates],
         main_stream_index=main_stream.index if main_stream else None,
         hearing_impaired_stream_indices=[stream.index for stream in hearing_impaired_streams],
@@ -379,6 +384,15 @@ def subtitle_stream_score(stream: SubtitleStream) -> tuple[int, int, int]:
         1 if stream.is_forced else 0,
         -stream.index,
     )
+
+
+def unique_languages(values: Iterable[str | None]) -> list[str]:
+    languages: list[str] = []
+    for value in values:
+        language = value or "und"
+        if language not in languages:
+            languages.append(language)
+    return languages
 
 
 def contains_forced_marker(stream: SubtitleStream) -> bool:

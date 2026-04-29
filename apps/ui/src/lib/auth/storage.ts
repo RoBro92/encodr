@@ -8,23 +8,36 @@ export type StoredSession = {
 export const SESSION_STORAGE_KEY = "encodr.session";
 
 export function loadStoredSession(): StoredSession | null {
-  const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+  const raw = window.sessionStorage.getItem(SESSION_STORAGE_KEY);
   if (!raw) {
-    return null;
+    const legacyRaw = window.localStorage.getItem(SESSION_STORAGE_KEY);
+    if (!legacyRaw) {
+      return null;
+    }
+    try {
+      const migrated = JSON.parse(legacyRaw) as StoredSession;
+      window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(migrated));
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      return migrated;
+    } catch {
+      window.localStorage.removeItem(SESSION_STORAGE_KEY);
+      return null;
+    }
   }
-
   try {
     return JSON.parse(raw) as StoredSession;
   } catch {
-    window.localStorage.removeItem(SESSION_STORAGE_KEY);
+    window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
     return null;
   }
 }
 
 export function saveStoredSession(session: StoredSession): void {
-  window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.sessionStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
+  window.localStorage.removeItem(SESSION_STORAGE_KEY);
 }
 
 export function clearStoredSession(): void {
+  window.sessionStorage.removeItem(SESSION_STORAGE_KEY);
   window.localStorage.removeItem(SESSION_STORAGE_KEY);
 }

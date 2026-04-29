@@ -389,12 +389,12 @@ function getCurrentPageHeader(pathname: string): { title: string; description: s
     {
       path: APP_ROUTES.jobs,
       title: "Jobs",
-      description: "Monitor running work, inspect outcomes, and retry jobs that need another pass.",
+      description: "Monitor running jobs, inspect outcomes, and retry jobs that need another pass.",
     },
     {
       path: APP_ROUTES.review,
       title: "Review",
-      description: "See why automation paused, inspect the latest context, then take a decision.",
+      description: "See why automation paused, inspect the latest context, then make a decision.",
     },
     {
       path: APP_ROUTES.workers,
@@ -414,7 +414,7 @@ function getCurrentPageHeader(pathname: string): { title: string; description: s
     {
       path: APP_ROUTES.config,
       title: "Settings",
-      description: "Choose library roots, set processing rules, and confirm runtime health.",
+      description: "Choose library roots, set processing rules, and review system health.",
     },
   ];
 

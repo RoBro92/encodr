@@ -392,6 +392,7 @@ class RemoteWorkerOnboardingRequest(WorkerPreferenceRequest):
 class RemoteWorkerOnboardingResponse(BaseModel):
     worker: WorkerInventoryDetailResponse
     status: Literal["pending_pairing"]
+    pairing_token: str
     pairing_token_expires_at: datetime
     bootstrap_command: str
     uninstall_command: str
@@ -443,6 +444,8 @@ class WorkerJobProgressRequest(BaseModel):
 class WorkerJobProgressResponse(BaseModel):
     job_id: str
     updated_at: datetime
+    cancellation_requested: bool = False
+    cancellation_reason: str | None = None
 
 
 class WorkerJobFailureRequest(BaseModel):

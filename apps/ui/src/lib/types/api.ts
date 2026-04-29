@@ -759,6 +759,7 @@ export type RemoteWorkerOnboardingPayload = WorkerPreferencePayload & {
 export type RemoteWorkerOnboardingResponse = {
   worker: WorkerInventoryDetail;
   status: "pending_pairing";
+  pairing_token: string;
   pairing_token_expires_at: string;
   bootstrap_command: string;
   uninstall_command: string;

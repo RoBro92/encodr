@@ -31,6 +31,7 @@ from encodr_db.repositories import (
     TrackedFileRepository,
     WatchedJobRepository,
 )
+from tests.helpers.jobs import media_at_path
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "ffprobe"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -318,6 +319,44 @@ def test_basic_file_and_job_filtering() -> None:
         assert len(pending_jobs) == 2
 
 
+def test_progress_stream_jobs_include_active_and_recent_terminal_only() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        now = datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc)
+
+        def add_job(name: str, status: JobStatus, updated_at: datetime):
+            source_path = Path(f"/media/Movies/{name}.mkv")
+            media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+            tracked_file = tracked_files.upsert_by_path(source_path.as_posix(), media_file=media)
+            probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+            plan = build_processing_plan(media, bundle, source_path=source_path.as_posix())
+            plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+            job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+            job.status = status
+            job.updated_at = updated_at
+            job.progress_updated_at = updated_at
+            if status in {JobStatus.COMPLETED, JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.SKIPPED}:
+                job.completed_at = updated_at
+            return job
+
+        active_job = add_job("Active", JobStatus.RUNNING, now - timedelta(hours=1))
+        recent_terminal = add_job("Recent", JobStatus.COMPLETED, now - timedelta(minutes=1))
+        old_terminal = add_job("Old", JobStatus.FAILED, now - timedelta(hours=1))
+        session.flush()
+
+        stream_jobs = jobs.list_progress_stream_jobs(
+            recent_terminal_since=now - timedelta(minutes=5),
+            limit=100,
+        )
+
+        assert [job.id for job in stream_jobs] == [active_job.id, recent_terminal.id]
+        assert old_terminal.id not in {job.id for job in stream_jobs}
+
+
 def test_scan_records_are_listed_newest_first() -> None:
     with database_session() as session:
         scans = ScanRecordRepository(session)
@@ -440,7 +479,7 @@ def test_interrupted_jobs_clear_assignment_and_stop_counting_as_active() -> None
         assert jobs.has_active_job_for_tracked_file(tracked_file.id) is False
 
 
-def test_clear_queue_cancels_non_running_jobs_only() -> None:
+def test_atomic_claim_allows_only_one_worker_to_claim_pending_job() -> None:
     with database_session() as session:
         tracked_files = TrackedFileRepository(session)
         probes = ProbeSnapshotRepository(session)
@@ -453,13 +492,69 @@ def test_clear_queue_cancels_non_running_jobs_only() -> None:
         probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
         plan = build_processing_plan(media, bundle, source_path=media.file_path)
         plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
-        pending_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        first_worker = Worker(
+            worker_key="remote-claim-1",
+            display_name="Remote Claim 1",
+            worker_type=WorkerType.REMOTE,
+            enabled=True,
+            registration_status=WorkerRegistrationStatus.REGISTERED,
+            preferred_backend="cpu_only",
+            allow_cpu_fallback=True,
+            max_concurrent_jobs=1,
+            last_health_status=WorkerHealthStatus.HEALTHY,
+        )
+        second_worker = Worker(
+            worker_key="remote-claim-2",
+            display_name="Remote Claim 2",
+            worker_type=WorkerType.REMOTE,
+            enabled=True,
+            registration_status=WorkerRegistrationStatus.REGISTERED,
+            preferred_backend="cpu_only",
+            allow_cpu_fallback=True,
+            max_concurrent_jobs=1,
+            last_health_status=WorkerHealthStatus.HEALTHY,
+        )
+        session.add_all([first_worker, second_worker])
+        session.flush()
+
+        claimed = jobs.claim_pending_for_worker(job.id, worker=first_worker, requested_backend="cpu_only")
+        rejected = jobs.claim_pending_for_worker(job.id, worker=second_worker, requested_backend="cpu_only")
+
+        assert claimed is not None
+        assert claimed.status == JobStatus.RUNNING
+        assert claimed.assigned_worker_id == first_worker.id
+        assert rejected is None
+
+
+def test_clear_queue_cancels_non_running_jobs_only() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        def create_plan_for(path: str):
+            file_media = media.model_copy(deep=True)
+            file_media.container.file_path = Path(path)
+            tracked_file = tracked_files.upsert_by_path(path, media_file=file_media)
+            probe_snapshot = probes.add_probe_snapshot(tracked_file, file_media)
+            plan = build_processing_plan(file_media, bundle, source_path=path)
+            plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+            return tracked_file, plan_snapshot
+
+        pending_file, pending_plan = create_plan_for("/media/Movies/Pending Film.mkv")
+        pending_job = jobs.create_job_from_plan(pending_file, pending_plan)
+        scheduled_file, scheduled_plan = create_plan_for("/media/Movies/Scheduled Film.mkv")
         scheduled_job = jobs.create_job_from_plan(
-            tracked_file,
-            plan_snapshot,
+            scheduled_file,
+            scheduled_plan,
             scheduled_for_at=datetime(2026, 4, 22, 23, 0, tzinfo=timezone.utc),
         )
-        running_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        running_file, running_plan = create_plan_for("/media/Movies/Running Film.mkv")
+        running_job = jobs.create_job_from_plan(running_file, running_plan)
         jobs.mark_running(running_job, worker_name="worker-local")
 
         cleared = jobs.clear_queue(cleared_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc))
@@ -468,7 +563,7 @@ def test_clear_queue_cancels_non_running_jobs_only() -> None:
         assert pending_job.status == JobStatus.CANCELLED
         assert scheduled_job.status == JobStatus.CANCELLED
         assert running_job.status == JobStatus.RUNNING
-        assert jobs.has_active_job_for_tracked_file(tracked_file.id) is True
+        assert jobs.has_active_job_for_tracked_file(pending_file.id) is False
 
 
 def test_backup_policy_is_persisted_on_jobs() -> None:
@@ -480,13 +575,19 @@ def test_backup_policy_is_persisted_on_jobs() -> None:
         bundle = load_config_bundle(project_root=REPO_ROOT)
         media = parse_fixture("film_1080p.json")
 
-        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
-        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
-        plan = build_processing_plan(media, bundle, source_path=media.file_path)
-        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        keep_file = tracked_files.upsert_by_path("/media/Movies/Keep Policy.mkv", media_file=media)
+        keep_probe = probes.add_probe_snapshot(keep_file, media)
+        keep_plan = build_processing_plan(media, bundle, source_path="/media/Movies/Keep Policy.mkv")
+        keep_plan_snapshot = plans.add_plan_snapshot(keep_file, keep_probe, keep_plan)
+        delete_media = media.model_copy(deep=True)
+        delete_media.container.file_path = Path("/media/Movies/Delete Policy.mkv")
+        delete_file = tracked_files.upsert_by_path("/media/Movies/Delete Policy.mkv", media_file=delete_media)
+        delete_probe = probes.add_probe_snapshot(delete_file, delete_media)
+        delete_plan = build_processing_plan(delete_media, bundle, source_path="/media/Movies/Delete Policy.mkv")
+        delete_plan_snapshot = plans.add_plan_snapshot(delete_file, delete_probe, delete_plan)
 
-        keep_job = jobs.create_job_from_plan(tracked_file, plan_snapshot, backup_policy="keep_for_1_day")
-        delete_job = jobs.create_job_from_plan(tracked_file, plan_snapshot, backup_policy="delete_after_success")
+        keep_job = jobs.create_job_from_plan(keep_file, keep_plan_snapshot, backup_policy="keep_for_1_day")
+        delete_job = jobs.create_job_from_plan(delete_file, delete_plan_snapshot, backup_policy="delete_after_success")
 
         assert keep_job.backup_policy == "keep_for_1_day"
         assert keep_job.delete_replaced_source is False

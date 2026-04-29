@@ -10,6 +10,7 @@ Encodr can inspect and replace files on mounted media paths. Treat it as an inte
 - `argon2id` password hashing
 - short-lived JWT access tokens
 - opaque refresh tokens stored server-side as hashes
+- browser sessions stored in `sessionStorage` rather than persistent `localStorage`
 - admin-only operational API by default
 - append-only audit logging for auth, review, and worker-security events
 - sanitised effective-config visibility
@@ -36,11 +37,15 @@ Encodr is intended for a trusted internal network. If you expose it through a ho
 - add the hostname with `encodr addhost <fqdn>`
 - keep Postgres and Redis private
 
+The default production Compose stack keeps Postgres and Redis off host ports. The local development override binds them to `127.0.0.1` only.
+
 Do not expose worker registration to untrusted networks. Pair remote workers from trusted hosts only.
+
+Browser bearer tokens remain accessible to same-origin JavaScript during a signed-in session. Use TLS, keep Encodr on trusted hosts, and avoid installing untrusted browser extensions on operator workstations.
 
 ## Remote Workers
 
-Remote workers can receive paths and execute work against shared storage. Only pair hosts you control. If you delete a remote worker in Encodr, run the shown uninstall command on the worker host to remove the local service and stored token.
+Remote workers can receive paths and execute work against shared storage. Only pair hosts you control. The default production stack does not auto-start a remote worker agent; add remote workers from the Workers page and run the generated bootstrap command on the target host. The bootstrap flow prompts for the pairing token and clears pairing credentials from the long-running agent environment after a successful first heartbeat. If you delete a remote worker in Encodr, run the shown uninstall command on the worker host to remove the local service and stored token.
 
 Path mappings should point only at intended shared media roots. Avoid broad mappings such as filesystem roots.
 

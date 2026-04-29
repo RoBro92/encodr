@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from math import floor
 
-from sqlalchemy import Select, asc, desc, func, or_, select
+from sqlalchemy import Select, and_, asc, case, desc, func, or_, select, update
 from sqlalchemy.orm import Session, joinedload
 
 from encodr_core.execution import normalise_backend_preference
@@ -148,12 +148,73 @@ class JobRepository:
             self.session.scalar(
                 select(func.count(Job.id)).where(
                     Job.assigned_worker_id == worker_id,
-                    Job.status.in_([JobStatus.PENDING, JobStatus.RUNNING]),
+                    Job.status == JobStatus.RUNNING,
                     Job.cleared_at.is_(None),
                 )
             )
             or 0
         )
+
+    def claim_pending_for_worker(
+        self,
+        job_id: str,
+        *,
+        worker: Worker,
+        requested_backend: str | None = None,
+        max_running_assignments: int = 1,
+    ) -> Job | None:
+        now = datetime.now(timezone.utc)
+        running_jobs = Job.__table__.alias("running_jobs")
+        running_count = (
+            select(func.count(running_jobs.c.id))
+            .where(
+                running_jobs.c.assigned_worker_id == worker.id,
+                running_jobs.c.status == JobStatus.RUNNING,
+                running_jobs.c.cleared_at.is_(None),
+            )
+            .scalar_subquery()
+        )
+        values = {
+            "status": JobStatus.RUNNING,
+            "assigned_worker_id": worker.id,
+            "last_worker_id": worker.id,
+            "worker_name": worker.display_name,
+            "started_at": now,
+            "interrupted_at": None,
+            "interruption_reason": None,
+            "progress_stage": "starting",
+            "progress_percent": 0,
+            "progress_out_time_seconds": 0,
+            "progress_fps": None,
+            "progress_speed": None,
+            "progress_updated_at": now,
+        }
+        if requested_backend is not None:
+            values["requested_execution_backend"] = normalise_backend_preference(requested_backend)
+        result = self.session.execute(
+            update(Job)
+            .where(
+                Job.id == job_id,
+                Job.status == JobStatus.PENDING,
+                Job.cleared_at.is_(None),
+                or_(Job.assigned_worker_id.is_(None), Job.assigned_worker_id == worker.id),
+                running_count < max(1, int(max_running_assignments)),
+            )
+            .values(**values)
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            self.session.flush()
+            return None
+        self.session.expire_all()
+        job = self.get_by_id(job_id)
+        if job is None:
+            self.session.flush()
+            return None
+        if job.tracked_file is not None:
+            job.tracked_file.lifecycle_state = FileLifecycleState.PROCESSING
+        self.session.flush()
+        return job
 
     def list_jobs_for_scheduling(self, *, limit: int = 200) -> list[Job]:
         query = (
@@ -529,6 +590,47 @@ class JobRepository:
             query = query.offset(offset)
         if limit is not None:
             query = query.limit(limit)
+        return list(self.session.scalars(query))
+
+    def list_progress_stream_jobs(
+        self,
+        *,
+        recent_terminal_since: datetime | None,
+        limit: int = 100,
+    ) -> list[Job]:
+        active_statuses = [JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.RUNNING]
+        terminal_statuses = [
+            JobStatus.COMPLETED,
+            JobStatus.FAILED,
+            JobStatus.INTERRUPTED,
+            JobStatus.CANCELLED,
+            JobStatus.MANUAL_REVIEW,
+            JobStatus.SKIPPED,
+        ]
+        criteria = [
+            Job.status.in_(active_statuses),
+        ]
+        if recent_terminal_since is not None:
+            criteria.append(
+                and_(
+                    Job.status.in_(terminal_statuses),
+                    or_(
+                        Job.updated_at >= recent_terminal_since,
+                        Job.progress_updated_at >= recent_terminal_since,
+                        Job.completed_at >= recent_terminal_since,
+                    ),
+                )
+            )
+        query: Select[tuple[Job]] = (
+            select(Job)
+            .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
+            .where(Job.cleared_at.is_(None), or_(*criteria))
+            .order_by(
+                case((Job.status.in_(active_statuses), 0), else_=1).asc(),
+                desc(Job.updated_at),
+            )
+            .limit(limit)
+        )
         return list(self.session.scalars(query))
 
     def has_active_job_for_tracked_file(self, tracked_file_id: str) -> bool:

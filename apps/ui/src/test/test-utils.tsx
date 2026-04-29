@@ -188,5 +188,8 @@ export function resetBrowserState() {
   if (typeof window.localStorage.clear === "function") {
     window.localStorage.clear();
   }
+  if (typeof window.sessionStorage.clear === "function") {
+    window.sessionStorage.clear();
+  }
   vi.unstubAllGlobals();
 }

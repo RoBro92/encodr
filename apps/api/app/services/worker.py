@@ -764,7 +764,7 @@ class WorkerService:
             (
                 candidate
                 for candidate in compatible_jobs
-                if candidate.assigned_worker_id == worker.id and active_assignments <= max_concurrent_jobs
+                if candidate.assigned_worker_id == worker.id and active_assignments < max_concurrent_jobs
             ),
             None,
         )
@@ -778,9 +778,6 @@ class WorkerService:
         payload = self._build_remote_job_payload(job, worker=worker)
         if payload is None:
             return {"status": "no_job", "job": None}
-
-        if job.assigned_worker_id is None:
-            repository.assign_worker(job, worker=worker)
 
         return {
             "status": "assigned",
@@ -803,19 +800,47 @@ class WorkerService:
             raise ApiConflictError("Only pending jobs can be claimed.")
         if job.assigned_worker_id not in {None, worker.id}:
             raise ApiConflictError("Job is assigned to another worker.")
+        if not job_allows_worker(
+            job,
+            worker,
+            preferred_worker=(
+                WorkerRepository(session).get_by_id(job.preferred_worker_id)
+                if job.preferred_worker_id
+                else None
+            ),
+        ):
+            raise ApiConflictError("Job is not eligible for this worker.")
+        plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
+        source_path = (
+            job.tracked_file.source_path
+            if job.tracked_file is not None
+            else job.plan_snapshot.probe_snapshot.payload.get("file_path", "")
+        )
+        if not self._remote_worker_can_run_job(
+            worker,
+            plan,
+            source_path=source_path,
+            preferred_backend=job.preferred_backend_override,
+        ):
+            raise ApiConflictError("Job is not compatible with this worker.")
 
-        if job.assigned_worker_id is None:
-            repository.assign_worker(job, worker=worker)
         requested_backend = (
             normalise_backend_preference(job.preferred_backend_override or worker.preferred_backend or "cpu_only")
             if job.job_kind != JobKind.DRY_RUN
             else None
         )
-        repository.mark_running_for_worker(job, worker=worker, requested_backend=requested_backend)
-        claimed_at = job.started_at or datetime.now(timezone.utc)
+        claimed_job = repository.claim_pending_for_worker(
+            job.id,
+            worker=worker,
+            requested_backend=requested_backend,
+            max_running_assignments=max(1, int(worker.max_concurrent_jobs or 1)),
+        )
+        if claimed_job is None:
+            raise ApiConflictError("Job is no longer eligible to be claimed.")
+        claimed_at = claimed_job.started_at or datetime.now(timezone.utc)
         return {
             "status": "claimed",
-            "job_id": job.id,
+            "job_id": claimed_job.id,
             "claimed_at": claimed_at,
         }
 
@@ -840,30 +865,31 @@ class WorkerService:
 
         result = ExecutionResult.model_validate(result_payload)
         if job.cancellation_requested_at is not None and result.status not in {"cancelled", "failed"}:
-            result = ExecutionResult(
-                mode="cancelled",
-                status="cancelled",
-                command=result.command,
-                output_path=result.output_path,
-                final_output_path=result.final_output_path,
-                original_backup_path=result.original_backup_path,
-                stdout=result.stdout,
-                stderr=result.stderr,
-                failure_message=(
-                    "Remote worker result arrived after cancellation was requested. "
-                    "The file was left unprocessed in Encodr and should be reviewed before retrying."
-                ),
-                failure_category="cancelled_by_operator",
-                requested_backend=result.requested_backend,
-                actual_backend=result.actual_backend,
-                actual_accelerator=result.actual_accelerator,
-                backend_fallback_used=result.backend_fallback_used,
-                backend_selection_reason=result.backend_selection_reason,
-                verification=result.verification,
-                replacement=result.replacement,
-                started_at=result.started_at,
-                completed_at=result.completed_at,
-            )
+            if not self._result_completed_replacement(result):
+                result = ExecutionResult(
+                    mode="cancelled",
+                    status="cancelled",
+                    command=result.command,
+                    output_path=result.output_path,
+                    final_output_path=result.final_output_path,
+                    original_backup_path=result.original_backup_path,
+                    stdout=result.stdout,
+                    stderr=result.stderr,
+                    failure_message=(
+                        "Remote worker result arrived after cancellation was requested before "
+                        "verified replacement completed. The original file was not marked processed."
+                    ),
+                    failure_category="cancelled_by_operator",
+                    requested_backend=result.requested_backend,
+                    actual_backend=result.actual_backend,
+                    actual_accelerator=result.actual_accelerator,
+                    backend_fallback_used=result.backend_fallback_used,
+                    backend_selection_reason=result.backend_selection_reason,
+                    verification=result.verification,
+                    replacement=result.replacement,
+                    started_at=result.started_at,
+                    completed_at=result.completed_at,
+                )
         repository.mark_result(job, result)
         job.last_worker_id = worker.id
         job.worker_name = worker.display_name
@@ -894,6 +920,13 @@ class WorkerService:
             "final_status": job.status.value,
             "completed_at": job.completed_at,
         }
+
+    @staticmethod
+    def _result_completed_replacement(result: ExecutionResult) -> bool:
+        if result.status != "completed" or result.replacement is None:
+            return False
+        replacement_status = getattr(result.replacement.status, "value", result.replacement.status)
+        return replacement_status == "succeeded" and result.final_output_path is not None
 
     def report_job_failure(
         self,
@@ -1010,6 +1043,8 @@ class WorkerService:
         return {
             "job_id": job.id,
             "updated_at": job.progress_updated_at or datetime.now(timezone.utc),
+            "cancellation_requested": job.cancellation_requested_at is not None,
+            "cancellation_reason": job.cancellation_reason,
         }
 
     def setup_local_worker(
@@ -1128,6 +1163,7 @@ class WorkerService:
         return {
             "worker": self._remote_worker_summary(worker, detail=True),
             "status": "pending_pairing",
+            "pairing_token": pairing_token,
             "pairing_token_expires_at": expires_at,
             "bootstrap_command": self._build_remote_bootstrap_command(
                 request=request,
@@ -1591,8 +1627,9 @@ class WorkerService:
                 "powershell -NoProfile -ExecutionPolicy Bypass -Command "
                 f"\"& {{ $script = Join-Path $env:TEMP 'encodr-worker.ps1'; "
                 f"Invoke-WebRequest -UseBasicParsing '{script_url}' -OutFile $script; "
+                "$pairingToken = Read-Host -Prompt 'Encodr pairing token'; "
                 f"& $script -ServerUrl '{api_base_url}' "
-                f"-WorkerKey '{worker_key}' -PairingToken '{pairing_token}' "
+                f"-WorkerKey '{worker_key}' -PairingToken $pairingToken "
                 f"-ReleaseRef '{version_ref}' "
                 f"-DisplayName '{display_name}' -PreferredBackend '{preferred_backend}' "
                 f"-AllowCpuFallback {allow_cpu_fallback} -InstallDir '{install_dir}' "
@@ -1605,17 +1642,20 @@ class WorkerService:
         )
         platform_flag = "macos" if platform == "macos" else "linux"
         return (
-            f"curl -fsSL {shlex.quote(script_url)} | sudo bash -s -- "
+            f"tmp_script=$(mktemp) && curl -fsSL {shlex.quote(script_url)} -o \"$tmp_script\" && "
+            "read -rsp 'Encodr pairing token: ' ENCODR_PAIRING_TOKEN && echo && "
+            'printf %s "$ENCODR_PAIRING_TOKEN" | sudo bash "$tmp_script" '
             f"--server-url {shlex.quote(api_base_url)} "
             f"--worker-key {shlex.quote(worker_key)} "
-            f"--pairing-token {shlex.quote(pairing_token)} "
+            "--pairing-token-stdin "
             f"--release-ref {shlex.quote(version_ref)} "
             f"--display-name {shlex.quote(display_name)} "
             f"--platform {shlex.quote(platform_flag)} "
             f"--install-dir {shlex.quote(install_dir)} "
             f"--scratch-dir {shlex.quote(scratch_dir)} "
             f"--preferred-backend {shlex.quote(preferred_backend)} "
-            f"--allow-cpu-fallback {'true' if worker.allow_cpu_fallback else 'false'}"
+            f"--allow-cpu-fallback {'true' if worker.allow_cpu_fallback else 'false'}; "
+            'rm -f "$tmp_script"; unset ENCODR_PAIRING_TOKEN'
         )
 
     @staticmethod

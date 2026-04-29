@@ -10,7 +10,7 @@ from encodr_shared.worker_runtime import discover_runtime_devices
 
 RUNTIME_COMPOSE_RELATIVE_PATH = Path(".runtime/compose.runtime.yml")
 RUNTIME_PROFILE_RELATIVE_PATH = Path(".runtime/compose.runtime.json")
-TARGET_SERVICES = ("api", "worker", "worker-agent")
+TARGET_SERVICES = ("api", "worker")
 
 
 @dataclass(frozen=True, slots=True)

@@ -94,7 +94,7 @@ export function SystemPage() {
         <HealthStatCard label="Storage" status={storage.status} value={storage.summary} />
       </section>
 
-      <SectionCard title="Runtime" subtitle="Live checks and active configuration sources.">
+      <SectionCard title="Runtime" subtitle="Live checks and configuration.">
         <div className="card-stack">
           <div className="info-strip">
             <StatusBadge value={runtime.status} />

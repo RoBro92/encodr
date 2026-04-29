@@ -13,7 +13,7 @@ from encodr_core.verification.models import (
     VerificationStatus,
 )
 from encodr_core.verification.rules import (
-    has_required_english_audio,
+    has_required_audio,
     has_required_subtitles,
     has_required_video,
     is_non_empty_output,
@@ -109,9 +109,9 @@ class OutputVerifier:
         self._add_check(
             checks,
             failures,
-            code="english_audio_present",
-            message="Required English audio is present in the output.",
-            passed=has_required_english_audio(plan, output_media),
+            code="required_audio_present",
+            message="Required audio language intent is present in the output.",
+            passed=has_required_audio(plan, output_media),
         )
         self._add_check(
             checks,

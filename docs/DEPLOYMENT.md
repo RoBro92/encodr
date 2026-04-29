@@ -10,6 +10,8 @@ The primary deployment target is a Debian LXC or Linux VM running Docker Compose
 - Postgres
 - Redis
 
+The remote `worker-agent` image is published for hosts that you pair from the Workers page. It is not part of the default production Compose startup; the in-repo service is gated behind the explicit `worker-agent` Compose profile for development or diagnostics.
+
 The host-side `encodr` command handles health checks, updates, admin reset, runtime compose generation, and mount validation.
 
 ## Release Artifacts
@@ -70,6 +72,8 @@ Encodr is built for a trusted internal network by default. For browser access th
 - keep API and UI access authenticated
 
 Do not expose Postgres, Redis, or worker registration endpoints directly to the public internet.
+
+The production Compose file does not publish Postgres or Redis host ports. Use `docker compose exec postgres psql ...` for local administration, or opt into `infra/compose/local.override.yml` during development, which binds those ports to `127.0.0.1` only.
 
 ## Required Secrets
 

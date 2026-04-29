@@ -1,8 +1,10 @@
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 
 from encodr_core.config import load_config_bundle
+from encodr_core.config.policy import PathProfileOverride
 from encodr_core.planning import PlanAction, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
 
@@ -150,6 +152,7 @@ def test_commentary_track_is_removed_from_audio_selection_intent() -> None:
 
     assert 2 in plan.audio.commentary_removed_stream_indices
     assert 2 not in plan.audio.selected_stream_indices
+    assert plan.audio.required_language_codes == ["eng"]
 
 
 def test_path_based_profile_override_resolution_uses_longest_match() -> None:
@@ -172,6 +175,36 @@ def test_path_based_profile_override_resolution_uses_longest_match() -> None:
     assert movie_plan.policy_context.matched_path_prefix == "/media/Movies"
     assert tv_plan.policy_context.selected_profile_name == "tv-default"
     assert tv_plan.policy_context.matched_path_prefix == "/media/TV"
+
+
+def test_path_based_profile_override_rejects_sibling_prefixes() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    bundle = replace(
+        bundle,
+        policy=bundle.policy.model_copy(
+            update={
+                "profiles": bundle.policy.profiles.model_copy(
+                    update={
+                        "path_overrides": [
+                            PathProfileOverride(path_prefix="/media/TV", profile="tv-default"),
+                            PathProfileOverride(path_prefix="/media/TV/Anime", profile="movies-default"),
+                        ]
+                    }
+                )
+            }
+        ),
+    )
+    media = parse_fixture("tv_episode.json")
+
+    sibling_plan = build_processing_plan(media, bundle, source_path="/media/TV4K/Show/Episode.mkv")
+    exact_plan = build_processing_plan(media, bundle, source_path="/media/TV")
+    child_plan = build_processing_plan(media, bundle, source_path="/media/TV/Show/Episode.mkv")
+    longest_plan = build_processing_plan(media, bundle, source_path="/media/TV/Anime/Episode.mkv")
+
+    assert sibling_plan.policy_context.matched_path_prefix is None
+    assert exact_plan.policy_context.matched_path_prefix == "/media/TV"
+    assert child_plan.policy_context.matched_path_prefix == "/media/TV"
+    assert longest_plan.policy_context.matched_path_prefix == "/media/TV/Anime"
 
 
 def test_low_confidence_subtitle_metadata_results_in_manual_review() -> None:
