@@ -278,7 +278,7 @@ export function WorkersPage() {
         {noWorkersConfigured ? (
           <EmptyState
             title="No workers configured"
-            message="Add this host as a worker or pair a remote worker when you are ready to give Encodr execution capacity."
+            message="Add this host as a worker or pair a remote worker when you are ready to assin jobs."
           />
         ) : (
           <div className="record-list worker-inventory-list" role="list" aria-label="Workers list">

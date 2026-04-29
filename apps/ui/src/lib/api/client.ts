@@ -127,7 +127,7 @@ export class ApiClient {
     if (!response.ok) {
       const message =
         typeof body === "object" && body !== null && "detail" in body
-          ? formatDetailMessage((body as { detail: unknown }).detail)
+          ? formatDetailMessage((body as { detail: unknown }).detail, response.statusText || "Request failed.")
           : response.statusText || "Request failed.";
 
       if (response.status === 401) {
@@ -170,12 +170,43 @@ export class ApiClient {
   }
 }
 
-function formatDetailMessage(detail: unknown) {
+function formatDetailMessage(detail: unknown, fallback = "Request failed."): string {
+  const messages = collectDetailMessages(detail);
+  if (messages.length > 0) {
+    return messages.join(" ");
+  }
+  return fallback;
+}
+
+function collectDetailMessages(detail: unknown): string[] {
   if (typeof detail === "string") {
-    return detail;
+    const trimmed = detail.trim();
+    return trimmed ? [trimmed] : [];
   }
+
+  if (typeof detail === "number" || typeof detail === "boolean") {
+    return [String(detail)];
+  }
+
+  if (Array.isArray(detail)) {
+    return detail.flatMap((item) => collectDetailMessages(item));
+  }
+
   if (detail && typeof detail === "object" && "message" in detail) {
-    return String((detail as { message: unknown }).message);
+    return collectDetailMessages((detail as { message: unknown }).message);
   }
-  return String(detail);
+
+  if (detail && typeof detail === "object" && "msg" in detail) {
+    return collectDetailMessages((detail as { msg: unknown }).msg);
+  }
+
+  if (detail && typeof detail === "object" && "error" in detail) {
+    return collectDetailMessages((detail as { error: unknown }).error);
+  }
+
+  if (detail && typeof detail === "object" && "detail" in detail) {
+    return collectDetailMessages((detail as { detail: unknown }).detail);
+  }
+
+  return [];
 }

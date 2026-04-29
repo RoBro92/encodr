@@ -93,7 +93,7 @@ export function DashboardPage() {
         <section className="dashboard-action-banner" role="note" aria-label="Action required">
           <div>
             <span className="section-eyebrow">Action Required</span>
-            <h2>Finish critical setup before relying on automation.</h2>
+            <h2>Finish critical setup.</h2>
           </div>
           <div className="dashboard-action-list">
             {actionItems.map((item) => (
@@ -129,7 +129,7 @@ export function DashboardPage() {
           <div className="dashboard-widget-header">
             <div>
               <h2>Transcoding Outcomes</h2>
-              <p>Current queue health and outcomes that need attention.</p>
+              <p>Queue health and actions.</p>
             </div>
             <Link className="text-link" to={APP_ROUTES.jobs}>Open jobs</Link>
           </div>
@@ -196,7 +196,7 @@ export function DashboardPage() {
         <div className="dashboard-widget-header">
           <div>
             <h2>System & Nodes</h2>
-            <p>General health checks without hardware telemetry noise.</p>
+            <p>Current system health overview.</p>
           </div>
           <Link className="text-link" to={APP_ROUTES.system}>Open system</Link>
         </div>

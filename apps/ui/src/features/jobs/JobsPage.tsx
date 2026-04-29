@@ -184,7 +184,7 @@ export function JobsPage() {
       <PageHeader
         eyebrow="Jobs"
         title="Jobs"
-        description="Monitor running work, inspect outcomes, and retry jobs that need another pass."
+        description="Monitor running jobs, inspect outcomes, and retry jobs that need another pass."
       />
 
       {retryMutation.error instanceof Error ? (
@@ -230,7 +230,7 @@ export function JobsPage() {
 
       <SectionCard
         title="Queue controls"
-        subtitle="Filter jobs, create work, or clear stalled queue history."
+        subtitle="Filter and create jobs, or clear stalled queue history."
         actions={
           <>
             <button
@@ -1321,7 +1321,7 @@ function emptyTitleForTab(tab: JobsTab) {
 
 function emptyMessageForTab(tab: JobsTab) {
   if (tab === "active") {
-    return "Create jobs from Library to populate the queue. Completed jobs stay in their own tab.";
+    return "Create jobs from Library to populate the queue.";
   }
   if (tab === "completed") {
     return "Successful jobs move here after verification and replacement finish.";

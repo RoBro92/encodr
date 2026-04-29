@@ -130,6 +130,30 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("alert")).toHaveTextContent(/bootstrap status unavailable/i);
   });
 
+  it("shows readable sign-in errors when the API returns object-shaped details", async () => {
+    mockFetchRoutes([
+      {
+        method: "POST",
+        path: "/api/auth/login",
+        status: 401,
+        body: { detail: [{ msg: "Invalid username or password." }] },
+      },
+    ]);
+
+    renderApp({ route: "/login" });
+
+    expect(await screen.findByLabelText(/username/i)).toBeInTheDocument();
+    await userEvent.clear(screen.getByLabelText(/username/i));
+    await userEvent.type(screen.getByLabelText(/username/i), "admin");
+    await userEvent.type(screen.getByLabelText(/^password$/i), "wrong-password");
+    await userEvent.click(screen.getByRole("button", { name: /sign in/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/unable to sign in/i);
+    expect(alert).toHaveTextContent(/invalid username or password\./i);
+    expect(alert).not.toHaveTextContent(/\[object Object\]/i);
+  });
+
   it("renders the simplified dashboard navigation and entry points", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },

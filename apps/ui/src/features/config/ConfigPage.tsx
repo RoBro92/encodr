@@ -131,19 +131,19 @@ const RULESET_ORDER: RulesetKey[] = ["movies", "movies_4k", "tv", "tv_4k"];
 const RULESET_META: Record<RulesetKey, { title: string; summary: string }> = {
   movies: {
     title: "Movies",
-    summary: "Standard film workflow for non-4K sources.",
+    summary: "Standard film workflow, efficient defaults.",
   },
   movies_4k: {
     title: "Movies 4K",
-    summary: "Separate 4K film policy with preserve-video defaults.",
+    summary: "4K film policy with preserve video defaults.",
   },
   tv: {
     title: "TV",
-    summary: "Episode workflow for non-4K TV and anime-like series sources.",
+    summary: "Standard TV/Anime workflow, efficient defaults.",
   },
   tv_4k: {
     title: "TV 4K",
-    summary: "Separate 4K TV policy for preserve or strip-only handling.",
+    summary: "4K TV/Anime policy with preserve video defaults..",
   },
 };
 
@@ -267,7 +267,7 @@ export function ConfigPage() {
         <div>
           <p className="section-eyebrow">Settings</p>
           <h1>Settings</h1>
-          <p>Choose library roots, set processing rules, and confirm runtime health.</p>
+          <p>Choose library roots, set processing rules, and confirm system health.</p>
         </div>
         <button
           className="settings-diagnostics-button"
@@ -357,7 +357,7 @@ export function ConfigPage() {
         </div>
 
         <div className="settings-overview-item">
-          <SectionCard title="Updates" subtitle="Check what is installed and what to run from the root console.">
+          <SectionCard title="Updates" subtitle="Check for updates.">
             <div className="settings-updates-stack">
               <div className="info-strip">
                 <StatusBadge value={updateStatus.update_available ? "degraded" : "healthy"} />
@@ -946,7 +946,7 @@ function ProcessingRulesSection({
   return (
     <SectionCard
       title="Processing rules"
-      subtitle="Set separate defaults for Movies, TV, and 4K handling without editing raw config files."
+      subtitle="Set separate defaults for Movies, TV, and 4K handling."
     >
       <div className="settings-rules-shell" data-testid="processing-rules-section">
         <div className="settings-rules-tabs" role="tablist" aria-label="Processing rulesets">
