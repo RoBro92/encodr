@@ -40,6 +40,7 @@ class SelectedStreamSet(ConfigModel):
 class AudioSelectionIntent(ConfigModel):
     selected_stream_indices: list[int] = Field(default_factory=list)
     dropped_stream_indices: list[int] = Field(default_factory=list)
+    required_language_codes: list[str] = Field(default_factory=list)
     primary_stream_index: int | None = None
     preserved_atmos_stream_indices: list[int] = Field(default_factory=list)
     preserved_surround_stream_indices: list[int] = Field(default_factory=list)
@@ -51,6 +52,8 @@ class AudioSelectionIntent(ConfigModel):
 class SubtitleSelectionIntent(ConfigModel):
     selected_stream_indices: list[int] = Field(default_factory=list)
     dropped_stream_indices: list[int] = Field(default_factory=list)
+    required_language_codes: list[str] = Field(default_factory=list)
+    required_forced_language_codes: list[str] = Field(default_factory=list)
     forced_stream_indices: list[int] = Field(default_factory=list)
     main_stream_index: int | None = None
     hearing_impaired_stream_indices: list[int] = Field(default_factory=list)

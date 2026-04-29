@@ -95,13 +95,21 @@ def resolve_profile_for_path(
     matches = [
         override
         for override in overrides
-        if source_text.startswith(Path(override.path_prefix).as_posix())
+        if path_matches_prefix(source_text, Path(override.path_prefix).as_posix())
     ]
     if not matches:
         return None, None
 
     matched_override = max(matches, key=lambda item: len(Path(item.path_prefix).as_posix()))
     return config_bundle.profiles[matched_override.profile], matched_override.path_prefix
+
+
+def path_matches_prefix(source_path: str, path_prefix: str) -> bool:
+    source = Path(source_path).as_posix().rstrip("/") or "/"
+    prefix = Path(path_prefix).as_posix().rstrip("/") or "/"
+    if prefix == "/":
+        return source.startswith("/")
+    return source == prefix or source.startswith(f"{prefix}/")
 
 
 def merge_optional_model(base_model, override_model):
@@ -206,4 +214,3 @@ def infer_template_kind(
 
 def target_container_extension(container: OutputContainer) -> str:
     return container.value
-

@@ -46,6 +46,8 @@ from encodr_shared import (
     probe_execution_backends,
     probe_which,
     recommend_worker_concurrency,
+    serialise_backend_probe,
+    serialise_binary_probe,
 )
 
 logger = logging.getLogger("encodr.worker.loop")
@@ -167,42 +169,12 @@ class LocalWorkerConfiguration:
     allow_cpu_fallback: bool
 
 
-def _serialise_backend_probe(probe) -> dict[str, object]:
-    preference_key = {
-        "cpu": "cpu_only",
-        "intel_igpu": "prefer_intel_igpu",
-        "nvidia_gpu": "prefer_nvidia_gpu",
-        "amd_gpu": "prefer_amd_gpu",
-    }.get(probe.backend, probe.backend)
-    return {
-        "backend": probe.backend,
-        "preference_key": preference_key,
-        "detected": probe.detected,
-        "usable_by_ffmpeg": probe.usable,
-        "ffmpeg_path_verified": bool(probe.details.get("ffmpeg_path_verified", probe.usable)),
-        "status": probe.status,
-        "message": probe.message,
-        "reason_unavailable": probe.details.get("reason_unavailable"),
-        "recommended_usage": probe.details.get("recommended_usage"),
-        "device_paths": probe.details.get("device_paths", []),
-        "details": probe.details,
-    }
-
-
 def _binary_status_payload(configured_path: Path | str, *, name: str | None = None) -> dict[str, object]:
     probe = probe_binary(configured_path)
-    payload: dict[str, object] = {
-        "configured_path": probe.configured_path,
-        "resolved_path": probe.resolved_path,
-        "exists": probe.exists,
-        "executable": probe.executable,
-        "discoverable": probe.discoverable,
-        "status": probe.status,
-        "message": probe.message,
-    }
-    if name == "vainfo":
-        payload["which"] = probe_which("vainfo")
-    return payload
+    return serialise_binary_probe(
+        probe,
+        which_payload=probe_which("vainfo") if name == "vainfo" else None,
+    )
 
 
 def _binary_inventory_item(name: str, payload: dict[str, object]) -> dict[str, object]:
@@ -229,7 +201,7 @@ def build_local_worker_capability_report(
         for path in config_bundle.workers.local.media_mounts
     ]
     backend_probes = probe_execution_backends(config_bundle.app.media.ffmpeg_path)
-    hardware_probes = [_serialise_backend_probe(item) for item in backend_probes]
+    hardware_probes = [serialise_backend_probe(item) for item in backend_probes]
     runtime_device_paths = discover_runtime_devices()
     execution_backends: list[str] = []
     if ffmpeg["status"] == "healthy":
@@ -1024,8 +996,8 @@ class LocalWorkerLoop:
                     "selection_reason": "Dry run analysis does not perform encoding.",
                 }
             )
-            jobs.mark_running_for_worker(
-                job,
+            claimed_job = jobs.claim_pending_for_worker(
+                job.id,
                 worker=local_worker_config.worker,
                 requested_backend=(
                     _effective_preferred_backend(
@@ -1035,7 +1007,21 @@ class LocalWorkerLoop:
                     if job.job_kind != JobKind.DRY_RUN
                     else None
                 ),
+                max_running_assignments=max(1, int(local_worker_config.worker.max_concurrent_jobs or 1)),
             )
+            if claimed_job is None:
+                completed_at = datetime.now(timezone.utc)
+                session.commit()
+                self.status_tracker.record_idle_run(
+                    started_at=run_started_at,
+                    completed_at=completed_at,
+                )
+                return WorkerRunSummary(
+                    processed_job=False,
+                    started_at=run_started_at,
+                    completed_at=completed_at,
+                )
+            job = claimed_job
             self.status_tracker.record_job_started(
                 job_id=job.id,
                 backend=str(

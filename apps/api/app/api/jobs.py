@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -121,12 +122,15 @@ async def stream_job_progress(
         last_digest: str | None = None
         while not await request.is_disconnected():
             with session_factory() as session:
-                jobs = JobsService().list_jobs(session, limit=100)
+                jobs = JobsService().list_progress_stream_jobs(
+                    session,
+                    recent_terminal_since=datetime.now(timezone.utc) - timedelta(minutes=5),
+                    limit=100,
+                )
                 payload = {
                     "items": [
                         json.loads(JobSummaryResponse.from_model(job).model_dump_json())
                         for job in jobs
-                        if _is_progress_stream_candidate(job)
                     ],
                 }
             digest = json.dumps(payload, sort_keys=True)
@@ -144,20 +148,6 @@ async def stream_job_progress(
             "X-Accel-Buffering": "no",
         },
     )
-
-
-def _is_progress_stream_candidate(job) -> bool:
-    return job.status in {
-        JobStatus.PENDING,
-        JobStatus.SCHEDULED,
-        JobStatus.RUNNING,
-        JobStatus.COMPLETED,
-        JobStatus.FAILED,
-        JobStatus.INTERRUPTED,
-        JobStatus.CANCELLED,
-        JobStatus.MANUAL_REVIEW,
-        JobStatus.SKIPPED,
-    }
 
 
 @router.post("/clear-queue", response_model=BulkJobActionResponse)
@@ -406,35 +396,37 @@ def create_batch_jobs(
         created_count = 0
         blocked_count = 0
         schedule_windows = [item.model_dump(mode="json") for item in payload.schedule_windows]
+        planned_targets = []
         for source_file in source_files:
             tracked_file, _probe_snapshot, plan_snapshot = plans_service.plan_file(
                 session,
                 source_path=source_file.as_posix(),
             )
-            batch_results = jobs_service.create_batch_jobs(
-                session,
-                planned_targets=[(source_file.as_posix(), tracked_file, plan_snapshot)],
-                preferred_worker_id=payload.preferred_worker_id,
-                pinned_worker_id=payload.pinned_worker_id,
-                preferred_backend_override=payload.preferred_backend_override,
-                schedule_windows=schedule_windows,
-                backup_policy=payload.backup_policy,
-            )
-            for result in batch_results:
-                total_files += 1
-                if result["status"] == "created":
-                    created_count += 1
-                elif result["status"] == "blocked":
-                    blocked_count += 1
-                if not payload.summary_only:
-                    items.append(
-                        BatchJobItemResponse(
-                            source_path=result["source_path"],
-                            status=result["status"],
-                            message=result["message"],
-                            job=JobDetailResponse.from_model(result["job"]) if result["job"] is not None else None,
-                        )
+            planned_targets.append((source_file.as_posix(), tracked_file, plan_snapshot))
+        batch_results = jobs_service.create_batch_jobs(
+            session,
+            planned_targets=planned_targets,
+            preferred_worker_id=payload.preferred_worker_id,
+            pinned_worker_id=payload.pinned_worker_id,
+            preferred_backend_override=payload.preferred_backend_override,
+            schedule_windows=schedule_windows,
+            backup_policy=payload.backup_policy,
+        )
+        for result in batch_results:
+            total_files += 1
+            if result["status"] == "created":
+                created_count += 1
+            elif result["status"] == "blocked":
+                blocked_count += 1
+            if not payload.summary_only:
+                items.append(
+                    BatchJobItemResponse(
+                        source_path=result["source_path"],
+                        status=result["status"],
+                        message=result["message"],
+                        job=JobDetailResponse.from_model(result["job"]) if result["job"] is not None else None,
                     )
+                )
         session.commit()
         return BatchJobCreateResponse(
             scope=scope,
@@ -498,6 +490,10 @@ def create_dry_run_jobs(
             planned_targets.append(
                 (source_file.as_posix(), tracked_file, plan_snapshot, effective_config_payload)
             )
+        config_payloads_by_source_path = {
+            source_path: config_payload
+            for source_path, _tracked_file, _plan_snapshot, config_payload in planned_targets
+        }
         batch_results = JobsService().create_batch_jobs(
             session,
             planned_targets=[(source_path, tracked_file, plan_snapshot) for source_path, tracked_file, plan_snapshot, _ in planned_targets],
@@ -515,11 +511,7 @@ def create_dry_run_jobs(
                 "source_path": source_path,
                 "tracked_file_id": tracked_file.id,
                 "plan_snapshot_id": plan_snapshot.id,
-                "config_bundle": next(
-                    config_payload
-                    for planned_source_path, _tracked_file, _plan_snapshot, config_payload in planned_targets
-                    if planned_source_path == source_path
-                ),
+                "config_bundle": config_payloads_by_source_path[source_path],
             },
             ignore_worker_schedule=payload.ignore_worker_schedule,
         )

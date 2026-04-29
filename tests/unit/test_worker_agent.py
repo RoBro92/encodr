@@ -6,6 +6,8 @@ from pathlib import Path
 
 import pytest
 from encodr_core.execution import ExecutionResult
+from encodr_core.replacement import ReplacementResult
+from encodr_core.verification import VerificationResult
 
 
 pytestmark = [pytest.mark.unit]
@@ -130,7 +132,7 @@ def test_worker_agent_uses_existing_token_without_reregistering(tmp_path: Path) 
     assert requester.calls[0]["bearer_token"] == "persisted-token"
 
 
-def test_worker_agent_reregisters_when_stored_token_is_rejected(tmp_path: Path) -> None:
+def test_worker_agent_reregisters_when_stored_token_is_rejected_with_pairing_token(tmp_path: Path) -> None:
     requester = FakeRequester()
     token_file = tmp_path / "worker.token"
     token_file.write_text("stale-token", encoding="utf-8")
@@ -148,7 +150,7 @@ def test_worker_agent_reregisters_when_stored_token_is_rejected(tmp_path: Path) 
             "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
             "ENCODR_WORKER_AGENT_KEY": "remote-amd-01",
             "ENCODR_WORKER_AGENT_DISPLAY_NAME": "Remote AMD Worker",
-            "ENCODR_WORKER_AGENT_REGISTRATION_SECRET": "bootstrap-secret",
+            "ENCODR_WORKER_AGENT_PAIRING_TOKEN": "pending-pairing-token",
             "ENCODR_WORKER_AGENT_TOKEN_FILE": str(token_file),
         }
     )
@@ -161,8 +163,41 @@ def test_worker_agent_reregisters_when_stored_token_is_rejected(tmp_path: Path) 
     endpoints = [call["url"].rsplit("/", maxsplit=1)[-1] for call in requester.calls]
     assert endpoints[0] == "heartbeat"
     assert "register" in endpoints
+    register_call = next(call for call in requester.calls if call["url"].endswith("/worker/register"))
+    assert register_call["body"]["pairing_token"] == "pending-pairing-token"
     heartbeat_calls = [call for call in requester.calls if call["url"].endswith("/worker/heartbeat")]
     assert heartbeat_calls[-1]["bearer_token"] == "issued-token"
+
+
+def test_worker_agent_does_not_reregister_stale_token_with_registration_secret(tmp_path: Path) -> None:
+    requester = FakeRequester()
+    token_file = tmp_path / "worker.token"
+    token_file.write_text("stale-token", encoding="utf-8")
+
+    def request_json(*, method: str, url: str, body: dict | None = None, bearer_token: str | None = None) -> dict:
+        requester.calls.append({"method": method, "url": url, "body": body, "bearer_token": bearer_token})
+        if url.endswith("/worker/heartbeat"):
+            raise WorkerAgentHttpError(401, "Invalid worker credentials.")
+        return FakeRequester.request_json(requester, method=method, url=url, body=body, bearer_token=bearer_token)
+
+    requester.request_json = request_json  # type: ignore[attr-defined]
+    client = WorkerApiClient(base_url="http://encodr.test/api", requester=requester)
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_KEY": "remote-amd-01",
+            "ENCODR_WORKER_AGENT_DISPLAY_NAME": "Remote AMD Worker",
+            "ENCODR_WORKER_AGENT_REGISTRATION_SECRET": "bootstrap-secret",
+            "ENCODR_WORKER_AGENT_TOKEN_FILE": str(token_file),
+        }
+    )
+    service = WorkerAgentService(settings=settings, api_client=client)
+
+    with pytest.raises(WorkerAgentHttpError):
+        service.heartbeat()
+
+    assert token_file.read_text(encoding="utf-8") == "stale-token"
+    assert not any(call["url"].endswith("/worker/register") for call in requester.calls)
 
 
 def test_worker_agent_registration_payload_is_built_from_settings(tmp_path: Path) -> None:
@@ -375,6 +410,121 @@ def test_worker_agent_process_once_claims_and_submits_result(tmp_path: Path) -> 
     assert response["final_status"] == "completed"
     assert any(call["url"].endswith("/worker/jobs/job-1/claim") for call in requester.calls)
     assert any(call["url"].endswith("/worker/jobs/job-1/result") for call in requester.calls)
+
+
+def test_worker_agent_remote_cancellation_before_replacement_reports_cancelled(tmp_path: Path) -> None:
+    class FakeExecutionService:
+        def execute(
+            self,
+            *,
+            job_id: str,
+            plan_payload: dict,
+            media_payload: dict,
+            cancel_requested,
+            progress_callback,
+        ) -> ExecutionResult:
+            del job_id, plan_payload, media_payload, progress_callback
+            assert cancel_requested()
+            return ExecutionResult(
+                mode="cancelled",
+                status="cancelled",
+                command=[],
+                output_path=tmp_path / "scratch" / "staged.mkv",
+                stdout=None,
+                stderr=None,
+                failure_message="Cancellation was requested before verified output replacement.",
+                failure_category="cancelled_by_operator",
+                verification=VerificationResult.not_required(),
+                replacement=ReplacementResult.not_required(),
+                started_at=datetime.now(timezone.utc),
+                completed_at=datetime.now(timezone.utc),
+            )
+
+    requester = FakeRequester()
+
+    def request_json(*, method: str, url: str, body: dict | None = None, bearer_token: str | None = None) -> dict:
+        requester.calls.append({"method": method, "url": url, "body": body, "bearer_token": bearer_token})
+        if url.endswith("/worker/jobs/request"):
+            return {
+                "status": "assigned",
+                "job": {
+                    "job_id": "job-1",
+                    "tracked_file_id": "file-1",
+                    "plan_snapshot_id": "plan-1",
+                    "source_path": "/media/input.mkv",
+                    "plan_payload": {
+                        "action": "remux",
+                        "replace": {
+                            "in_place": True,
+                            "require_verification": True,
+                            "keep_original_until_verified": True,
+                            "delete_replaced_source": False,
+                        },
+                        "container": {"target_container": "mkv"},
+                        "selected_streams": {
+                            "video_stream_indices": [0],
+                            "audio_stream_indices": [1],
+                            "subtitle_stream_indices": [],
+                            "attachment_stream_indices": [],
+                            "data_stream_indices": [],
+                        },
+                        "video": {"transcode_required": False, "target_codec": None},
+                        "policy_context": {"policy_version": 1, "selected_profile_name": "movies-default"},
+                        "should_treat_as_protected": False,
+                    },
+                    "media_payload": {
+                        "file_path": "/media/input.mkv",
+                        "file_name": "input.mkv",
+                        "is_4k": False,
+                        "container": {"size_bytes": 123},
+                        "video_streams": [{"index": 0, "codec_name": "hevc", "width": 1920, "height": 1080}],
+                        "audio_streams": [{"index": 1, "codec_name": "eac3", "language": "eng", "channel_layout": "5.1"}],
+                        "subtitle_streams": [],
+                        "attachment_streams": [],
+                        "data_streams": [],
+                    },
+                    "requested_worker_type": None,
+                    "assignment_state": "assigned",
+                    "assigned_worker_id": "worker-1",
+                },
+            }
+        if "/worker/jobs/" in url and url.endswith("/progress"):
+            return {
+                "job_id": "job-1",
+                "updated_at": "2026-04-20T12:02:01Z",
+                "cancellation_requested": True,
+                "cancellation_reason": "operator requested cancellation",
+            }
+        if "/worker/jobs/" in url and url.endswith("/result"):
+            assert body is not None
+            assert body["result_payload"]["status"] == "cancelled"
+            assert body["result_payload"]["replacement"]["status"] == "not_required"
+            return {"job_id": "job-1", "final_status": "cancelled", "completed_at": "2026-04-20T12:03:00Z"}
+        return FakeRequester.request_json(requester, method=method, url=url, body=body, bearer_token=bearer_token)
+
+    requester.request_json = request_json  # type: ignore[attr-defined]
+    client = WorkerApiClient(base_url="http://encodr.test/api", requester=requester)
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_KEY": "remote-amd-01",
+            "ENCODR_WORKER_AGENT_TOKEN_FILE": str(tmp_path / "worker.token"),
+            "ENCODR_WORKER_AGENT_FFMPEG_PATH": str(tmp_path / "bin" / "ffmpeg"),
+            "ENCODR_WORKER_AGENT_FFPROBE_PATH": str(tmp_path / "bin" / "ffprobe"),
+            "ENCODR_WORKER_AGENT_SCRATCH_DIR": str(tmp_path / "scratch"),
+        }
+    )
+    settings.worker_token_file.write_text("persisted-token", encoding="utf-8")
+    (tmp_path / "scratch").mkdir(parents=True, exist_ok=True)
+
+    response = WorkerAgentService(
+        settings=settings,
+        api_client=client,
+        execution_service=FakeExecutionService(),
+    ).process_once()
+
+    assert response is not None
+    assert response["final_status"] == "cancelled"
 
 
 def test_remote_execution_preview_backend_accepts_transport_file_path(

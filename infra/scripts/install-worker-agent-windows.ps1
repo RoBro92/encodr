@@ -72,7 +72,18 @@ $PipExe = Join-Path $VenvDir "Scripts\pip.exe"
 
 Copy-Item -Path (Join-Path $ExtractedRoot.FullName "infra\scripts\uninstall-worker-agent-windows.ps1") -Destination $UninstallScript -Force
 
-$EnvContents = @"
+function Protect-AgentFile {
+    param([Parameter(Mandatory = $true)][string]$Path)
+    $identity = [System.Security.Principal.WindowsIdentity]::GetCurrent().Name
+    & icacls $Path /inheritance:r /grant:r "${identity}:F" "SYSTEM:F" "Administrators:F" | Out-Null
+}
+
+function Write-AgentEnv {
+    param(
+        [string]$PairingTokenValue,
+        [string]$RegistrationSecretValue
+    )
+    $EnvContents = @"
 `$env:ENCODR_WORKER_AGENT_API_BASE_URL = "$ServerUrl"
 `$env:ENCODR_WORKER_AGENT_KEY = "$WorkerKey"
 `$env:ENCODR_WORKER_AGENT_DISPLAY_NAME = "$DisplayName"
@@ -85,16 +96,21 @@ $EnvContents = @"
 `$env:ENCODR_WORKER_AGENT_FFPROBE_PATH = "ffprobe"
 `$env:ENCODR_WORKER_AGENT_PREFERRED_BACKEND = "$PreferredBackend"
 `$env:ENCODR_WORKER_AGENT_ALLOW_CPU_FALLBACK = "$AllowCpuFallback"
-`$env:ENCODR_WORKER_AGENT_PAIRING_TOKEN = "$PairingToken"
-`$env:ENCODR_WORKER_AGENT_REGISTRATION_SECRET = "$RegistrationSecret"
+`$env:ENCODR_WORKER_AGENT_PAIRING_TOKEN = "$PairingTokenValue"
+`$env:ENCODR_WORKER_AGENT_REGISTRATION_SECRET = "$RegistrationSecretValue"
 "@
-$EnvContents | Set-Content -Path $EnvFile -Encoding UTF8
+    $EnvContents | Set-Content -Path $EnvFile -Encoding UTF8
+    Protect-AgentFile -Path $EnvFile
+}
+
+Write-AgentEnv -PairingTokenValue $PairingToken -RegistrationSecretValue $RegistrationSecret
 
 $RunContents = @"
 . "$EnvFile"
 & "$PythonExe" -m app.main loop 999999
 "@
 $RunContents | Set-Content -Path $RunScript -Encoding UTF8
+Protect-AgentFile -Path $RunScript
 
 Write-Host "Registering worker with Encodr..."
 . $EnvFile
@@ -108,6 +124,7 @@ Write-Host "Waiting for pairing confirmation..."
 if ($LASTEXITCODE -ne 0) {
     throw "Worker pairing validation failed with exit code $LASTEXITCODE."
 }
+Write-AgentEnv -PairingTokenValue "" -RegistrationSecretValue ""
 
 $TaskName = "Encodr Worker Agent"
 $Action = New-ScheduledTaskAction -Execute "powershell.exe" -Argument "-NoProfile -ExecutionPolicy Bypass -File `"$RunScript`""

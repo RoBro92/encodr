@@ -14,10 +14,18 @@ def output_container_matches(media_file: MediaFile, target_container: OutputCont
     return target_container.value in format_name.split(",")
 
 
-def has_required_english_audio(plan: ProcessingPlan, media_file: MediaFile) -> bool:
+def has_required_audio(plan: ProcessingPlan, media_file: MediaFile) -> bool:
     if not plan.audio.selected_stream_indices:
         return True
-    return media_file.has_english_audio
+    required_languages = plan.audio.required_language_codes
+    if not required_languages:
+        return media_file.has_english_audio
+    output_languages = {language_code(stream.language) for stream in media_file.audio_streams}
+    return all(language in output_languages for language in required_languages)
+
+
+def has_required_english_audio(plan: ProcessingPlan, media_file: MediaFile) -> bool:
+    return has_required_audio(plan, media_file)
 
 
 def has_required_subtitles(plan: ProcessingPlan, media_file: MediaFile) -> bool:
@@ -25,9 +33,22 @@ def has_required_subtitles(plan: ProcessingPlan, media_file: MediaFile) -> bool:
         return True
     if not media_file.subtitle_streams:
         return False
+    subtitle_languages = {language_code(stream.language) for stream in media_file.subtitle_streams}
+    if plan.subtitles.required_language_codes:
+        if not all(language in subtitle_languages for language in plan.subtitles.required_language_codes):
+            return False
     if plan.subtitles.forced_stream_indices:
+        if plan.subtitles.required_forced_language_codes:
+            forced_languages = {
+                language_code(stream.language)
+                for stream in media_file.subtitle_streams
+                if stream.disposition.forced or stream.is_forced
+            }
+            return all(language in forced_languages for language in plan.subtitles.required_forced_language_codes)
         return media_file.has_forced_english_subtitle
-    return any(stream.language == "eng" for stream in media_file.subtitle_streams)
+    if plan.subtitles.required_language_codes:
+        return True
+    return "eng" in subtitle_languages
 
 
 def has_required_video(plan: ProcessingPlan, output_media: MediaFile) -> bool:
@@ -62,3 +83,7 @@ def retains_required_atmos(plan: ProcessingPlan, output_media: MediaFile) -> boo
 
 def is_non_empty_output(file_path: Path) -> bool:
     return file_path.exists() and file_path.is_file() and file_path.stat().st_size > 0
+
+
+def language_code(value: str | None) -> str:
+    return value or "und"

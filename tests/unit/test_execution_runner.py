@@ -10,6 +10,7 @@ from app.executor.loop import LocalWorkerLoop
 from app.executor.service import WorkerExecutionService
 from encodr_core.config import load_config_bundle
 from encodr_core.execution import (
+    ExecutionCancelledError,
     ExecutionResult,
     ExecutionRunner,
     FFmpegProcessError,
@@ -541,6 +542,44 @@ def test_worker_loop_commits_running_state_before_execution(tmp_path: Path) -> N
     )
 
     assert loop.run_once() is True
+
+
+def test_worker_execution_cancellation_removes_staged_output(tmp_path: Path) -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    staged_path = tmp_path / "scratch" / "cancelled.tmp.mkv"
+
+    class CancelledRunner(ExecutionRunner):
+        def execute_plan(self, *args, **kwargs):  # type: ignore[no-untyped-def]
+            staged_path.parent.mkdir(parents=True, exist_ok=True)
+            staged_path.write_text("partial output", encoding="utf-8")
+            raise ExecutionCancelledError(
+                "ffmpeg execution was cancelled by the operator.",
+                file_path=tmp_path / "input.mkv",
+                command=["ffmpeg", "-i", "input.mkv", staged_path.as_posix()],
+                details={"output_path": staged_path.as_posix(), "exit_code": None},
+            )
+
+    with database_session() as session:
+        source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        JobRepository(session).mark_running(job, worker_name="worker-local")
+
+        result = WorkerExecutionService(runner=CancelledRunner()).execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        assert result.status == "cancelled"
+        assert not staged_path.exists()
+        assert job.status == JobStatus.CANCELLED
+        assert job.tracked_file.last_processed_policy_version is None
 
 
 def test_temp_output_path_handling() -> None:

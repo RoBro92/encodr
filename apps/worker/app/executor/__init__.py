@@ -1,3 +1,5 @@
+"""Compatibility exports for the packaged local worker entrypoint."""
+
 from app.executor.loop import LocalWorkerLoop
 from app.executor.service import WorkerExecutionService
 

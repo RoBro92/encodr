@@ -44,6 +44,29 @@ class FFmpegClient:
         if process_started_callback is not None:
             process_started_callback(process)
 
+        cancelled = False
+        cancel_stop = threading.Event()
+
+        def cancellation_watcher() -> None:
+            nonlocal cancelled
+            while process.poll() is None:
+                if cancel_requested is not None and _cancel_requested(cancel_requested):
+                    cancelled = True
+                    cancel_stop.set()
+                    process.terminate()
+                    try:
+                        process.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
+                    return
+                if cancel_stop.wait(0.25):
+                    return
+
+        cancellation_thread: threading.Thread | None = None
+        if cancel_requested is not None:
+            cancellation_thread = threading.Thread(target=cancellation_watcher, daemon=True)
+            cancellation_thread.start()
+
         stdout_lines: list[str] = []
         stderr_lines: list[str] = []
         stderr_thread = threading.Thread(
@@ -72,11 +95,14 @@ class FFmpegClient:
                 progress_payload = {}
 
         returncode = process.wait()
+        cancel_stop.set()
+        if cancellation_thread is not None:
+            cancellation_thread.join()
         stderr_thread.join()
         completed_at = datetime.now(timezone.utc)
         stdout = "".join(stdout_lines)
         stderr = "".join(stderr_lines)
-        if cancel_requested is not None and cancel_requested():
+        if cancelled or (cancel_requested is not None and _cancel_requested(cancel_requested)):
             raise ExecutionCancelledError(
                 "ffmpeg execution was cancelled by the operator.",
                 file_path=command_plan.input_path,
@@ -185,6 +211,13 @@ def _parse_float(value: str | None) -> float | None:
         return float(value)
     except ValueError:
         return None
+
+
+def _cancel_requested(callback: Callable[[], bool]) -> bool:
+    try:
+        return bool(callback())
+    except Exception:
+        return False
 
 
 def _parse_speed(value: str | None) -> float | None:

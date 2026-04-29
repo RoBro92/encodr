@@ -524,10 +524,33 @@ def test_docker_compose_mounts_temp_workspace_into_api_and_worker(repo_root: Pat
     compose_file = (repo_root / "docker-compose.yml").read_text(encoding="utf-8")
 
     assert compose_file.count("restart: unless-stopped") == 6
+    assert "profiles:\n      - worker-agent" in compose_file
     assert "- ./.runtime/data:/data" in compose_file
     assert "- ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp" in compose_file
     assert "- ./postgres-data:/var/lib/postgresql/data" in compose_file
     assert "- ./redis-data:/data" in compose_file
+    assert '"${POSTGRES_PORT:-5432}:5432"' not in compose_file
+    assert '"${REDIS_PORT:-6379}:6379"' not in compose_file
+
+
+def test_local_compose_override_exposes_datastores_on_loopback_only(repo_root: Path) -> None:
+    override_file = (repo_root / "infra" / "compose" / "local.override.yml").read_text(encoding="utf-8")
+
+    assert '"127.0.0.1:${POSTGRES_PORT:-5432}:5432"' in override_file
+    assert '"127.0.0.1:${REDIS_PORT:-6379}:6379"' in override_file
+
+
+def test_worker_agent_installers_protect_and_clear_registration_credentials(repo_root: Path) -> None:
+    unix_installer = (repo_root / "infra" / "scripts" / "install-worker-agent-unix.sh").read_text(encoding="utf-8")
+    windows_installer = (repo_root / "infra" / "scripts" / "install-worker-agent-windows.ps1").read_text(encoding="utf-8")
+
+    assert "--pairing-token-stdin" in unix_installer
+    assert 'chmod 600 "$ENV_FILE"' in unix_installer
+    assert "clear_registration_credentials" in unix_installer
+    assert 'ENCODR_WORKER_AGENT_PAIRING_TOKEN=""' not in unix_installer
+    assert "Protect-AgentFile" in windows_installer
+    assert "icacls" in windows_installer
+    assert 'Write-AgentEnv -PairingTokenValue "" -RegistrationSecretValue ""' in windows_installer
 
 
 def test_compose_env_sets_local_media_and_temp_fallbacks(repo_root: Path) -> None:
@@ -665,6 +688,17 @@ def test_install_script_help_mentions_version_override(repo_root: Path) -> None:
     assert 'detect_network_ip_addresses()' in install_script
     assert 'ensure_ui_allowed_hosts_for_network_ips' in install_script
     assert 'hostname -I' not in install_script
+
+
+def test_release_workflow_gates_image_publishing_on_validation(repo_root: Path) -> None:
+    workflow = (repo_root / ".github" / "workflows" / "release.yml").read_text(encoding="utf-8")
+
+    assert "validate-release:" in workflow
+    assert "Run release gate" in workflow
+    assert "bash infra/scripts/release-check.sh" in workflow
+    assert "npm ci" in workflow
+    assert "python -m compileall encodr_cli.py" in workflow
+    assert "build-images:\n    name: build-${{ matrix.name }}\n    needs:\n      - resolve-release\n      - validate-release" in workflow
 
 
 def test_public_readme_uses_the_remote_installer(repo_root: Path) -> None:

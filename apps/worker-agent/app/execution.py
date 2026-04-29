@@ -8,6 +8,7 @@ from app.config import WorkerAgentSettings
 from encodr_core.config import deserialise_config_bundle
 from encodr_core.execution import (
     BackendSelectionError,
+    ExecutionCancelledError,
     ExecutionProgressUpdate,
     ExecutionResult,
     ExecutionRunner,
@@ -48,10 +49,23 @@ class RemoteExecutionService:
         preferred_backend: str | None = None,
         allow_cpu_fallback: bool | None = None,
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> ExecutionResult:
         plan = ProcessingPlan.model_validate(plan_payload)
         media_file, source_path = self._media_file_from_payload(media_payload)
         verifier = OutputVerifier(probe_client=FFprobeClient(binary_path=self.settings.ffprobe_path))
+
+        if self._cancel_requested(cancel_requested):
+            return self._cancelled_result(
+                mode="cancelled",
+                command=[],
+                output_path=None,
+                stdout=None,
+                stderr=None,
+                exit_code=None,
+                failure_message="Cancellation was requested before remote execution started.",
+                started_at=datetime.now(timezone.utc),
+            )
 
         if job_kind == "dry_run":
             return self._execute_analysis(
@@ -74,6 +88,25 @@ class RemoteExecutionService:
                 progress_callback=progress_callback,
                 preferred_backend=requested_backend,
                 allow_cpu_fallback=allow_fallback,
+                cancel_requested=cancel_requested,
+            )
+        except ExecutionCancelledError as error:
+            self._unlink_staged_output(error.details.get("output_path"))
+            completed_at = datetime.now(timezone.utc)
+            result = self._cancelled_result(
+                mode="cancelled",
+                command=error.command or [],
+                output_path=error.details.get("output_path"),
+                stdout=error.details.get("stdout"),
+                stderr=error.details.get("stderr"),
+                exit_code=error.details.get("exit_code"),
+                failure_message=error.message,
+                requested_backend=error.details.get("requested_backend"),
+                actual_backend=error.details.get("actual_backend"),
+                actual_accelerator=error.details.get("actual_accelerator"),
+                backend_fallback_used=bool(error.details.get("backend_fallback_used", False)),
+                backend_selection_reason=error.details.get("backend_selection_reason"),
+                started_at=completed_at,
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
@@ -112,6 +145,11 @@ class RemoteExecutionService:
             )
 
         if result.status == "staged":
+            if self._cancel_requested(cancel_requested):
+                return self._cancelled_result_from_staged(
+                    staged_result=result,
+                    failure_message="Cancellation was requested before output verification or replacement.",
+                )
             if progress_callback is not None:
                 progress_callback(
                     ExecutionProgressUpdate(
@@ -126,6 +164,7 @@ class RemoteExecutionService:
                 staged_result=result,
                 verifier=verifier,
                 progress_callback=progress_callback,
+                cancel_requested=cancel_requested,
             )
         return result
 
@@ -303,6 +342,7 @@ class RemoteExecutionService:
         staged_result: ExecutionResult,
         verifier: OutputVerifier,
         progress_callback: Callable[[ExecutionProgressUpdate], None] | None = None,
+        cancel_requested: Callable[[], bool] | None = None,
     ) -> ExecutionResult:
         completed_at = datetime.now(timezone.utc)
         if staged_result.output_path is None:
@@ -329,6 +369,12 @@ class RemoteExecutionService:
                 replacement=ReplacementResult.not_required(),
                 started_at=staged_result.started_at,
                 completed_at=completed_at,
+            )
+
+        if self._cancel_requested(cancel_requested):
+            return self._cancelled_result_from_staged(
+                staged_result=staged_result,
+                failure_message="Cancellation was requested before output verification.",
             )
 
         verification = verifier.verify_output(
@@ -374,6 +420,14 @@ class RemoteExecutionService:
         )
         if compression_failure is not None:
             return compression_failure
+
+        if self._cancel_requested(cancel_requested):
+            return self._cancelled_result_from_staged(
+                staged_result=staged_result,
+                failure_message="Cancellation was requested before verified output replacement.",
+                verification=verification,
+                metrics=staged_metrics,
+            )
 
         if progress_callback is not None:
             progress_callback(
@@ -492,6 +546,94 @@ class RemoteExecutionService:
             completed_at=completed_at,
             **metrics,
         )
+
+    def _cancelled_result_from_staged(
+        self,
+        *,
+        staged_result: ExecutionResult,
+        failure_message: str,
+        verification: VerificationResult | None = None,
+        metrics: dict[str, float | int | None] | None = None,
+    ) -> ExecutionResult:
+        self._unlink_staged_output(staged_result.output_path)
+        return self._cancelled_result(
+            mode="cancelled",
+            command=staged_result.command,
+            output_path=staged_result.output_path,
+            stdout=staged_result.stdout,
+            stderr=staged_result.stderr,
+            exit_code=staged_result.exit_code,
+            failure_message=failure_message,
+            requested_backend=staged_result.requested_backend,
+            actual_backend=staged_result.actual_backend,
+            actual_accelerator=staged_result.actual_accelerator,
+            backend_fallback_used=staged_result.backend_fallback_used,
+            backend_selection_reason=staged_result.backend_selection_reason,
+            started_at=staged_result.started_at,
+            verification=verification,
+            metrics=metrics,
+        )
+
+    @staticmethod
+    def _cancelled_result(
+        *,
+        mode: str,
+        command: list[str],
+        output_path: Path | str | None,
+        stdout: str | None,
+        stderr: str | None,
+        exit_code: int | None,
+        failure_message: str,
+        requested_backend: str | None = None,
+        actual_backend: str | None = None,
+        actual_accelerator: str | None = None,
+        backend_fallback_used: bool = False,
+        backend_selection_reason: str | None = None,
+        started_at: datetime,
+        verification: VerificationResult | None = None,
+        metrics: dict[str, float | int | None] | None = None,
+    ) -> ExecutionResult:
+        return ExecutionResult(
+            mode=mode,
+            status="cancelled",
+            command=command,
+            output_path=Path(output_path) if output_path is not None else None,
+            stdout=stdout,
+            stderr=stderr,
+            exit_code=exit_code,
+            failure_message=failure_message,
+            failure_category="cancelled_by_operator",
+            requested_backend=requested_backend,
+            actual_backend=actual_backend,
+            actual_accelerator=actual_accelerator,
+            backend_fallback_used=backend_fallback_used,
+            backend_selection_reason=backend_selection_reason,
+            verification=verification or VerificationResult.not_required(),
+            replacement=ReplacementResult.not_required(),
+            started_at=started_at,
+            completed_at=datetime.now(timezone.utc),
+            **(metrics or {}),
+        )
+
+    @staticmethod
+    def _cancel_requested(callback: Callable[[], bool] | None) -> bool:
+        if callback is None:
+            return False
+        try:
+            return bool(callback())
+        except Exception:
+            return False
+
+    @staticmethod
+    def _unlink_staged_output(path: Path | str | None) -> None:
+        if path is None:
+            return
+        try:
+            Path(path).unlink()
+        except FileNotFoundError:
+            return
+        except OSError:
+            return
 
 
 def file_size_or_none(path: Path | str | None) -> int | None:

@@ -1214,6 +1214,10 @@ function BootstrapResultPanel({ result }: { result: RemoteWorkerOnboardingRespon
         <span>Pending pairing until {formatDateTime(result.pairing_token_expires_at)}</span>
       </div>
       <label className="field">
+        <span>Pairing token</span>
+        <input readOnly value={result.pairing_token} />
+      </label>
+      <label className="field">
         <span>Bootstrap command</span>
         <textarea readOnly value={result.bootstrap_command} rows={7} />
       </label>

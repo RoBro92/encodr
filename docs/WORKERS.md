@@ -23,7 +23,9 @@ Remote workers pair from the Workers page with `Add remote worker`. Encodr gener
 - Linux
 - macOS
 
-The bootstrap command installs the worker agent, stores the server URL and pairing token, registers the worker, validates its first heartbeat, and starts a background service.
+The bootstrap command installs the worker agent, prompts for the pairing token, registers the worker, validates its first heartbeat, clears pairing credentials from the agent environment, and starts a background service.
+
+The default production Compose stack does not start a remote `worker-agent` container or create a fake remote worker. Use `Add remote worker` and run the generated command on the actual worker host. The Compose `worker-agent` service remains available behind the explicit `worker-agent` profile for development and diagnostics.
 
 Default install locations:
 

@@ -50,6 +50,18 @@ class JobsService:
             offset=offset,
         )
 
+    def list_progress_stream_jobs(
+        self,
+        session: Session,
+        *,
+        recent_terminal_since: datetime | None,
+        limit: int = 100,
+    ) -> list[Job]:
+        return JobRepository(session).list_progress_stream_jobs(
+            recent_terminal_since=recent_terminal_since,
+            limit=limit,
+        )
+
     def get_job(self, session: Session, *, job_id: str) -> Job:
         job = JobRepository(session).get_by_id(job_id)
         if job is None:
@@ -78,13 +90,16 @@ class JobsService:
             tracked_file_id=tracked_file_id,
             plan_snapshot_id=plan_snapshot_id,
         )
+        repository = JobRepository(session)
+        if repository.has_active_job_for_tracked_file(tracked_file.id):
+            raise ApiConflictError("An active job already exists for this tracked file.")
         self._validate_review_gate(
             session,
             tracked_file=tracked_file,
             plan_snapshot=plan_snapshot,
             allow_review_approved=allow_review_approved,
         )
-        job = JobRepository(session).create_job_from_plan(
+        job = repository.create_job_from_plan(
             tracked_file,
             plan_snapshot,
             preferred_worker_id=preferred_worker_id,
@@ -118,7 +133,10 @@ class JobsService:
             plan_snapshot=original_job.plan_snapshot,
             allow_review_approved=False,
         )
-        return JobRepository(session).create_job_from_plan(
+        repository = JobRepository(session)
+        if repository.has_active_job_for_tracked_file(original_job.tracked_file_id):
+            raise ApiConflictError("An active job already exists for this tracked file.")
+        return repository.create_job_from_plan(
             original_job.tracked_file,
             original_job.plan_snapshot,
             attempt_count=original_job.attempt_count + 1,
@@ -163,13 +181,12 @@ class JobsService:
             else None
         )
         if assigned_worker is not None and assigned_worker.worker_type != WorkerType.LOCAL:
+            if job.cancellation_requested_at is not None:
+                return job
             jobs.mark_cancellation_requested(
                 job,
                 requested_at=cancelled_at,
-                reason=(
-                    "Cancellation requested for the remote worker. The current worker agent "
-                    "does not support safe in-flight process termination yet."
-                ),
+                reason="Cancellation requested for the remote worker.",
             )
             logger.warning("remote job cancellation requested", extra={"job_id": job.id, "worker_id": job.assigned_worker_id})
             return job

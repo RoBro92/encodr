@@ -189,6 +189,76 @@ def test_verified_remux_output_passes_basic_verification(tmp_path: Path) -> None
     assert result.output_summary.audio_stream_count >= 1
 
 
+def test_language_aware_audio_verification_uses_plan_intent(tmp_path: Path) -> None:
+    source_media = media_at_path(parse_fixture("no_english_audio.json"), tmp_path / "Movies" / "Example Japanese Film.mkv")
+    source_media.file_path.parent.mkdir(parents=True)
+    source_media.file_path.write_text("source", encoding="utf-8")
+    output_path = tmp_path / "scratch" / "output.mkv"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text("staged", encoding="utf-8")
+    output_media = media_at_path(parse_fixture("no_english_audio.json"), output_path)
+    plan = replace_plan("no_english_audio.json", source_media.file_path)
+    plan.audio = plan.audio.model_copy(update={"selected_stream_indices": [1], "required_language_codes": ["jpn"]})
+
+    result = OutputVerifier(probe_client=StaticProbeClient(output_media)).verify_output(
+        staged_output_path=output_path,
+        plan=plan,
+        source_media=source_media,
+    )
+
+    assert result.status == VerificationStatus.PASSED
+
+
+def test_language_aware_audio_verification_fails_when_required_language_missing(tmp_path: Path) -> None:
+    source_media = media_at_path(parse_fixture("non4k_remux_languages.json"), tmp_path / "Movies" / "Example German Film.mkv")
+    source_media.file_path.parent.mkdir(parents=True)
+    source_media.file_path.write_text("source", encoding="utf-8")
+    output_path = tmp_path / "scratch" / "output.mkv"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text("staged", encoding="utf-8")
+    output_media = media_at_path(parse_fixture("non4k_remux_languages.json"), output_path)
+    plan = replace_plan("non4k_remux_languages.json", source_media.file_path)
+    plan.audio = plan.audio.model_copy(update={"selected_stream_indices": [1], "required_language_codes": ["deu"]})
+
+    result = OutputVerifier(probe_client=StaticProbeClient(output_media)).verify_output(
+        staged_output_path=output_path,
+        plan=plan,
+        source_media=source_media,
+    )
+
+    assert result.status == VerificationStatus.FAILED
+    assert any(failure.code == "required_audio_present" for failure in result.failures)
+
+
+def test_language_aware_subtitle_verification_uses_forced_language_intent(tmp_path: Path) -> None:
+    source_media = media_at_path(parse_fixture("non4k_remux_languages.json"), tmp_path / "Movies" / "Example Film.mkv")
+    source_media.file_path.parent.mkdir(parents=True)
+    source_media.file_path.write_text("source", encoding="utf-8")
+    output_path = tmp_path / "scratch" / "output.mkv"
+    output_path.parent.mkdir(parents=True)
+    output_path.write_text("staged", encoding="utf-8")
+    output_media = media_at_path(parse_fixture("non4k_remux_languages.json"), output_path)
+    output_media.subtitle_streams[0].tags.language = "deu"
+    output_media.subtitle_streams[0].disposition.forced = True
+    plan = replace_plan("non4k_remux_languages.json", source_media.file_path)
+    plan.subtitles = plan.subtitles.model_copy(
+        update={
+            "selected_stream_indices": [5],
+            "forced_stream_indices": [5],
+            "required_language_codes": ["deu"],
+            "required_forced_language_codes": ["deu"],
+        }
+    )
+
+    result = OutputVerifier(probe_client=StaticProbeClient(output_media)).verify_output(
+        staged_output_path=output_path,
+        plan=plan,
+        source_media=source_media,
+    )
+
+    assert result.status == VerificationStatus.PASSED
+
+
 def replace_plan(fixture_name: str, source_path: Path) -> ProcessingPlan:
     bundle = load_config_bundle(project_root=REPO_ROOT)
     media = media_at_path(parse_fixture(fixture_name), source_path)

@@ -22,6 +22,7 @@ from encodr_shared.update import UpdateCheckResult, UpdateCheckSettings, UpdateC
 from encodr_shared.versioning import find_project_root, is_version_newer, parse_version, read_version
 from encodr_shared.worker_policy import recommend_worker_concurrency
 from encodr_shared.worker_runtime import (
+    backend_preference_key,
     detect_ffmpeg_hwaccels,
     discover_runtime_devices,
     probe_binary,
@@ -31,6 +32,8 @@ from encodr_shared.worker_runtime import (
     probe_intel_qsv,
     probe_vaapi,
     probe_which,
+    serialise_backend_probe,
+    serialise_binary_probe,
 )
 
 __all__ = [
@@ -43,6 +46,7 @@ __all__ = [
     "collect_runtime_telemetry",
     "configure_component_logging",
     "load_execution_preferences",
+    "backend_preference_key",
     "detect_ffmpeg_hwaccels",
     "discover_runtime_devices",
     "ensure_mapping_marker",
@@ -64,5 +68,7 @@ __all__ = [
     "redact_secrets",
     "recommend_worker_concurrency",
     "remap_server_path",
+    "serialise_backend_probe",
+    "serialise_binary_probe",
     "validate_worker_path_mapping",
 ]

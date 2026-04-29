@@ -5,15 +5,83 @@ from pathlib import Path
 import pytest
 
 from encodr_shared.worker_runtime import (
+    BinaryProbe,
     HardwareProbe,
     probe_device_node,
     probe_execution_backends,
     probe_intel_qsv,
     probe_intel_vaapi,
+    serialise_backend_probe,
+    serialise_binary_probe,
 )
 
 
 pytestmark = [pytest.mark.unit]
+
+
+def test_worker_runtime_serialisation_golden_payloads() -> None:
+    backend_payload = serialise_backend_probe(
+        HardwareProbe(
+            backend="intel_igpu",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="Intel iGPU passthrough is not fully usable in this runtime.",
+            details={
+                "ffmpeg_path_verified": False,
+                "reason_unavailable": "permission denied",
+                "recommended_usage": "Expose /dev/dri to the worker runtime.",
+                "device_paths": [{"path": "/dev/dri/renderD128", "status": "failed"}],
+                "nested": {"state": "kept"},
+            },
+        )
+    )
+
+    assert backend_payload == {
+        "backend": "intel_igpu",
+        "preference_key": "prefer_intel_igpu",
+        "detected": True,
+        "usable_by_ffmpeg": False,
+        "ffmpeg_path_verified": False,
+        "status": "failed",
+        "message": "Intel iGPU passthrough is not fully usable in this runtime.",
+        "reason_unavailable": "permission denied",
+        "recommended_usage": "Expose /dev/dri to the worker runtime.",
+        "device_paths": [{"path": "/dev/dri/renderD128", "status": "failed"}],
+        "details": {
+            "ffmpeg_path_verified": False,
+            "reason_unavailable": "permission denied",
+            "recommended_usage": "Expose /dev/dri to the worker runtime.",
+            "device_paths": [{"path": "/dev/dri/renderD128", "status": "failed"}],
+            "nested": {"state": "kept"},
+        },
+    }
+
+    binary_payload = serialise_binary_probe(
+        BinaryProbe(
+            configured_path="vainfo",
+            resolved_path="/usr/bin/vainfo",
+            exists=True,
+            executable=True,
+            discoverable=True,
+            status="healthy",
+            message="Binary is discoverable and executable.",
+        ),
+        name="vainfo",
+        which_payload={"command": "which vainfo", "returncode": 0, "stdout": "/usr/bin/vainfo", "stderr": None},
+    )
+
+    assert binary_payload == {
+        "name": "vainfo",
+        "configured_path": "vainfo",
+        "resolved_path": "/usr/bin/vainfo",
+        "exists": True,
+        "executable": True,
+        "discoverable": True,
+        "status": "healthy",
+        "message": "Binary is discoverable and executable.",
+        "which": {"command": "which vainfo", "returncode": 0, "stdout": "/usr/bin/vainfo", "stderr": None},
+    }
 
 
 def test_probe_execution_backends_reports_cpu_and_detected_gpu_paths(monkeypatch: pytest.MonkeyPatch) -> None:

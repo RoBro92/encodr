@@ -4,6 +4,7 @@ set -euo pipefail
 SERVER_URL=""
 WORKER_KEY=""
 PAIRING_TOKEN=""
+PAIRING_TOKEN_STDIN="false"
 REGISTRATION_SECRET=""
 DISPLAY_NAME=""
 INSTALL_DIR="/opt/encodr-worker"
@@ -21,6 +22,7 @@ while [[ $# -gt 0 ]]; do
     --server-url) SERVER_URL="$2"; shift 2 ;;
     --worker-key) WORKER_KEY="$2"; shift 2 ;;
     --pairing-token) PAIRING_TOKEN="$2"; shift 2 ;;
+    --pairing-token-stdin) PAIRING_TOKEN_STDIN="true"; shift ;;
     --registration-secret) REGISTRATION_SECRET="$2"; shift 2 ;;
     --display-name) DISPLAY_NAME="$2"; shift 2 ;;
     --install-dir) INSTALL_DIR="$2"; shift 2 ;;
@@ -38,6 +40,10 @@ while [[ $# -gt 0 ]]; do
       ;;
   esac
 done
+
+if [[ "$PAIRING_TOKEN_STDIN" == "true" ]]; then
+  IFS= read -r PAIRING_TOKEN || true
+fi
 
 if [[ -z "$SERVER_URL" || -z "$WORKER_KEY" ]]; then
   echo "--server-url and --worker-key are required." >&2
@@ -82,7 +88,9 @@ curl -fsSL "$ARCHIVE_URL" | tar -xz -C "$SRC_DIR" --strip-components=1
 
 install -m 755 "$SRC_DIR/infra/scripts/uninstall-worker-agent-unix.sh" "$UNINSTALL_SCRIPT"
 
-cat >"$ENV_FILE" <<EOF
+write_env_file() {
+  umask 177
+  cat >"$ENV_FILE" <<EOF
 export ENCODR_WORKER_AGENT_API_BASE_URL="$SERVER_URL"
 export ENCODR_WORKER_AGENT_KEY="$WORKER_KEY"
 export ENCODR_WORKER_AGENT_DISPLAY_NAME="$DISPLAY_NAME"
@@ -98,6 +106,16 @@ export ENCODR_WORKER_AGENT_ALLOW_CPU_FALLBACK="$ALLOW_CPU_FALLBACK"
 export ENCODR_WORKER_AGENT_PAIRING_TOKEN="$PAIRING_TOKEN"
 export ENCODR_WORKER_AGENT_REGISTRATION_SECRET="$REGISTRATION_SECRET"
 EOF
+  chmod 600 "$ENV_FILE"
+}
+
+clear_registration_credentials() {
+  PAIRING_TOKEN=""
+  REGISTRATION_SECRET=""
+  write_env_file
+}
+
+write_env_file
 
 cat >"$RUN_SCRIPT" <<'EOF'
 #!/usr/bin/env bash
@@ -127,6 +145,7 @@ if [[ $HEARTBEAT_STATUS -ne 0 ]]; then
   echo "Worker pairing validation failed with exit code $HEARTBEAT_STATUS." >&2
   exit 11
 fi
+clear_registration_credentials
 
 if [[ "$PLATFORM" == "macos" ]]; then
   PLIST_PATH="/Library/LaunchDaemons/com.encodr.worker.plist"

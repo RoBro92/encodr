@@ -17,6 +17,7 @@ from app.capabilities import (
 from app.client import WorkerAgentHttpError, WorkerApiClient
 from app.config import WorkerAgentSettings
 from app.execution import RemoteExecutionService
+from encodr_core.execution import ExecutionProgressUpdate
 from encodr_shared import collect_runtime_telemetry
 
 
@@ -41,6 +42,7 @@ class WorkerAgentService:
         self.settings = settings
         self.api_client = api_client
         self.execution_service = execution_service or RemoteExecutionService(settings=settings)
+        self._pairing_token_available = bool(settings.pairing_token)
 
     def load_worker_token(self) -> str | None:
         if self.settings.worker_token:
@@ -135,6 +137,8 @@ class WorkerAgentService:
         response = self.api_client.register(self.build_registration_payload())
         worker_token = str(response["worker_token"])
         self.store_worker_token(worker_token)
+        if self.settings.pairing_token:
+            self._pairing_token_available = False
         runtime_configuration = self._resolve_runtime_configuration(response)
         self.store_runtime_configuration(runtime_configuration)
         execution_preferences = self._resolve_execution_preferences(response)
@@ -253,6 +257,7 @@ class WorkerAgentService:
                 "selection_reason": None,
             }
         self.api_client.claim_job(worker_token=session.worker_token, job_id=job_id)
+        cancellation_state: dict[str, object] = {"requested": False, "reason": None}
         progress_reporter = self._build_progress_reporter(
             worker_token=session.worker_token,
             job_id=job_id,
@@ -260,6 +265,7 @@ class WorkerAgentService:
             preferred_backend=session.preferred_backend,
             allow_cpu_fallback=session.allow_cpu_fallback,
             runtime_configuration=session.runtime_configuration,
+            cancellation_state=cancellation_state,
         )
         execute_signature = inspect.signature(self.execution_service.execute)
         execute_parameters = execute_signature.parameters
@@ -284,7 +290,16 @@ class WorkerAgentService:
             execute_kwargs["preferred_backend"] = session.preferred_backend
         if "allow_cpu_fallback" in execute_parameters:
             execute_kwargs["allow_cpu_fallback"] = session.allow_cpu_fallback
+        if "cancel_requested" in execute_parameters:
+            execute_kwargs["cancel_requested"] = lambda: bool(cancellation_state.get("requested"))
         try:
+            progress_reporter(
+                ExecutionProgressUpdate(
+                    stage="starting",
+                    percent=0.0,
+                    updated_at=datetime.now(timezone.utc),
+                )
+            )
             result = self.execution_service.execute(**execute_kwargs)
             response = self.api_client.submit_job_result(
                 worker_token=session.worker_token,
@@ -346,7 +361,7 @@ class WorkerAgentService:
     def _reregister_after_auth_failure(self, error: WorkerAgentHttpError) -> WorkerSession:
         if error.status_code != 401:
             raise error
-        if not self.settings.registration_secret and not self.settings.pairing_token:
+        if not self.settings.pairing_token or not self._pairing_token_available:
             raise error
         self.clear_stored_worker_token()
         return self.register()
@@ -388,6 +403,7 @@ class WorkerAgentService:
         preferred_backend: str,
         allow_cpu_fallback: bool,
         runtime_configuration: dict[str, object],
+        cancellation_state: dict[str, object],
     ):
         last_sent_at: datetime | None = None
         last_percent: int | None = None
@@ -406,7 +422,7 @@ class WorkerAgentService:
             )
             if not should_send:
                 return
-            self.api_client.report_job_progress(
+            response = self.api_client.report_job_progress(
                 worker_token=worker_token,
                 job_id=job_id,
                 payload={
@@ -426,6 +442,9 @@ class WorkerAgentService:
                     ),
                 },
             )
+            if response.get("cancellation_requested"):
+                cancellation_state["requested"] = True
+                cancellation_state["reason"] = response.get("cancellation_reason")
             last_sent_at = now
             last_percent = current_percent
 

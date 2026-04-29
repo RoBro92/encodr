@@ -30,6 +30,57 @@ class HardwareProbe:
     details: dict[str, object]
 
 
+BACKEND_PREFERENCE_KEYS = {
+    "cpu": "cpu_only",
+    "intel_igpu": "prefer_intel_igpu",
+    "nvidia_gpu": "prefer_nvidia_gpu",
+    "amd_gpu": "prefer_amd_gpu",
+}
+
+
+def backend_preference_key(backend: str) -> str:
+    return BACKEND_PREFERENCE_KEYS.get(backend, backend)
+
+
+def serialise_backend_probe(probe: HardwareProbe) -> dict[str, object]:
+    details = probe.details or {}
+    return {
+        "backend": probe.backend,
+        "preference_key": backend_preference_key(probe.backend),
+        "detected": probe.detected,
+        "usable_by_ffmpeg": probe.usable,
+        "ffmpeg_path_verified": bool(details.get("ffmpeg_path_verified", probe.usable)),
+        "status": probe.status,
+        "message": probe.message,
+        "reason_unavailable": details.get("reason_unavailable"),
+        "recommended_usage": details.get("recommended_usage"),
+        "device_paths": details.get("device_paths", []),
+        "details": details,
+    }
+
+
+def serialise_binary_probe(
+    probe: BinaryProbe,
+    *,
+    name: str | None = None,
+    which_payload: dict[str, object] | None = None,
+) -> dict[str, object]:
+    payload: dict[str, object] = {
+        "configured_path": probe.configured_path,
+        "resolved_path": probe.resolved_path,
+        "exists": probe.exists,
+        "executable": probe.executable,
+        "discoverable": probe.discoverable,
+        "status": probe.status,
+        "message": probe.message,
+    }
+    if name is not None:
+        payload = {"name": name, **payload}
+    if which_payload is not None:
+        payload["which"] = which_payload
+    return payload
+
+
 def _read_text_if_present(path: Path) -> str | None:
     try:
         return path.read_text(encoding="utf-8").strip() or None

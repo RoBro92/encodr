@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from pathlib import Path
-import re
 
 import pytest
 
-from encodr_core.execution import ExecutionResult
 from encodr_core.config import load_config_bundle
-from encodr_db.models import AuditEventType, AuditOutcome, Job, JobStatus
+from encodr_core.execution import ExecutionResult
+from encodr_core.replacement import ReplacementResult, ReplacementStatus
+from encodr_db.models import AuditEventType, AuditOutcome, FileLifecycleState, Job, JobStatus
 from encodr_db.repositories import AuditEventRepository, WorkerRepository
 from encodr_shared.versioning import read_version
 from tests.helpers.api import create_test_api_context
@@ -270,11 +270,12 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
     assert onboarding_payload["worker"]["worker_state"] == "remote_pending_pairing"
     assert onboarding_payload["worker"]["preferred_backend"] == "prefer_nvidia_gpu"
     assert onboarding_payload["worker"]["allow_cpu_fallback"] is False
+    assert onboarding_payload["pairing_token"]
+    assert "--pairing-token-stdin" in onboarding_payload["bootstrap_command"]
+    assert onboarding_payload["pairing_token"] not in onboarding_payload["bootstrap_command"]
     worker_id = onboarding_payload["worker"]["id"]
     worker_key = onboarding_payload["worker"]["worker_key"]
-    pairing_token_match = re.search(r"--pairing-token\s+(?P<token>'[^']+'|\S+)", onboarding_payload["bootstrap_command"])
-    assert pairing_token_match is not None
-    pairing_token = pairing_token_match.group("token").strip("'")
+    pairing_token = onboarding_payload["pairing_token"]
 
     list_response = context.client.get("/api/workers", headers=auth.headers)
     assert list_response.status_code == 200
@@ -436,6 +437,146 @@ def test_remote_worker_can_request_claim_and_submit_job_result(
         assert saved_job.last_worker_id == worker.id
 
 
+def test_remote_worker_cancellation_before_replacement_finishes_cancelled_without_processing(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Cancel Example.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, context.bundle, media, source_path=source_path.as_posix())
+        tracked_file_id = persisted.job.tracked_file_id
+        session.commit()
+
+    registration = context.client.post("/api/worker/register", json=registration_payload("valid-secret"))
+    worker_token = registration.json()["worker_token"]
+    request_payload = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    ).json()
+    job_id = request_payload["job"]["job_id"]
+    assert context.client.post(
+        f"/api/worker/jobs/{job_id}/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    ).status_code == 200
+
+    cancel_response = context.client.post(f"/api/jobs/{job_id}/cancel", headers=auth.headers)
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["cancellation_requested_at"] is not None
+
+    progress_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/progress",
+        json={"stage": "encoding", "percent": 42.0},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert progress_response.status_code == 200
+    assert progress_response.json()["cancellation_requested"] is True
+
+    result = ExecutionResult(
+        mode="remux",
+        status="completed",
+        command=["ffmpeg", "-i", source_path.as_posix(), source_path.as_posix()],
+        output_path=source_path.with_name("staged.mkv"),
+        final_output_path=None,
+        original_backup_path=None,
+        output_size_bytes=123,
+        exit_code=0,
+        stdout="ok",
+        stderr="",
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+    )
+    result_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/result",
+        json={"result_payload": result.model_dump(mode="json"), "runtime_summary": None},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert result_response.status_code == 200
+    assert result_response.json()["final_status"] == "cancelled"
+
+    with session_factory() as session:
+        saved_job = session.get(Job, job_id)
+        assert saved_job is not None
+        assert saved_job.status == JobStatus.CANCELLED
+        tracked_file = saved_job.tracked_file
+        assert tracked_file.id == tracked_file_id
+        assert tracked_file.last_processed_policy_version is None
+        assert tracked_file.lifecycle_state != FileLifecycleState.COMPLETED
+
+
+def test_remote_worker_completed_replacement_after_cancel_stays_completed(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Late Complete.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("replaced", encoding="utf-8")
+    backup_path = source_path.with_suffix(".encodr-backup.mkv")
+    backup_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        create_job(session, context.bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    registration = context.client.post("/api/worker/register", json=registration_payload("valid-secret"))
+    worker_token = registration.json()["worker_token"]
+    job_id = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    ).json()["job"]["job_id"]
+    assert context.client.post(
+        f"/api/worker/jobs/{job_id}/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    ).status_code == 200
+    assert context.client.post(f"/api/jobs/{job_id}/cancel", headers=auth.headers).status_code == 200
+
+    result = ExecutionResult(
+        mode="remux",
+        status="completed",
+        command=["ffmpeg", "-i", source_path.as_posix(), source_path.as_posix()],
+        output_path=source_path,
+        final_output_path=source_path,
+        original_backup_path=backup_path,
+        output_size_bytes=source_path.stat().st_size,
+        exit_code=0,
+        stdout="ok",
+        stderr="",
+        replacement=ReplacementResult(
+            status=ReplacementStatus.SUCCEEDED,
+            final_output_path=source_path,
+            original_backup_path=backup_path,
+        ),
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+    )
+    result_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/result",
+        json={"result_payload": result.model_dump(mode="json"), "runtime_summary": None},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+
+    assert result_response.status_code == 200
+    assert result_response.json()["final_status"] == "completed"
+    with session_factory() as session:
+        saved_job = session.get(Job, job_id)
+        assert saved_job is not None
+        assert saved_job.status == JobStatus.COMPLETED
+        assert saved_job.failure_message is None
+        assert saved_job.tracked_file.lifecycle_state == FileLifecycleState.COMPLETED
+
+
 def test_remote_worker_can_reclaim_already_assigned_pending_job(
     tmp_path: Path,
     repo_root: Path,
@@ -477,6 +618,57 @@ def test_remote_worker_can_reclaim_already_assigned_pending_job(
     second_payload = second_request.json()
     assert second_payload["status"] == "assigned"
     assert second_payload["job"]["job_id"] == job_id
+
+
+def test_remote_worker_request_respects_max_concurrency(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+
+    first_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote First.mkv"
+    second_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Second.mkv"
+    first_path.parent.mkdir(parents=True, exist_ok=True)
+    first_path.write_text("first", encoding="utf-8")
+    second_path.write_text("second", encoding="utf-8")
+
+    with session_factory() as session:
+        create_job(
+            session,
+            context.bundle,
+            media_at_path(parse_fixture("non4k_remux_languages.json"), first_path),
+            source_path=first_path.as_posix(),
+        )
+        create_job(
+            session,
+            context.bundle,
+            media_at_path(parse_fixture("film_1080p.json"), second_path),
+            source_path=second_path.as_posix(),
+        )
+        session.commit()
+
+    registration = context.client.post("/api/worker/register", json=registration_payload("valid-secret"))
+    worker_token = registration.json()["worker_token"]
+
+    first_request = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert first_request.status_code == 200
+    first_job_id = first_request.json()["job"]["job_id"]
+    assert context.client.post(
+        f"/api/worker/jobs/{first_job_id}/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    ).status_code == 200
+
+    second_request = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+
+    assert second_request.status_code == 200
+    assert second_request.json() == {"status": "no_job", "job": None}
 
 
 def test_remote_worker_can_report_failure_after_claim(
