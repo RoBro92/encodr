@@ -216,6 +216,16 @@ def test_command_reset_admin_creates_first_admin(
     monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle(database_url=database_url))
     monkeypatch.setattr(
         encodr_cli,
+        "create_session_factory",
+        lambda _bundle: pytest.fail("reset-admin must use the host-reachable CLI session factory"),
+    )
+    monkeypatch.setattr(
+        encodr_cli,
+        "create_local_cli_session_factory",
+        lambda _bundle, _project_root: session_factory,
+    )
+    monkeypatch.setattr(
+        encodr_cli,
         "get_password_hash_service_class",
         lambda: load_api_security_module().PasswordHashService,
     )

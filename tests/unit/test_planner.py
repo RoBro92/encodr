@@ -56,6 +56,43 @@ def test_non_4k_file_requiring_codec_change_results_in_transcode() -> None:
     assert plan.video.target_codec == "hevc"
 
 
+def test_low_bitrate_h264_file_skips_video_transcode() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    media = parse_fixture("film_1080p.json")
+    media.video_streams[0].bit_rate = 2_000_000
+    media.container.extension = "mkv"
+    media.subtitle_streams = []
+
+    plan = build_processing_plan(
+        media,
+        bundle,
+        source_path="/media/Movies/Example Low Bitrate Film (2024).mkv",
+    )
+
+    assert plan.action == PlanAction.SKIP
+    assert plan.video.transcode_required is False
+    assert plan.video.low_bitrate_skip_threshold_bps == 3_000_000
+    assert any(reason.code == "video_skip_low_bitrate_source" for reason in plan.reasons)
+
+
+def test_low_bitrate_h264_file_can_still_remux_for_stream_cleanup() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    media = parse_fixture("non4k_remux_languages.json")
+    media.video_streams[0].codec_name = "h264"
+    media.video_streams[0].bit_rate = 2_000_000
+
+    plan = build_processing_plan(
+        media,
+        bundle,
+        source_path="/media/Movies/Example Low Bitrate Remux Film (2024).mkv",
+    )
+
+    assert plan.action == PlanAction.REMUX
+    assert plan.video.transcode_required is False
+    assert plan.video.preserve_original is True
+    assert any(reason.code == "video_skip_low_bitrate_source" for reason in plan.reasons)
+
+
 def test_4k_file_under_strip_only_policy_results_in_remux_with_preserved_video() -> None:
     bundle = load_config_bundle(project_root=REPO_ROOT)
     media = parse_fixture("film_4k_hdr_dv.json")

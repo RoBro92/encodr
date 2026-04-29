@@ -64,7 +64,12 @@ class VideoPlan(ConfigModel):
     target_codec: str | None = None
     transcode_required: bool = False
     quality_mode: str | None = None
+    quality_crf: int | None = None
+    source_bitrate_bps: int | None = None
+    low_bitrate_skip_threshold_bps: int | None = None
+    minimum_output_bitrate_bps: int | None = None
     max_allowed_video_reduction_percent: int | None = None
+    output_larger_than_input_review_percent: int | None = None
 
 
 class ContainerPlan(ConfigModel):

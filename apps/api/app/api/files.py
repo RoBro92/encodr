@@ -277,7 +277,9 @@ def dry_run(
                     requires_review=plan.action.value == "manual_review" or plan.should_treat_as_protected,
                     is_protected=plan.should_treat_as_protected,
                     reason_codes=[reason.code for reason in plan.reasons],
+                    reason_messages=[reason.message for reason in plan.reasons],
                     warning_codes=[warning.code for warning in plan.warnings],
+                    warning_messages=[warning.message for warning in plan.warnings],
                     selected_audio_stream_indices=plan.selected_streams.audio_stream_indices,
                     selected_subtitle_stream_indices=plan.selected_streams.subtitle_stream_indices,
                 )

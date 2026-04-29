@@ -49,6 +49,8 @@ def calculate_media_savings(
         "video_input_size_bytes": source_video_size,
         "video_output_size_bytes": output_video_size,
         "video_space_saved_bytes": video_saved,
+        "source_video_bitrate_bps": first_video_bitrate(source_media),
+        "output_video_bitrate_bps": first_video_bitrate(output_media),
         "non_video_space_saved_bytes": non_video_saved,
         "compression_reduction_percent": compression_reduction_percent,
     }
@@ -98,6 +100,12 @@ def estimate_stream_size_from_bitrate(streams, *, duration: float | None) -> int
         total += int((bit_rate * duration) / 8)
         found = True
     return total if found else None
+
+
+def first_video_bitrate(media: MediaFile) -> int | None:
+    if not media.video_streams:
+        return None
+    return media.video_streams[0].bit_rate
 
 
 def probe_packet_sizes_by_stream(

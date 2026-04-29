@@ -551,6 +551,11 @@ class WorkerService:
                 self.worker_token_service.hash_worker_token(pairing_token)
             )
             if paired_worker is None or paired_worker.worker_type != WorkerType.REMOTE:
+                repository.mark_auth_failed(
+                    worker_key,
+                    reason="invalid pairing token.",
+                    failed_at=datetime.now(timezone.utc),
+                )
                 self.audit_service.record_event(
                     session,
                     event_type=AuditEventType.WORKER_REGISTRATION,
@@ -573,10 +578,20 @@ class WorkerService:
                         username=worker_key,
                         details={"worker_key": worker_key, "reason": "expired_pairing_token"},
                     )
+                    repository.mark_auth_failed(
+                        paired_worker.worker_key,
+                        reason="expired pairing token.",
+                        failed_at=datetime.now(timezone.utc),
+                    )
                     raise ApiAuthenticationError("The worker pairing token has expired.")
             worker_key = paired_worker.worker_key
             display_name = paired_worker.display_name
         elif registration_secret != self.worker_auth_runtime.registration_secret:
+            repository.mark_auth_failed(
+                worker_key,
+                reason="invalid registration secret.",
+                failed_at=datetime.now(timezone.utc),
+            )
             self.audit_service.record_event(
                 session,
                 event_type=AuditEventType.WORKER_REGISTRATION,

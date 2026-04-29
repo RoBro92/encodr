@@ -39,7 +39,13 @@ class ProcessingRuleValues(TypedDict):
     drop_other_subtitles: bool
     handling_mode: str
     target_quality_mode: str
+    target_crf: int | None
     max_allowed_video_reduction_percent: int
+    low_bitrate_skip_threshold_1080p_mbps: float
+    low_bitrate_skip_threshold_720p_mbps: float
+    minimum_output_bitrate_1080p_mbps: float
+    minimum_output_bitrate_720p_mbps: float
+    output_larger_than_input_review_percent: int | None
 
 
 class SetupStatePayload(TypedDict):
@@ -269,6 +275,9 @@ class SetupStateService:
         video_defaults = video_rules.four_k if is_4k_ruleset else video_rules.non_4k
         target_codec = video_rules.four_k.preferred_codec.value if is_4k_ruleset else video_rules.non_4k.preferred_codec.value
         quality_mode = video_defaults.quality_mode.value
+        target_crf = video_defaults.quality_crf
+        if target_crf is None:
+            target_crf = self._default_crf_for_ruleset(ruleset)
         max_reduction = video_defaults.max_video_reduction_percent
         if is_4k_ruleset:
             handling_mode = (
@@ -296,7 +305,21 @@ class SetupStateService:
             "drop_other_subtitles": subtitle_rules.drop_other_subtitles,
             "handling_mode": handling_mode,
             "target_quality_mode": quality_mode,
+            "target_crf": target_crf,
             "max_allowed_video_reduction_percent": max_reduction,
+            "low_bitrate_skip_threshold_1080p_mbps": getattr(
+                video_defaults,
+                "low_bitrate_skip_threshold_1080p_mbps",
+                3.0,
+            ),
+            "low_bitrate_skip_threshold_720p_mbps": getattr(
+                video_defaults,
+                "low_bitrate_skip_threshold_720p_mbps",
+                1.5,
+            ),
+            "minimum_output_bitrate_1080p_mbps": video_defaults.minimum_output_bitrate_1080p_mbps,
+            "minimum_output_bitrate_720p_mbps": video_defaults.minimum_output_bitrate_720p_mbps,
+            "output_larger_than_input_review_percent": video_defaults.output_larger_than_input_review_percent,
         }
 
     def _profile_for_ruleset(self, ruleset: RulesetName) -> ProfileConfig | None:
@@ -335,6 +358,29 @@ class SetupStateService:
         max_reduction = int(payload.get("max_allowed_video_reduction_percent", 0))
         if max_reduction < 0 or max_reduction > 95:
             raise ApiValidationError("Maximum allowed video reduction must be between 0 and 95.")
+        target_crf = self._validate_optional_int(payload.get("target_crf"), minimum=0, maximum=51, field_name="CRF")
+        low_1080p = self._validate_mbps(
+            payload.get("low_bitrate_skip_threshold_1080p_mbps", 3.0),
+            field_name="1080p low-bitrate skip threshold",
+        )
+        low_720p = self._validate_mbps(
+            payload.get("low_bitrate_skip_threshold_720p_mbps", 1.5),
+            field_name="720p low-bitrate skip threshold",
+        )
+        min_1080p = self._validate_mbps(
+            payload.get("minimum_output_bitrate_1080p_mbps", 1.75),
+            field_name="1080p minimum output bitrate",
+        )
+        min_720p = self._validate_mbps(
+            payload.get("minimum_output_bitrate_720p_mbps", 1.0),
+            field_name="720p minimum output bitrate",
+        )
+        output_growth_guard = self._validate_optional_int(
+            payload.get("output_larger_than_input_review_percent", 5),
+            minimum=0,
+            maximum=100,
+            field_name="Output larger than input review guard",
+        )
 
         return {
             "target_video_codec": codec,
@@ -350,7 +396,13 @@ class SetupStateService:
             "drop_other_subtitles": bool(payload.get("drop_other_subtitles", True)),
             "handling_mode": handling_mode,
             "target_quality_mode": quality_mode,
+            "target_crf": target_crf,
             "max_allowed_video_reduction_percent": max_reduction,
+            "low_bitrate_skip_threshold_1080p_mbps": low_1080p,
+            "low_bitrate_skip_threshold_720p_mbps": low_720p,
+            "minimum_output_bitrate_1080p_mbps": min_1080p,
+            "minimum_output_bitrate_720p_mbps": min_720p,
+            "output_larger_than_input_review_percent": output_growth_guard,
         }
 
     def _coerce_processing_rules(self, value: object) -> ProcessingRuleValues | None:
@@ -399,3 +451,35 @@ class SetupStateService:
         if not deduplicated:
             raise ApiValidationError("At least one preferred language is required.")
         return deduplicated
+
+    @staticmethod
+    def _default_crf_for_ruleset(ruleset: RulesetName) -> int:
+        return 22 if ruleset.startswith("tv") else 21
+
+    @staticmethod
+    def _validate_optional_int(
+        value: object,
+        *,
+        minimum: int,
+        maximum: int,
+        field_name: str,
+    ) -> int | None:
+        if value is None or value == "":
+            return None
+        try:
+            parsed = int(value)
+        except (TypeError, ValueError) as error:
+            raise ApiValidationError(f"{field_name} must be a number.") from error
+        if parsed < minimum or parsed > maximum:
+            raise ApiValidationError(f"{field_name} must be between {minimum} and {maximum}.")
+        return parsed
+
+    @staticmethod
+    def _validate_mbps(value: object, *, field_name: str) -> float:
+        try:
+            parsed = float(value)
+        except (TypeError, ValueError) as error:
+            raise ApiValidationError(f"{field_name} must be a number.") from error
+        if parsed < 0:
+            raise ApiValidationError(f"{field_name} must not be negative.")
+        return round(parsed, 2)

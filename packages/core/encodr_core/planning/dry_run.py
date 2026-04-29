@@ -45,7 +45,9 @@ def build_dry_run_analysis_payload(
         "requires_review": would_trigger_review,
         "is_protected": plan.should_treat_as_protected,
         "reason_codes": [reason.code for reason in plan.reasons],
+        "reason_messages": [reason.message for reason in plan.reasons],
         "warning_codes": [warning.code for warning in plan.warnings],
+        "warning_messages": [warning.message for warning in plan.warnings],
         "selected_audio_stream_indices": plan.selected_streams.audio_stream_indices,
         "selected_subtitle_stream_indices": plan.selected_streams.subtitle_stream_indices,
         "output_filename": preview_output_filename(media_file.file_path, plan),
@@ -64,6 +66,13 @@ def build_dry_run_analysis_payload(
             subtitle_removed_count=subtitle_removed_count,
         ),
         "video_handling": describe_video_handling(plan),
+        "source_video_bitrate_bps": plan.video.source_bitrate_bps,
+        "estimated_output_video_bitrate_bps": estimate_output_video_bitrate_bps(plan),
+        "target_crf": plan.video.quality_crf,
+        "low_bitrate_skip_threshold_bps": plan.video.low_bitrate_skip_threshold_bps,
+        "minimum_output_bitrate_bps": plan.video.minimum_output_bitrate_bps,
+        "max_allowed_video_reduction_percent": plan.video.max_allowed_video_reduction_percent,
+        "output_larger_than_input_review_percent": plan.video.output_larger_than_input_review_percent,
         "manual_review_triggered": plan.action == PlanAction.MANUAL_REVIEW,
         "manual_review_reasons": review_reasons,
     }
@@ -174,3 +183,12 @@ def describe_video_handling(plan: ProcessingPlan) -> str:
     if plan.video.handling == VideoHandling.TRANSCODE_TO_POLICY or plan.video.transcode_required:
         return "transcode"
     return "strip_only"
+
+
+def estimate_output_video_bitrate_bps(plan: ProcessingPlan) -> int | None:
+    if plan.video.source_bitrate_bps is None:
+        return None
+    if not plan.video.transcode_required:
+        return plan.video.source_bitrate_bps
+    reduction_factor = QUALITY_REDUCTION_FACTORS.get(plan.video.quality_mode or "", 0.58)
+    return int(round(plan.video.source_bitrate_bps * reduction_factor))

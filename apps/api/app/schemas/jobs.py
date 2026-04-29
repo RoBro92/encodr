@@ -65,7 +65,9 @@ class DryRunAnalysisResponse(BaseModel):
     requires_review: bool
     is_protected: bool
     reason_codes: list[str] = Field(default_factory=list)
+    reason_messages: list[str] = Field(default_factory=list)
     warning_codes: list[str] = Field(default_factory=list)
+    warning_messages: list[str] = Field(default_factory=list)
     selected_audio_stream_indices: list[int] = Field(default_factory=list)
     selected_subtitle_stream_indices: list[int] = Field(default_factory=list)
     output_filename: str
@@ -76,6 +78,13 @@ class DryRunAnalysisResponse(BaseModel):
     subtitle_tracks_removed_count: int = 0
     summary: str
     video_handling: str
+    source_video_bitrate_bps: int | None = None
+    estimated_output_video_bitrate_bps: int | None = None
+    target_crf: int | None = None
+    low_bitrate_skip_threshold_bps: int | None = None
+    minimum_output_bitrate_bps: int | None = None
+    max_allowed_video_reduction_percent: int | None = None
+    output_larger_than_input_review_percent: int | None = None
     manual_review_triggered: bool = False
     manual_review_reasons: list[str] = Field(default_factory=list)
 
@@ -179,6 +188,8 @@ class JobSummaryResponse(BaseModel):
     compression_reduction_percent: int | None = None
     audio_tracks_removed_count: int = 0
     subtitle_tracks_removed_count: int = 0
+    plan_reason_codes: list[str] = Field(default_factory=list)
+    plan_reason_messages: list[str] = Field(default_factory=list)
     analysis_payload: DryRunAnalysisResponse | None = None
     verification_status: str
     replacement_status: str
@@ -252,6 +263,8 @@ class JobSummaryResponse(BaseModel):
             compression_reduction_percent=job.compression_reduction_percent,
             audio_tracks_removed_count=job_removed_audio_tracks(job),
             subtitle_tracks_removed_count=job_removed_subtitle_tracks(job),
+            plan_reason_codes=job_plan_reason_codes(job),
+            plan_reason_messages=job_plan_reason_messages(job),
             analysis_payload=analysis_payload,
             verification_status=job.verification_status.value,
             replacement_status=job.replacement_status.value,
@@ -369,6 +382,32 @@ def job_removed_subtitle_tracks(job: Job) -> int:
     if not isinstance(dropped, list):
         return 0
     return len(dropped)
+
+
+def job_plan_reason_codes(job: Job) -> list[str]:
+    return [
+        str(reason.get("code"))
+        for reason in _job_plan_reasons(job)
+        if reason.get("code")
+    ]
+
+
+def job_plan_reason_messages(job: Job) -> list[str]:
+    return [
+        str(reason.get("message"))
+        for reason in _job_plan_reasons(job)
+        if reason.get("message")
+    ]
+
+
+def _job_plan_reasons(job: Job) -> list[dict]:
+    payload = getattr(job.plan_snapshot, "payload", None)
+    if not isinstance(payload, dict):
+        return []
+    reasons = payload.get("reasons")
+    if not isinstance(reasons, list):
+        return []
+    return [reason for reason in reasons if isinstance(reason, dict)]
 
 
 def dry_run_requires_review(job: Job) -> bool:

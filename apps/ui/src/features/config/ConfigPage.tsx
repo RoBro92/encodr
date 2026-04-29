@@ -1061,7 +1061,7 @@ function RulesetEditor({
           <h3>Quality limits</h3>
           <p>{transcodeEnabled ? "Tune transcode quality and safety boundaries." : "Only available when handling mode is set to transcode."}</p>
         </div>
-        <div className="settings-rules-fields settings-rules-fields-two">
+        <div className="settings-rules-fields settings-rules-fields-three">
           <label className="field">
             <span>Quality mode</span>
             <select
@@ -1076,6 +1076,24 @@ function RulesetEditor({
                 </option>
               ))}
             </select>
+          </label>
+
+          <label className="field">
+            <span>Effective CRF</span>
+            <input
+              aria-label={`${label} effective CRF`}
+              type="number"
+              min={0}
+              max={51}
+              value={ruleset.current.target_crf ?? ""}
+              placeholder="Profile default"
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  target_crf: clampOptionalInt(event.target.value, ruleset.current.target_crf, 0, 51),
+                })}
+              disabled={!transcodeEnabled}
+            />
           </label>
 
           <label className="field">
@@ -1094,7 +1112,100 @@ function RulesetEditor({
               disabled={!transcodeEnabled}
             />
           </label>
+
+          <label className="field">
+            <span>Low-bitrate skip 1080p (Mbps)</span>
+            <input
+              aria-label={`${label} low-bitrate skip 1080p`}
+              type="number"
+              min={0}
+              step="0.25"
+              value={ruleset.current.low_bitrate_skip_threshold_1080p_mbps}
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  low_bitrate_skip_threshold_1080p_mbps: clampDecimal(event.target.value, ruleset.current.low_bitrate_skip_threshold_1080p_mbps),
+                })}
+              disabled={!transcodeEnabled}
+            />
+          </label>
+
+          <label className="field">
+            <span>Low-bitrate skip 720p (Mbps)</span>
+            <input
+              aria-label={`${label} low-bitrate skip 720p`}
+              type="number"
+              min={0}
+              step="0.25"
+              value={ruleset.current.low_bitrate_skip_threshold_720p_mbps}
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  low_bitrate_skip_threshold_720p_mbps: clampDecimal(event.target.value, ruleset.current.low_bitrate_skip_threshold_720p_mbps),
+                })}
+              disabled={!transcodeEnabled}
+            />
+          </label>
+
+          <label className="field">
+            <span>Min output 1080p (Mbps)</span>
+            <input
+              aria-label={`${label} minimum output 1080p`}
+              type="number"
+              min={0}
+              step="0.25"
+              value={ruleset.current.minimum_output_bitrate_1080p_mbps}
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  minimum_output_bitrate_1080p_mbps: clampDecimal(event.target.value, ruleset.current.minimum_output_bitrate_1080p_mbps),
+                })}
+              disabled={!transcodeEnabled}
+            />
+          </label>
+
+          <label className="field">
+            <span>Min output 720p (Mbps)</span>
+            <input
+              aria-label={`${label} minimum output 720p`}
+              type="number"
+              min={0}
+              step="0.25"
+              value={ruleset.current.minimum_output_bitrate_720p_mbps}
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  minimum_output_bitrate_720p_mbps: clampDecimal(event.target.value, ruleset.current.minimum_output_bitrate_720p_mbps),
+                })}
+              disabled={!transcodeEnabled}
+            />
+          </label>
+
+          <label className="field">
+            <span>Output growth review (%)</span>
+            <input
+              aria-label={`${label} output larger than input guard`}
+              type="number"
+              min={0}
+              max={100}
+              value={ruleset.current.output_larger_than_input_review_percent ?? ""}
+              onChange={(event) =>
+                onChange({
+                  ...ruleset.current,
+                  output_larger_than_input_review_percent: clampOptionalInt(
+                    event.target.value,
+                    ruleset.current.output_larger_than_input_review_percent,
+                    0,
+                    100,
+                  ),
+                })}
+              disabled={!transcodeEnabled}
+            />
+          </label>
         </div>
+        <p className="muted-copy">
+          CRF controls encode quality. The reduction and output growth values are review safeguards, not size targets.
+        </p>
       </div>
 
       <div className="settings-rules-form-card">
@@ -1273,6 +1384,25 @@ function clampPercentage(raw: string, fallback: number) {
   return Math.max(0, Math.min(100, Math.round(parsed)));
 }
 
+function clampOptionalInt(raw: string, fallback: number | null, minimum: number, maximum: number) {
+  if (raw.trim() === "") {
+    return null;
+  }
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  return Math.max(minimum, Math.min(maximum, Math.round(parsed)));
+}
+
+function clampDecimal(raw: string, fallback: number) {
+  const parsed = Number(raw);
+  if (Number.isNaN(parsed)) {
+    return fallback;
+  }
+  return Math.max(0, Math.round(parsed * 100) / 100);
+}
+
 function summariseRuleset(values: ProcessingRuleValues) {
   const audioSummary = values.keep_only_preferred_audio_languages
     ? `${formatLanguageList(values.preferred_audio_languages)} audio only`
@@ -1282,7 +1412,7 @@ function summariseRuleset(values: ProcessingRuleValues) {
     : "Keep additional subtitles";
   const videoSummary =
     values.handling_mode === "transcode"
-      ? `${formatQualityMode(values.target_quality_mode)} transcode, max ${values.max_allowed_video_reduction_percent}% video reduction`
+      ? `${formatQualityMode(values.target_quality_mode)} transcode at CRF ${values.target_crf ?? "profile"}, review below ${values.minimum_output_bitrate_1080p_mbps} Mbps or above ${values.max_allowed_video_reduction_percent}% video reduction`
       : values.handling_mode === "strip_only"
         ? "Strip bloat only, keep video untouched"
         : "Preserve video stream";

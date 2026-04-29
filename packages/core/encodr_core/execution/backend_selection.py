@@ -182,19 +182,63 @@ def _cpu_selection(
     )
 
 
-def quality_flags_for_backend(*, accelerator: str, quality_mode: str | None) -> list[str]:
+def quality_flags_for_backend(
+    *,
+    accelerator: str,
+    quality_mode: str | None,
+    quality_crf: int | None = None,
+) -> list[str]:
     selected_mode = quality_mode or "high_quality"
     if accelerator == "cpu":
-        return CPU_QUALITY_FLAGS.get(selected_mode, CPU_QUALITY_FLAGS["high_quality"])
+        return _replace_quality_value(
+            CPU_QUALITY_FLAGS.get(selected_mode, CPU_QUALITY_FLAGS["high_quality"]),
+            "-crf",
+            quality_crf,
+        )
     if accelerator == "nvenc":
-        return NVENC_QUALITY_FLAGS.get(selected_mode, NVENC_QUALITY_FLAGS["high_quality"])
+        return _replace_quality_value(
+            NVENC_QUALITY_FLAGS.get(selected_mode, NVENC_QUALITY_FLAGS["high_quality"]),
+            "-cq",
+            quality_crf,
+        )
     if accelerator == "qsv":
-        return QSV_QUALITY_FLAGS.get(selected_mode, QSV_QUALITY_FLAGS["high_quality"])
+        return _replace_quality_value(
+            QSV_QUALITY_FLAGS.get(selected_mode, QSV_QUALITY_FLAGS["high_quality"]),
+            "-global_quality",
+            quality_crf,
+        )
     if accelerator == "vaapi":
-        return VAAPI_QUALITY_FLAGS.get(selected_mode, VAAPI_QUALITY_FLAGS["high_quality"])
+        return _replace_quality_value(
+            VAAPI_QUALITY_FLAGS.get(selected_mode, VAAPI_QUALITY_FLAGS["high_quality"]),
+            "-qp",
+            quality_crf,
+        )
     if accelerator == "amf":
-        return AMF_QUALITY_FLAGS.get(selected_mode, AMF_QUALITY_FLAGS["high_quality"])
+        flags = AMF_QUALITY_FLAGS.get(selected_mode, AMF_QUALITY_FLAGS["high_quality"])
+        if quality_crf is None:
+            return flags
+        qp_p = min(51, quality_crf + 2)
+        return _replace_quality_value(
+            _replace_quality_value(flags, "-qp_i", quality_crf),
+            "-qp_p",
+            qp_p,
+        )
     return []
+
+
+def _replace_quality_value(flags: list[str], option: str, value: int | None) -> list[str]:
+    if value is None:
+        return flags
+    updated = list(flags)
+    try:
+        option_index = updated.index(option)
+    except ValueError:
+        return updated
+    value_index = option_index + 1
+    if value_index >= len(updated):
+        return updated
+    updated[value_index] = str(value)
+    return updated
 
 
 def _accelerated_selection(

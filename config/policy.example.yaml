@@ -44,13 +44,23 @@ video:
       - transcode
     preferred_codec: hevc
     allow_transcode: true
+    quality_crf: 21
     max_video_bitrate_mbps: 12
     max_width: 1920
+    low_bitrate_skip_threshold_1080p_mbps: 3.0
+    low_bitrate_skip_threshold_720p_mbps: 1.5
+    minimum_output_bitrate_1080p_mbps: 1.75
+    minimum_output_bitrate_720p_mbps: 1.0
+    output_larger_than_input_review_percent: 5
   four_k:
     mode: strip_only
     preserve_original_video: true
     preserve_original_audio: true
     allow_transcode: false
+    quality_crf: 20
+    minimum_output_bitrate_1080p_mbps: 1.75
+    minimum_output_bitrate_720p_mbps: 1.0
+    output_larger_than_input_review_percent: 5
     remove_non_english_audio: true
     remove_non_english_subtitles: true
 
@@ -72,4 +82,3 @@ profiles:
       profile: movies-default
     - path_prefix: /media/TV
       profile: tv-default
-

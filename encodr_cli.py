@@ -392,8 +392,9 @@ def command_update(args: argparse.Namespace) -> int:
 
 
 def command_reset_admin(args: argparse.Namespace) -> int:
-    bundle = load_bundle(args.project_root)
-    session_factory = create_session_factory(bundle)
+    project_root = Path(args.project_root).resolve()
+    bundle = load_bundle(project_root)
+    session_factory = create_local_cli_session_factory(bundle, project_root)
     password = args.password or getpass.getpass("New admin password: ")
     if len(password) < 8:
         print("Password must be at least 8 characters.")
