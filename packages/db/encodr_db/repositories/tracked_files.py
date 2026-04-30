@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from pathlib import Path
 
-from sqlalchemy import Select, desc, func, or_, select
+from sqlalchemy import Select, and_, desc, func, or_, select
 from sqlalchemy.orm import Session, aliased
 
 from encodr_core.execution import ExecutionResult
@@ -27,6 +27,15 @@ def _source_path_within_prefix(path_prefix: str):
     return or_(
         TrackedFile.source_path == cleaned,
         TrackedFile.source_path.startswith(f"{cleaned}/"),
+    )
+
+
+def _processable_source_path_condition():
+    return and_(
+        ~TrackedFile.source_path.ilike("%.encodr-backup.%"),
+        ~TrackedFile.source_path.ilike("%.encodr-restored-replacement.%"),
+        ~TrackedFile.source_path.ilike("%.tmp.%"),
+        ~TrackedFile.source_path.ilike("%.partial.%"),
     )
 
 
@@ -91,7 +100,11 @@ class TrackedFileRepository:
         limit: int | None = None,
         offset: int | None = None,
     ) -> list[TrackedFile]:
-        query: Select[tuple[TrackedFile]] = select(TrackedFile).order_by(desc(TrackedFile.updated_at))
+        query: Select[tuple[TrackedFile]] = (
+            select(TrackedFile)
+            .where(_processable_source_path_condition())
+            .order_by(desc(TrackedFile.updated_at))
+        )
         if lifecycle_state is not None:
             query = query.where(TrackedFile.lifecycle_state == lifecycle_state)
         if compliance_state is not None:
@@ -122,7 +135,7 @@ class TrackedFileRepository:
         path_search: str | None = None,
         is_4k: bool | None = None,
     ) -> int:
-        query = select(TrackedFile.id)
+        query = select(TrackedFile.id).where(_processable_source_path_condition())
         if lifecycle_state is not None:
             query = query.where(TrackedFile.lifecycle_state == lifecycle_state)
         if compliance_state is not None:

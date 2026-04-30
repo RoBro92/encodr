@@ -18,6 +18,7 @@ from encodr_core.execution import (
     calculate_media_savings,
 )
 from encodr_core.execution.safety import evaluate_execution_safety
+from encodr_core.media import encodr_exclusion_reason
 from encodr_core.media.models import MediaFile
 from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload, build_processing_plan
 from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
@@ -77,6 +78,13 @@ class RemoteExecutionService:
         requested_backend = preferred_backend or self.settings.preferred_backend
         allow_fallback = self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback
         scratch_dir = scratch_dir_override or self.settings.scratch_dir or "."
+        blocked_result = _blocked_artifact_result(
+            source_path=source_path,
+            scratch_dir=scratch_dir,
+            started_at=datetime.now(timezone.utc),
+        )
+        if blocked_result is not None:
+            return blocked_result
         try:
             result = self.runner.execute_plan(
                 plan,
@@ -177,6 +185,13 @@ class RemoteExecutionService:
     ) -> ExecutionResult:
         started_at = datetime.now(timezone.utc)
         source_path = str(media_payload.get("file_path") or "")
+        blocked_result = _blocked_artifact_result(
+            source_path=source_path,
+            scratch_dir=None,
+            started_at=started_at,
+        )
+        if blocked_result is not None:
+            return blocked_result
         if progress_callback is not None:
             progress_callback(
                 ExecutionProgressUpdate(
@@ -643,3 +658,26 @@ def file_size_or_none(path: Path | str | None) -> int | None:
     if not resolved.exists() or not resolved.is_file():
         return None
     return resolved.stat().st_size
+
+
+def _blocked_artifact_result(
+    *,
+    source_path: Path | str,
+    scratch_dir: Path | str | None,
+    started_at: datetime,
+) -> ExecutionResult | None:
+    reason = encodr_exclusion_reason(source_path, scratch_dir=scratch_dir)
+    if reason is None:
+        return None
+    return ExecutionResult(
+        mode="blocked",
+        status="skipped",
+        command=[],
+        output_path=None,
+        failure_message=reason,
+        failure_category="excluded_encodr_artifact",
+        verification=VerificationResult.not_required(),
+        replacement=ReplacementResult.not_required(),
+        started_at=started_at,
+        completed_at=datetime.now(timezone.utc),
+    )

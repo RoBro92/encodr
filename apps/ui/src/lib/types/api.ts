@@ -373,6 +373,39 @@ export type BatchJobCreateResponse = {
   items: BatchJobItem[];
 };
 
+export type BulkQueueOperationItem = {
+  source_path: string;
+  status: string;
+  message: string | null;
+};
+
+export type BulkQueueOperation = {
+  id: string;
+  scope: string;
+  status: string;
+  stage: string;
+  status_text: string | null;
+  batch_size: number;
+  total_expected: number;
+  discovered_count: number;
+  queued_count: number;
+  skipped_count: number;
+  blocked_count: number;
+  failed_count: number;
+  current_batch: number;
+  total_batches: number;
+  error_summary: string | null;
+  items: BulkQueueOperationItem[];
+  started_at: string | null;
+  completed_at: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type BulkQueueOperationListResponse = {
+  items: BulkQueueOperation[];
+};
+
 export type CreateDryRunJobsPayload = FileSelectionPayload & {
   preferred_worker_id?: string;
   pinned_worker_id?: string;

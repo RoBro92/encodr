@@ -9,10 +9,20 @@ from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_config_bundle, get_local_worker_loop, get_session, get_session_factory, require_admin_user
+from app.core.dependencies import (
+    get_config_bundle,
+    get_local_worker_loop,
+    get_session,
+    get_session_factory,
+    require_admin_user,
+    require_admin_user_once,
+)
 from app.schemas.jobs import (
     BatchJobCreateResponse,
     BatchJobItemResponse,
+    BulkQueueOperationListResponse,
+    BulkQueueOperationResponse,
+    BulkQueueStartRequest,
     BulkJobActionResponse,
     CreateBatchJobsRequest,
     CreateDryRunJobsRequest,
@@ -33,14 +43,13 @@ from app.services.review import ReviewService
 from encodr_core.config import ConfigBundle
 from encodr_core.media.models import MediaFile
 from encodr_db.models import JobKind, JobStatus, User
-from encodr_db.repositories import WorkerRepository
+from encodr_db.repositories import BulkQueueOperationRepository, WorkerRepository
 from encodr_db.runtime import LocalWorkerLoop
 from encodr_shared.scheduling import schedule_windows_allow_now, schedule_windows_summary
 
 router = APIRouter(
     prefix="/jobs",
     tags=["jobs"],
-    dependencies=[Depends(require_admin_user)],
 )
 
 ARTWORK_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
@@ -107,7 +116,7 @@ def list_jobs(
 async def stream_job_progress(
     request: Request,
     session_factory=Depends(get_session_factory),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_admin_user_once),
 ) -> StreamingResponse:
     del current_user
 
@@ -233,6 +242,73 @@ def restore_job_backup(
         _raise_service_error(error)
 
 
+@router.post("/bulk-queue", response_model=BulkQueueOperationResponse, status_code=202)
+def start_bulk_queue_operation(
+    payload: BulkQueueStartRequest,
+    request: Request,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> BulkQueueOperationResponse:
+    del current_user
+    try:
+        operation, created = request.app.state.bulk_queue_service.create_operation(session, payload=payload)
+        operation_id = operation.id
+        session.commit()
+        session.refresh(operation)
+        if created:
+            request.app.state.bulk_queue_executor.start(operation_id)
+        return BulkQueueOperationResponse.from_model(operation)
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@router.get("/bulk-queue", response_model=BulkQueueOperationListResponse)
+def list_bulk_queue_operations(
+    active_only: bool = False,
+    limit: int = 10,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> BulkQueueOperationListResponse:
+    del current_user
+    operations = BulkQueueOperationRepository(session).list_recent(
+        limit=max(1, min(limit, 50)),
+        active_only=active_only,
+    )
+    return BulkQueueOperationListResponse(
+        items=[BulkQueueOperationResponse.from_model(operation) for operation in operations]
+    )
+
+
+@router.get("/bulk-queue/{operation_id}", response_model=BulkQueueOperationResponse)
+def get_bulk_queue_operation(
+    operation_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> BulkQueueOperationResponse:
+    del current_user
+    operation = BulkQueueOperationRepository(session).get_by_id(operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Bulk queue operation could not be found.")
+    return BulkQueueOperationResponse.from_model(operation)
+
+
+@router.post("/bulk-queue/{operation_id}/cancel", response_model=BulkQueueOperationResponse)
+def cancel_bulk_queue_operation(
+    operation_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> BulkQueueOperationResponse:
+    del current_user
+    operation = BulkQueueOperationRepository(session).get_by_id(operation_id)
+    if operation is None:
+        raise HTTPException(status_code=404, detail="Bulk queue operation could not be found.")
+    operation = BulkQueueOperationRepository(session).request_cancel(operation)
+    session.commit()
+    session.refresh(operation)
+    return BulkQueueOperationResponse.from_model(operation)
+
+
 @router.get("/{job_id}", response_model=JobDetailResponse)
 def get_job_detail(
     job_id: str,
@@ -259,33 +335,35 @@ def get_job_detail(
 @router.get("/{job_id}/artwork")
 def get_job_artwork(
     job_id: str,
-    session: Session = Depends(get_session),
+    session_factory=Depends(get_session_factory),
     config_bundle: ConfigBundle = Depends(get_config_bundle),
-    current_user: User = Depends(require_admin_user),
+    current_user: User = Depends(require_admin_user_once),
 ):
     del current_user
-    try:
-        job = JobsService().get_job(session, job_id=job_id)
-    except ApiServiceError as error:
-        _raise_service_error(error)
-    probe_payload = job.plan_snapshot.probe_snapshot.payload if job.plan_snapshot and job.plan_snapshot.probe_snapshot else {}
-    source_path = Path(
-        job.tracked_file.source_path
-        if job.tracked_file is not None
-        else str(probe_payload.get("container", {}).get("file_path") or probe_payload.get("file_path") or "")
-    )
-    if not source_path.as_posix() or source_path.as_posix() == ".":
-        raise HTTPException(status_code=404, detail="Artwork is not available for this job.")
-    artwork_path = resolve_job_artwork_path(
-        job_id=job.id,
-        source_path=source_path,
-        ffmpeg_path=config_bundle.app.media.ffmpeg_path,
-        cache_dir=config_bundle.app.data_dir / "artwork-cache",
-        duration_seconds=(
+    with session_factory() as session:
+        try:
+            job = JobsService().get_job(session, job_id=job_id)
+        except ApiServiceError as error:
+            _raise_service_error(error)
+        probe_payload = job.plan_snapshot.probe_snapshot.payload if job.plan_snapshot and job.plan_snapshot.probe_snapshot else {}
+        source_path = Path(
+            job.tracked_file.source_path
+            if job.tracked_file is not None
+            else str(probe_payload.get("container", {}).get("file_path") or probe_payload.get("file_path") or "")
+        )
+        duration_seconds = (
             job.plan_snapshot.probe_snapshot.payload.get("container", {}).get("duration_seconds")
             if job.plan_snapshot and job.plan_snapshot.probe_snapshot and isinstance(job.plan_snapshot.probe_snapshot.payload, dict)
             else None
-        ),
+        )
+    if not source_path.as_posix() or source_path.as_posix() == ".":
+        raise HTTPException(status_code=404, detail="Artwork is not available for this job.")
+    artwork_path = resolve_job_artwork_path(
+        job_id=job_id,
+        source_path=source_path,
+        ffmpeg_path=config_bundle.app.media.ffmpeg_path,
+        cache_dir=config_bundle.app.data_dir / "artwork-cache",
+        duration_seconds=duration_seconds,
     )
     if artwork_path is None:
         raise HTTPException(status_code=404, detail="Artwork is not available for this job.")

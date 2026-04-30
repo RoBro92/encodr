@@ -1,10 +1,16 @@
 from __future__ import annotations
 
-from fastapi import FastAPI
+import logging
+
+from fastapi import FastAPI, Request
+from fastapi.responses import JSONResponse
 from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.exc import TimeoutError as SQLAlchemyTimeoutError
 from sqlalchemy.orm import sessionmaker
 
 from app.api.routes import router
+from app.services.bulk_queue import BulkQueueExecutor, BulkQueueService
 from app.services.orchestration import BackgroundOrchestrationLoop, OrchestrationService
 from app.core import PasswordHashService, TokenService, load_auth_runtime_settings
 from app.core.security import WorkerTokenService
@@ -15,6 +21,31 @@ from encodr_db.runtime import LocalWorkerLoop, WorkerExecutionService, WorkerSta
 from encodr_shared import UpdateCheckSettings, UpdateChecker, configure_component_logging, read_version
 
 APP_VERSION = read_version()
+logger = logging.getLogger("encodr.api")
+
+
+def create_runtime_engine(database_dsn: str):
+    options: dict[str, object] = {
+        "future": True,
+        "pool_pre_ping": True,
+    }
+    try:
+        url = make_url(database_dsn)
+    except Exception:
+        url = None
+    if url is not None and url.drivername.startswith("postgresql"):
+        options.update(
+            {
+                "pool_size": 10,
+                "max_overflow": 20,
+                "pool_timeout": 30,
+            }
+        )
+        logger.info(
+            "configured database connection pool",
+            extra={"pool_size": 10, "max_overflow": 20, "pool_timeout": 30},
+        )
+    return create_engine(database_dsn, **options)
 
 
 def create_app(
@@ -36,6 +67,14 @@ def create_app(
         description="API service for the encodr media ingestion preparation platform.",
     )
 
+    @app.exception_handler(SQLAlchemyTimeoutError)
+    async def sqlalchemy_timeout_handler(request: Request, exc: SQLAlchemyTimeoutError) -> JSONResponse:
+        logger.error("database connection pool exhausted", extra={"path": request.url.path}, exc_info=exc)
+        return JSONResponse(
+            status_code=503,
+            content={"detail": "The API is temporarily waiting for database connections. Please retry shortly."},
+        )
+
     auth_runtime = load_auth_runtime_settings(bundle.app)
     worker_auth_runtime = load_worker_auth_runtime_settings(bundle.app)
     app.state.config_bundle = bundle
@@ -55,10 +94,16 @@ def create_app(
     )
 
     if session_factory is None:
-        engine = create_engine(bundle.app.database.dsn, future=True)
+        engine = create_runtime_engine(str(bundle.app.database.dsn))
         session_factory = sessionmaker(engine, future=True)
     app.state.session_factory = session_factory
     app.state.probe_client_factory = lambda: FFprobeClient(binary_path=bundle.app.media.ffprobe_path)
+    app.state.bulk_queue_service = BulkQueueService(
+        config_bundle=bundle,
+        session_factory=session_factory,
+        probe_client_factory=app.state.probe_client_factory,
+    )
+    app.state.bulk_queue_executor = BulkQueueExecutor(app.state.bulk_queue_service)
     app.state.worker_status_tracker = WorkerStatusTracker()
     app.state.local_worker_loop = LocalWorkerLoop(
         session_factory,

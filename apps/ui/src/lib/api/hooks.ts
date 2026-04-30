@@ -6,6 +6,7 @@ import {
   batchPlan,
   browseFolder,
   bootstrapAdmin,
+  cancelBulkQueueOperation,
   cancelJob,
   checkUpdateStatus,
   clearReviewItemProtected,
@@ -28,6 +29,7 @@ import {
   getCurrentUser,
   getExecutionPreferences,
   getBootstrapStatus,
+  getBulkQueueOperation,
   getEffectiveConfig,
   getFile,
   getScan,
@@ -45,6 +47,7 @@ import {
   getWorkerStatus,
   holdReviewItem,
   listWorkers,
+  listBulkQueueOperations,
   listJobBackups,
   listReviewItems,
   markReviewItemProtected,
@@ -62,6 +65,7 @@ import {
   runWorkerOnce,
   scanFolder,
   setupLocalWorker,
+  startBulkQueueOperation,
   enableWorker,
   listScans,
   listWatchedJobs,
@@ -76,6 +80,7 @@ import type {
   CreateBatchJobsPayload,
   CreateJobPayload,
   CreateDryRunJobsPayload,
+  BulkQueueOperation,
   FileSelectionPayload,
   JobDetail,
   JobBackupListResponse,
@@ -909,6 +914,53 @@ export function useCreateBatchJobsMutation() {
         queryClient.invalidateQueries({ queryKey: ["files"] }),
         queryClient.invalidateQueries({ queryKey: ["review"] }),
       ]);
+    },
+  });
+}
+
+export function useStartBulkQueueOperationMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: CreateBatchJobsPayload) => startBulkQueueOperation(apiClient, payload),
+    onSuccess: async (operation) => {
+      queryClient.setQueryData(["jobs", "bulk-queue", operation.id], operation);
+      await queryClient.invalidateQueries({ queryKey: ["jobs", "bulk-queue"] });
+    },
+  });
+}
+
+export function useBulkQueueOperationQuery(operationId?: string | null) {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery<BulkQueueOperation>({
+    queryKey: ["jobs", "bulk-queue", operationId],
+    queryFn: () => getBulkQueueOperation(apiClient, operationId as string),
+    enabled: isAuthenticated && Boolean(operationId),
+    refetchInterval: (query) => {
+      const status = query.state.data?.status;
+      return status && ["completed", "failed", "cancelled"].includes(status) ? false : 1000;
+    },
+  });
+}
+
+export function useActiveBulkQueueOperationsQuery() {
+  const { apiClient, isAuthenticated } = useSession();
+  return useQuery({
+    queryKey: ["jobs", "bulk-queue", "active"],
+    queryFn: () => listBulkQueueOperations(apiClient, { active_only: true, limit: 1 }),
+    enabled: isAuthenticated,
+    refetchInterval: 2000,
+  });
+}
+
+export function useCancelBulkQueueOperationMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (operationId: string) => cancelBulkQueueOperation(apiClient, operationId),
+    onSuccess: async (operation) => {
+      queryClient.setQueryData(["jobs", "bulk-queue", operation.id], operation);
+      await queryClient.invalidateQueries({ queryKey: ["jobs", "bulk-queue"] });
     },
   });
 }

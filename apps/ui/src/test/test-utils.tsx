@@ -90,6 +90,15 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       });
     }
 
+    if (method === "GET" && new URL(url, "http://localhost").pathname === "/api/jobs/bulk-queue") {
+      return new Response(JSON.stringify({ items: [] }), {
+        status: 200,
+        headers: {
+          "Content-Type": "application/json",
+        },
+      });
+    }
+
     if (!route && method === "GET" && url.includes("/api/auth/bootstrap-status")) {
       return new Response(
         JSON.stringify({

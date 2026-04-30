@@ -3,11 +3,12 @@ from __future__ import annotations
 import json
 from datetime import datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from encodr_core.config import load_config_bundle
-from encodr_db.models import FileLifecycleState, Job, JobKind, JobStatus, PlanSnapshot, ProbeSnapshot, TrackedFile
+from encodr_db.models import BulkQueueOperation, FileLifecycleState, Job, JobKind, JobStatus, PlanSnapshot, ProbeSnapshot, TrackedFile
 from encodr_db.repositories import TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import WorkerExecutionService
 from encodr_core.verification import OutputVerifier
@@ -16,7 +17,7 @@ from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
 from tests.helpers.filesystem import FilesystemLayout, create_filesystem_layout
-from tests.helpers.jobs import StaticProbeClient, StagedRunner, create_job, media_at_path, parse_fixture
+from tests.helpers.jobs import StaticProbeClient, StagedRunner, create_job, create_planned_file, media_at_path, parse_fixture
 
 pytestmark = [pytest.mark.integration]
 
@@ -903,6 +904,108 @@ def test_folder_browse_uses_the_active_media_root_for_parent_navigation(
     assert scan_response.json()["root_path"] == alt_root.resolve().as_posix()
 
 
+def test_scan_excludes_encodr_backup_and_temp_artifacts(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    media_path = layout.create_source_file("Movies/Processable Film (2024).mkv", contents="film")
+    backup_path = layout.create_source_file("Movies/Processable Film (2024).encodr-backup.mkv", contents="backup")
+    temp_path = layout.create_source_file("Movies/Processable Film (2024).tmp.mkv", contents="temp")
+
+    response = context.client.post(
+        "/api/files/scan",
+        json={"source_path": (layout.source_dir / "Movies").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    scanned_paths = {item["path"] for item in payload["files"]}
+    assert payload["video_file_count"] == 1
+    assert media_path.as_posix() in scanned_paths
+    assert backup_path.as_posix() not in scanned_paths
+    assert temp_path.as_posix() not in scanned_paths
+
+    with session_factory() as session:
+        tracked_paths = {item.source_path for item in session.query(TrackedFile).all()}
+        assert media_path.as_posix() in tracked_paths
+        assert backup_path.as_posix() not in tracked_paths
+        assert temp_path.as_posix() not in tracked_paths
+
+
+def test_direct_job_creation_rejects_encodr_backup_target(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    backup_path = layout.create_source_file("Movies/Old Backup.encodr-backup.mkv", contents="backup")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), backup_path)
+    with session_factory() as session:
+        planned = create_planned_file(session, bundle, media, source_path=backup_path.as_posix())
+        session.commit()
+
+    response = context.client.post(
+        "/api/jobs",
+        json={"plan_snapshot_id": planned.plan_snapshot_id},
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 409
+    assert "backup files" in response.json()["detail"].lower()
+    with session_factory() as session:
+        assert session.query(Job).count() == 0
+
+
+def test_watched_jobs_ignore_encodr_backup_files(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    watched_dir = layout.source_dir / "Watched"
+    watched_dir.mkdir(parents=True, exist_ok=True)
+    backup_path = layout.create_source_file("Watched/Show Episode.encodr-backup.mkv", contents="backup")
+
+    create_response = context.client.post(
+        "/api/files/watchers",
+        json={
+            "display_name": "Watched",
+            "source_path": watched_dir.as_posix(),
+            "media_class": "movie",
+            "ruleset_override": None,
+            "preferred_worker_id": None,
+            "pinned_worker_id": None,
+            "preferred_backend": None,
+            "schedule_windows": [],
+            "auto_queue": True,
+            "stage_only": False,
+            "enabled": True,
+        },
+        headers=auth.headers,
+    )
+    assert create_response.status_code == 201
+
+    summary = context.app.state.orchestration_service.run_once()
+
+    assert summary.scanned_watchers == 1
+    assert summary.queued_jobs == 0
+    with session_factory() as session:
+        assert session.query(Job).count() == 0
+        assert session.query(TrackedFile).count() == 0
+        scan = context.app.state.orchestration_service.list_recent_scans(session)[0]
+        assert scan["files"] == []
+    assert backup_path.exists()
+
+
 def test_batch_plan_and_job_creation_from_folder_persist_results_without_bypassing_review(
     tmp_path: Path,
     repo_root: Path,
@@ -992,6 +1095,108 @@ def test_batch_job_creation_reports_existing_active_job_as_blocked(
         assert session.query(Job).count() == 1
 
 
+def test_job_list_and_artwork_access_for_100_jobs_keeps_api_healthy(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    with session_factory() as session:
+        for index in range(100):
+            source_path = layout.create_source_file(f"Movies/Artwork Scale {index:03d} (2024).mkv", contents="film")
+            media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+            create_job(session, bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    list_response = context.client.get("/api/jobs", params={"limit": 100}, headers=auth.headers)
+
+    assert list_response.status_code == 200
+    job_ids = [item["id"] for item in list_response.json()["items"]]
+    assert len(job_ids) == 100
+    for job_id in job_ids:
+        artwork_response = context.client.get(f"/api/jobs/{job_id}/artwork", headers=auth.headers)
+        assert artwork_response.status_code == 404
+
+
+def test_progress_stream_opens_short_lived_db_sessions(repo_root: Path) -> None:
+    source = (repo_root / "apps" / "api" / "app" / "api" / "jobs.py").read_text(encoding="utf-8")
+    stream_block = source[source.index("async def stream_job_progress(") : source.index("@router.post(\"/clear-queue\"")]
+
+    assert "session_factory=Depends(get_session_factory)" in stream_block
+    assert "current_user: User = Depends(require_admin_user_once)" in stream_block
+    assert "session: Session = Depends(get_session)" not in stream_block
+    assert "with session_factory() as session:" in stream_block
+
+
+def test_bulk_queue_processes_500_files_in_batches_and_reports_progress(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    for index in range(500):
+        layout.create_source_file(f"Movies/Bulk Film {index:03d} (2024).mkv", contents="film")
+
+    base_media = parse_fixture("non4k_remux_languages.json")
+    context.app.state.bulk_queue_service.probe_client_factory = lambda: StaticProbeClient(base_media)
+    counting_factory = CountingSessionFactory(session_factory)
+    context.app.state.bulk_queue_service.session_factory = counting_factory
+
+    with session_factory() as session:
+        operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(folder_path=(layout.source_dir / "Movies").as_posix()),
+        )
+        operation_id = operation.id
+        session.commit()
+
+    assert created is True
+
+    context.app.state.bulk_queue_service.process_operation(operation_id)
+
+    with session_factory() as session:
+        operation = session.get(BulkQueueOperation, operation_id)
+        assert operation is not None
+        assert operation.status == "completed"
+        assert operation.stage == "completed"
+        assert operation.batch_size == 25
+        assert operation.total_expected == 500
+        assert operation.discovered_count == 500
+        assert operation.queued_count == 500
+        assert operation.skipped_count == 0
+        assert operation.blocked_count == 0
+        assert operation.failed_count == 0
+        assert operation.current_batch == 20
+        assert operation.total_batches == 20
+        assert session.query(Job).count() == 500
+
+    assert counting_factory.commit_count > 500
+
+
+def test_duplicate_bulk_queue_start_reuses_active_operation(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    source_path = layout.create_source_file("Movies/Duplicate Bulk (2024).mkv", contents="film")
+    payload = bulk_queue_payload(selected_paths=[source_path.as_posix()])
+
+    with session_factory() as session:
+        first, first_created = context.app.state.bulk_queue_service.create_operation(session, payload=payload)
+        second, second_created = context.app.state.bulk_queue_service.create_operation(session, payload=payload)
+        session.commit()
+
+    assert first_created is True
+    assert second_created is False
+    assert second.id == first.id
+    with session_factory() as session:
+        assert session.query(BulkQueueOperation).count() == 1
+        assert session.query(Job).count() == 0
+
+
 def build_context(
     tmp_path: Path,
     repo_root: Path,
@@ -1021,3 +1226,67 @@ def build_context(
 def authenticate(context) -> object:
     bootstrap_admin(context.client)
     return login_user(context.client)
+
+
+def bulk_queue_payload(
+    *,
+    source_path: str | None = None,
+    folder_path: str | None = None,
+    selected_paths: list[str] | None = None,
+) -> SimpleNamespace:
+    return SimpleNamespace(
+        source_path=source_path,
+        folder_path=folder_path,
+        selected_paths=selected_paths or [],
+        preferred_worker_id=None,
+        pinned_worker_id=None,
+        preferred_backend_override=None,
+        schedule_windows=[],
+        backup_policy="keep",
+    )
+
+
+class CountingSessionFactory:
+    def __init__(self, real_factory) -> None:
+        self.real_factory = real_factory
+        self.active_sessions = 0
+        self.opened_sessions = 0
+        self.commit_count = 0
+
+    def __call__(self):
+        return CountingSession(self, self.real_factory())
+
+
+class CountingSession:
+    def __init__(self, factory: CountingSessionFactory, session) -> None:
+        self.factory = factory
+        self.session = session
+        self._entered = False
+
+    def __enter__(self):
+        self._entered = True
+        self.factory.opened_sessions += 1
+        self.factory.active_sessions += 1
+        self.session.__enter__()
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        try:
+            return self.session.__exit__(exc_type, exc, traceback)
+        finally:
+            if self._entered:
+                self.factory.active_sessions -= 1
+                self._entered = False
+
+    def __getattr__(self, name: str):
+        return getattr(self.session, name)
+
+    def commit(self) -> None:
+        self.factory.commit_count += 1
+        self.session.commit()
+
+    def rollback(self) -> None:
+        self.session.rollback()
+
+    def close(self) -> None:
+        self.session.close()

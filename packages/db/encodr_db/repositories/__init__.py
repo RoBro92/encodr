@@ -1,5 +1,6 @@
 from encodr_db.repositories.analytics import AnalyticsRepository
 from encodr_db.repositories.audit import AuditEventRepository
+from encodr_db.repositories.bulk_queue_operations import BulkQueueOperationRepository
 from encodr_db.repositories.jobs import JobRepository
 from encodr_db.repositories.manual_review import ManualReviewDecisionRepository
 from encodr_db.repositories.scan_records import ScanRecordRepository
@@ -14,6 +15,7 @@ from encodr_db.repositories.workers import WorkerRepository
 __all__ = [
     "AnalyticsRepository",
     "AuditEventRepository",
+    "BulkQueueOperationRepository",
     "JobRepository",
     "ManualReviewDecisionRepository",
     "PlanSnapshotRepository",

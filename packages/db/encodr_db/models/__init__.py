@@ -15,6 +15,7 @@ from encodr_db.models.enums import (
     WorkerType,
 )
 from encodr_db.models.audit_event import AuditEvent
+from encodr_db.models.bulk_queue_operation import BulkQueueOperation
 from encodr_db.models.job import Job
 from encodr_db.models.manual_review_decision import ManualReviewDecision
 from encodr_db.models.plan_snapshot import PlanSnapshot
@@ -32,6 +33,7 @@ __all__ = [
     "AuditEventType",
     "AuditOutcome",
     "Base",
+    "BulkQueueOperation",
     "ComplianceState",
     "FileLifecycleState",
     "Job",

@@ -9,6 +9,7 @@ from typing import Callable
 from sqlalchemy.orm import Session
 
 from app.services.errors import ApiConflictError, ApiNotFoundError
+from encodr_core.media import encodr_exclusion_reason
 from encodr_core.planning import ProcessingPlan
 from encodr_db.models import (
     ComplianceState,
@@ -90,6 +91,7 @@ class JobsService:
             tracked_file_id=tracked_file_id,
             plan_snapshot_id=plan_snapshot_id,
         )
+        self._validate_processable_target(tracked_file)
         repository = JobRepository(session)
         if repository.has_active_job_for_tracked_file(tracked_file.id):
             raise ApiConflictError("An active job already exists for this tracked file.")
@@ -127,6 +129,7 @@ class JobsService:
         original_job = self.get_job(session, job_id=job_id)
         if original_job.status not in {JobStatus.FAILED, JobStatus.MANUAL_REVIEW, JobStatus.SKIPPED, JobStatus.INTERRUPTED, JobStatus.CANCELLED}:
             raise ApiConflictError("Only failed, interrupted, cancelled, manual-review, or skipped jobs can be retried.")
+        self._validate_processable_target(original_job.tracked_file)
         self._validate_review_gate(
             session,
             tracked_file=original_job.tracked_file,
@@ -336,6 +339,10 @@ class JobsService:
         schedule_windows: list[dict] | None,
     ) -> Job | None:
         repository = JobRepository(session)
+        try:
+            self._validate_processable_target(tracked_file)
+        except ApiConflictError:
+            return None
         if repository.has_active_job_for_tracked_file(tracked_file.id):
             return None
         try:
@@ -381,6 +388,12 @@ class JobsService:
         if plan_snapshot is None:
             raise ApiConflictError("No plan snapshot exists for the tracked file.")
         return tracked_file, plan_snapshot
+
+    @staticmethod
+    def _validate_processable_target(tracked_file: TrackedFile) -> None:
+        reason = encodr_exclusion_reason(tracked_file.source_path)
+        if reason is not None:
+            raise ApiConflictError(reason)
 
     def _validate_review_gate(
         self,

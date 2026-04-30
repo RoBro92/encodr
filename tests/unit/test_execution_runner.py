@@ -61,6 +61,38 @@ def test_skip_job_completes_without_ffmpeg(tmp_path: Path) -> None:
         assert refreshed.replacement_status == DbReplacementStatus.NOT_REQUIRED
 
 
+def test_worker_refuses_encodr_backup_target_without_transcoding(tmp_path: Path) -> None:
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Old Copy.encodr-backup.mkv"
+        source_path.parent.mkdir(parents=True, exist_ok=True)
+        source_path.write_text("backup", encoding="utf-8")
+        media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+
+        service = WorkerExecutionService(runner=ExecutionRunner(ffmpeg_client=FailIfCalledClient()))
+        jobs = JobRepository(session)
+        jobs.mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed = session.get(Job, job.id)
+        assert result.status == "skipped"
+        assert result.failure_category == "excluded_encodr_artifact"
+        assert "backup files" in (result.failure_message or "").lower()
+        assert refreshed.status == JobStatus.SKIPPED
+        assert refreshed.failure_category == "excluded_encodr_artifact"
+        assert refreshed.verification_status == DbVerificationStatus.NOT_REQUIRED
+        assert refreshed.replacement_status == DbReplacementStatus.NOT_REQUIRED
+        assert source_path.exists()
+
+
 def test_manual_review_job_is_marked_correctly(tmp_path: Path) -> None:
     with database_session() as session:
         bundle = load_config_bundle(project_root=REPO_ROOT)

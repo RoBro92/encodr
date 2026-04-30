@@ -11,6 +11,8 @@ import type {
   BootstrapStatus,
   BatchPlanResponse,
   BatchJobCreateResponse,
+  BulkQueueOperation,
+  BulkQueueOperationListResponse,
   BulkJobActionResponse,
   CreateJobPayload,
   CreateDryRunJobsPayload,
@@ -380,6 +382,38 @@ export function createBatchJobs(client: ApiClient, payload: CreateBatchJobsPaylo
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export function startBulkQueueOperation(
+  client: ApiClient,
+  payload: CreateBatchJobsPayload,
+): Promise<BulkQueueOperation> {
+  return client.request<BulkQueueOperation>("/jobs/bulk-queue", {
+    method: "POST",
+    body: JSON.stringify(payload),
+  });
+}
+
+export function listBulkQueueOperations(
+  client: ApiClient,
+  query: Record<string, string | number | boolean | undefined> = {},
+): Promise<BulkQueueOperationListResponse> {
+  const search = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") {
+      search.set(key, String(value));
+    }
+  });
+  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  return client.request<BulkQueueOperationListResponse>(`/jobs/bulk-queue${suffix}`);
+}
+
+export function getBulkQueueOperation(client: ApiClient, operationId: string): Promise<BulkQueueOperation> {
+  return client.request<BulkQueueOperation>(`/jobs/bulk-queue/${operationId}`);
+}
+
+export function cancelBulkQueueOperation(client: ApiClient, operationId: string): Promise<BulkQueueOperation> {
+  return client.request<BulkQueueOperation>(`/jobs/bulk-queue/${operationId}/cancel`, { method: "POST" });
 }
 
 export function retryJob(client: ApiClient, jobId: string): Promise<JobDetail> {

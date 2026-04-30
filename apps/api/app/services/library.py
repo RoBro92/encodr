@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.services.errors import ApiNotFoundError, ApiValidationError
 from encodr_core.config import ConfigBundle
+from encodr_core.media import encodr_exclusion_reason
 
 VIDEO_EXTENSIONS = {
     ".mkv",
@@ -75,6 +76,9 @@ class LibraryService:
             raise ApiValidationError("The selected path must point to a file.")
         resolved = candidate.resolve()
         self.root_for_path(resolved)
+        reason = self.exclusion_reason(resolved)
+        if reason is not None:
+            raise ApiValidationError(reason)
         return resolved
 
     def browse_directory(self, path: str | None) -> dict[str, object]:
@@ -84,7 +88,7 @@ class LibraryService:
         for item in sorted(current.iterdir(), key=lambda child: (not child.is_dir(), child.name.lower())):
             if item.name.startswith("."):
                 continue
-            is_video = item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS
+            is_video = item.is_file() and self.is_processable_video_file(item)
             if item.is_file() and not is_video:
                 continue
             entries.append(
@@ -124,7 +128,7 @@ class LibraryService:
             if item.is_dir():
                 directories.append(item)
                 continue
-            if item.is_file() and item.suffix.lower() in VIDEO_EXTENSIONS:
+            if item.is_file() and self.is_processable_video_file(item):
                 video_files.append(item)
 
         direct_children = [child for child in current.iterdir() if child.is_dir() and not child.name.startswith(".")]
@@ -187,6 +191,12 @@ class LibraryService:
         if not deduplicated:
             raise ApiValidationError("No file paths were selected.")
         return "selection", list(deduplicated.values())
+
+    def is_processable_video_file(self, path: Path) -> bool:
+        return path.suffix.lower() in VIDEO_EXTENSIONS and self.exclusion_reason(path) is None
+
+    def exclusion_reason(self, path: Path | str) -> str | None:
+        return encodr_exclusion_reason(path, scratch_dir=self.config_bundle.app.scratch_dir)
 
     @staticmethod
     def summarise_actions(actions: list[str]) -> list[dict[str, object]]:
