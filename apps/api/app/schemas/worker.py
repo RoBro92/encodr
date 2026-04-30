@@ -41,6 +41,7 @@ class DevicePathStatusResponse(BaseModel):
 class ExecutionBackendStatusResponse(BaseModel):
     backend: str
     preference_key: str
+    preference_keys: list[str] = Field(default_factory=list)
     detected: bool
     usable_by_ffmpeg: bool
     ffmpeg_path_verified: bool
@@ -94,6 +95,9 @@ class WorkerPreferenceRequest(BaseModel):
     preferred_backend: Literal[
         "cpu_only",
         "prefer_intel_igpu",
+        "intel_auto",
+        "intel_qsv",
+        "intel_vaapi",
         "prefer_nvidia_gpu",
         "prefer_amd_gpu",
     ]
@@ -170,6 +174,14 @@ class WorkerRuntimeSummaryResponse(BaseModel):
     max_concurrent_jobs: int | None = None
     current_job_id: str | None = None
     current_backend: str | None = None
+    selected_backend: str | None = None
+    backend_fallback_used: bool | None = None
+    backend_fallback_reason: str | None = None
+    qsv_usable: bool | None = None
+    qsv_unavailable_reason: str | None = None
+    vaapi_usable: bool | None = None
+    vaapi_unavailable_reason: str | None = None
+    backend_diagnostic: dict[str, Any] | None = None
     current_stage: str | None = None
     current_progress_percent: int | None = None
     current_progress_updated_at: datetime | None = None
@@ -234,6 +246,14 @@ class WorkerStatusResponse(BaseModel):
     processed_jobs: int = 0
     current_job_id: str | None = None
     current_backend: str | None = None
+    selected_backend: str | None = None
+    backend_fallback_used: bool | None = None
+    backend_fallback_reason: str | None = None
+    qsv_usable: bool | None = None
+    qsv_unavailable_reason: str | None = None
+    vaapi_usable: bool | None = None
+    vaapi_unavailable_reason: str | None = None
+    backend_diagnostic: dict[str, Any] | None = None
     current_stage: str | None = None
     current_progress_percent: int | None = None
     current_progress_updated_at: datetime | None = None

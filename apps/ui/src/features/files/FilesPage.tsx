@@ -92,7 +92,9 @@ const RULESET_OPTIONS = [
 const BACKEND_OPTIONS = [
   { value: "", label: "Use worker default" },
   { value: "cpu_only", label: "CPU only" },
-  { value: "prefer_intel_igpu", label: "Prefer Intel iGPU" },
+  { value: "intel_auto", label: "Intel auto" },
+  { value: "intel_qsv", label: "Intel QSV" },
+  { value: "intel_vaapi", label: "Intel VAAPI" },
   { value: "prefer_nvidia_gpu", label: "Prefer NVIDIA" },
   { value: "prefer_amd_gpu", label: "Prefer AMD" },
 ];

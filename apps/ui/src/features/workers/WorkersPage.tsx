@@ -41,7 +41,9 @@ import { APP_ROUTES } from "../../lib/utils/routes";
 
 const BACKEND_OPTIONS = [
   { label: "CPU only", value: "cpu_only" },
-  { label: "Prefer Intel iGPU", value: "prefer_intel_igpu" },
+  { label: "Intel auto", value: "intel_auto" },
+  { label: "Intel QSV", value: "intel_qsv" },
+  { label: "Intel VAAPI", value: "intel_vaapi" },
   { label: "Prefer NVIDIA", value: "prefer_nvidia_gpu" },
   { label: "Prefer AMD", value: "prefer_amd_gpu" },
 ] as const;
@@ -144,7 +146,7 @@ export function WorkersPage() {
     () =>
       (workerStatus?.hardware_probes ?? [])
         .filter((item) => item.backend !== "cpu")
-        .filter((item) => item.preference_key === localDraft.preferred_backend)
+        .filter((item) => probeMatchesPreference(item, localDraft.preferred_backend))
         .map((item) => ({
           backend: item.backend,
           usable: item.usable_by_ffmpeg,
@@ -193,13 +195,13 @@ export function WorkersPage() {
   const detailCurrentBackend = detail?.current_backend ?? detail?.runtime_summary?.current_backend ?? null;
   const cpuFallbackActive = Boolean(
     detail?.preferred_backend &&
-    detailCurrentBackend &&
-    detail.preferred_backend !== "cpu_only" &&
-    detailCurrentBackend === "cpu",
+    (detailCurrentBackend || detail?.runtime_summary?.selected_backend) &&
+    backendModeForPreference(detail.preferred_backend) !== "cpu" &&
+    (detailCurrentBackend === "cpu" || (detail?.runtime_summary?.backend_fallback_used && detail.runtime_summary.selected_backend === "cpu")),
   );
   const localBackendProbes = localWorkerStatus?.hardware_probes ?? [];
   const configuredBackendProbe = detail?.worker_type === "local"
-    ? localBackendProbes.find((item) => item.preference_key === detail.preferred_backend)
+    ? localBackendProbes.find((item) => probeMatchesPreference(item, detail.preferred_backend))
     : null;
   const detailStatusRollup = detail ? buildWorkerStatusRollup(detail, localWorkerStatus) : null;
   const detailAttentionTitle = detailStatusRollup?.badge === "degraded"
@@ -212,9 +214,16 @@ export function WorkersPage() {
   const selectedHardwareBackendProbe = configuredBackendProbe && configuredBackendProbe.backend !== "cpu"
     ? configuredBackendProbe
     : null;
-  const selectedRuntimeBackend = readProbeString(configuredBackendProbe, "selected_backend");
+  const selectedRuntimeBackend = detail?.runtime_summary?.selected_backend ?? readProbeString(configuredBackendProbe, "selected_backend");
+  const backendDisplay = detailCurrentBackend ?? selectedRuntimeBackend ?? detail?.preferred_backend ?? null;
+  const currentBackendMetric = detailCurrentBackend
+    ? formatBackendLabel(detailCurrentBackend)
+    : selectedRuntimeBackend
+      ? `No active job running. Worker will use ${formatBackendLabel(selectedRuntimeBackend)} for the next eligible job.`
+      : "No active job running. Backend not reported.";
   const usableRuntimeBackends = readProbeStringList(configuredBackendProbe, "usable_backends");
-  const qsvUnavailableReason = readProbeString(configuredBackendProbe, "qsv_unavailable_reason") ?? readProbeString(configuredBackendProbe, "fallback_reason");
+  const qsvUnavailableReason = detail?.runtime_summary?.qsv_unavailable_reason ?? readProbeString(configuredBackendProbe, "qsv_unavailable_reason");
+  const fallbackReason = detail?.runtime_summary?.backend_fallback_reason ?? readProbeString(configuredBackendProbe, "fallback_reason");
   const selectedRuntimeDevices = selectedHardwareBackendProbe?.device_paths ?? [];
 
   function openAddWorker(mode: Exclude<AddWorkerMode, "choose">) {
@@ -393,7 +402,7 @@ export function WorkersPage() {
                 <WorkerDetailTag label="Type" value={titleCase(detail.worker_type)} />
                 <WorkerDetailTag
                   label="Backend"
-                  value={cpuFallbackActive ? "CPU fallback" : formatBackendLabel(selectedRuntimeBackend ?? detailCurrentBackend ?? detail.preferred_backend)}
+                  value={formatBackendLabel(backendDisplay)}
                 />
                 <WorkerDetailTag
                   label="Status"
@@ -442,7 +451,7 @@ export function WorkersPage() {
                   label="Current activity"
                   value={detail.current_stage ?? detail.runtime_summary?.current_stage ?? detail.current_job_id ?? "Idle"}
                 />
-                <WorkerDetailMetric label="Current backend" value={formatBackendLabel(detailCurrentBackend)} />
+                <WorkerDetailMetric label="Current backend" value={currentBackendMetric} />
                 <WorkerDetailMetric label="Concurrency" value={formatConcurrencyLabel(detail)} />
                 <WorkerDetailMetric label="Pending assignments" value={String(detail.pending_assignment_count)} />
                 <WorkerDetailMetric label="Schedule" value={detail.schedule_summary ?? "Any time"} />
@@ -455,6 +464,9 @@ export function WorkersPage() {
                     { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
                     { label: "Selected backend", value: formatBackendLabel(selectedRuntimeBackend ?? detailCurrentBackend) },
                     { label: "Usable backends", value: usableRuntimeBackends.length > 0 ? usableRuntimeBackends.map(formatBackendLabel).join(" • ") : "Not reported" },
+                    { label: "QSV status", value: formatBackendComponentStatus(configuredBackendProbe, "qsv", detail.runtime_summary?.qsv_usable, qsvUnavailableReason) },
+                    { label: "VAAPI status", value: formatBackendComponentStatus(configuredBackendProbe, "vaapi", detail.runtime_summary?.vaapi_usable, detail.runtime_summary?.vaapi_unavailable_reason) },
+                    { label: "Fallback", value: fallbackReason ?? (detail.runtime_summary?.backend_fallback_used ? "Active" : "None") },
                     { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
                     { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
                     { label: "Current job", value: detail.current_job_id ?? detail.runtime_summary?.current_job_id ?? "Idle" },
@@ -497,13 +509,13 @@ export function WorkersPage() {
                           },
                         ]}
                       />
-                      {selectedHardwareBackendProbe ? (
+                      {selectedHardwareBackendProbe && hasSelectedBackendDiagnostic(selectedHardwareBackendProbe) ? (
                         <CapabilityStrip
                           title="Selected backend diagnostic"
                           description={formatSelectedBackendDiagnosticMessage(
                             formatBackendLabel(detail.preferred_backend),
                             selectedHardwareBackendProbe.status,
-                            qsvUnavailableReason ?? selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
+                            qsvUnavailableReason ?? fallbackReason ?? selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
                             selectedRuntimeBackend,
                           )}
                           tone={selectedHardwareBackendProbe.status === "failed" ? "danger" : "default"}
@@ -639,6 +651,20 @@ export function WorkersPage() {
                   ]}
                 />
               </CollapsibleSection>
+
+              {detail.runtime_summary?.backend_diagnostic ? (
+                <CollapsibleSection title="Advanced diagnostics" subtitle="Backend validation payload reported by this worker.">
+                  <KeyValueList
+                    items={[
+                      { label: "Selected backend", value: formatBackendLabel(readDiagnosticString(detail.runtime_summary.backend_diagnostic, "selected_backend")) },
+                      { label: "Diagnostic", value: readDiagnosticString(detail.runtime_summary.backend_diagnostic, "message") ?? "Not reported" },
+                      { label: "Fallback reason", value: readDiagnosticString(detail.runtime_summary.backend_diagnostic, "fallback_reason") ?? "None" },
+                      { label: "QSV unavailable", value: readDiagnosticString(detail.runtime_summary.backend_diagnostic, "qsv_unavailable_reason") ?? "None" },
+                      { label: "VAAPI unavailable", value: readDiagnosticString(detail.runtime_summary.backend_diagnostic, "vaapi_unavailable_reason") ?? "None" },
+                    ]}
+                  />
+                </CollapsibleSection>
+              ) : null}
             </div>
           </section>
         </div>
@@ -691,7 +717,7 @@ export function WorkersPage() {
                   recommendationReason="Recommended from the detected local runtime capabilities."
                   showPathMappings={false}
                 />
-                {localDraft.preferred_backend !== "cpu_only" ? (
+                {backendModeForPreference(localDraft.preferred_backend) !== "cpu" ? (
                   <CapabilityStrip
                     title="Selected local backend"
                     description={`${formatBackendLabel(localDraft.preferred_backend)} is selected as the primary backend for this worker.`}
@@ -1419,12 +1445,89 @@ function readProbeStringList(
   return nested.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
+function readDiagnosticString(payload: Record<string, unknown> | null | undefined, key: string) {
+  const value = payload?.[key];
+  return typeof value === "string" && value.trim() ? value : null;
+}
+
+function probeMatchesPreference(
+  probe: { backend: string; preference_key: string; preference_keys?: string[] } | null | undefined,
+  preferredBackend: string | null | undefined,
+) {
+  if (!probe || !preferredBackend) {
+    return false;
+  }
+  const normalized = backendModeForPreference(preferredBackend);
+  const keys = new Set([probe.preference_key, probe.backend, ...(probe.preference_keys ?? [])]);
+  if (keys.has(preferredBackend) || keys.has(normalized)) {
+    return true;
+  }
+  return probe.backend === "intel_igpu" && ["intel_auto", "intel_qsv", "intel_vaapi"].includes(normalized);
+}
+
+function backendModeForPreference(value: string | null | undefined) {
+  switch (value) {
+    case "cpu_only":
+    case "cpu":
+      return "cpu";
+    case "prefer_intel_igpu":
+    case "intel_igpu":
+    case "intel_auto":
+    case "auto":
+      return "intel_auto";
+    case "qsv":
+    case "intel_qsv":
+      return "intel_qsv";
+    case "vaapi":
+    case "intel_vaapi":
+      return "intel_vaapi";
+    case "prefer_nvidia_gpu":
+    case "nvidia_gpu":
+      return "nvidia_gpu";
+    case "prefer_amd_gpu":
+    case "amd_gpu":
+      return "amd_gpu";
+    default:
+      return value ?? "cpu";
+  }
+}
+
+function hasSelectedBackendDiagnostic(probe: { details?: Record<string, unknown>; reason_unavailable?: string | null; qsv_unavailable_reason?: string | null; fallback_reason?: string | null }) {
+  return Boolean(
+    probe.reason_unavailable
+    || probe.qsv_unavailable_reason
+    || probe.fallback_reason
+    || probe.details?.qsv
+    || probe.details?.vaapi
+    || probe.details?.amf,
+  );
+}
+
+function formatBackendComponentStatus(
+  probe: { details?: Record<string, unknown> } | null | undefined,
+  component: "qsv" | "vaapi",
+  runtimeUsable: boolean | null | undefined,
+  runtimeReason: string | null | undefined,
+) {
+  const nested = probe?.details?.[component];
+  const payload = nested && typeof nested === "object" ? nested as Record<string, unknown> : null;
+  const usable = runtimeUsable ?? (typeof payload?.usable === "boolean" ? payload.usable : null);
+  if (usable === true) {
+    return "Usable";
+  }
+  const reason = runtimeReason ?? (typeof payload?.reason_unavailable === "string" ? payload.reason_unavailable : null) ?? (typeof payload?.message === "string" ? payload.message : null);
+  if (usable === false) {
+    return reason ? `Unavailable: ${trimSentencePunctuation(reason)}` : "Unavailable";
+  }
+  return "Not reported";
+}
+
 function buildWorkerStatusRollup(
   worker: Pick<WorkerInventorySummary, "worker_type" | "preferred_backend" | "allow_cpu_fallback" | "health_status" | "health_summary">,
   localWorkerStatus: WorkerStatus | null,
 ): WorkerStatusRollupResult {
   const configuredBackendProbe = worker.worker_type === "local"
-    ? localWorkerStatus?.hardware_probes.find((item) => item.preference_key === worker.preferred_backend)
+    ? localWorkerStatus?.hardware_probes.find((item) => probeMatchesPreference(item, worker.preferred_backend))
     : null;
 
   if (configuredBackendProbe) {
@@ -1442,14 +1545,12 @@ function buildWorkerStatusRollup(
     }
 
     if (backendHealth === "failed" || !configuredBackendProbe.usable_by_ffmpeg) {
-      if (worker.allow_cpu_fallback) {
+      if (worker.allow_cpu_fallback && backendModeForPreference(worker.preferred_backend) !== "intel_qsv") {
         return {
-          badge: "degraded",
-          message: `Primary backend failed. Falling back to CPU execution.${backendReason ? ` Reason: ${backendReason}` : ""}`,
-          compactMessage: "CPU fallback active",
-          attentionMessage: attentionReason
-            ? `Primary backend failed (Reason: ${attentionReason}). Worker is safely falling back to CPU execution.`
-            : "Primary backend failed. Worker is safely falling back to CPU execution.",
+          badge: worker.health_status ?? "healthy",
+          message: worker.health_summary ?? `Selected hardware is unavailable. CPU fallback is allowed.${backendReason ? ` Reason: ${backendReason}` : ""}`,
+          compactMessage: worker.health_status === "healthy" ? "Available" : worker.health_summary ?? "CPU fallback available",
+          attentionMessage: null,
         };
       }
 
@@ -1489,9 +1590,13 @@ function buildWorkerPrimaryIssues(detail: WorkerInventoryDetail, localWorkerStat
       issues.add(localWorkerStatus.eligibility_summary);
     }
     const preferredProbe = localWorkerStatus.hardware_probes.find(
-      (item) => item.preference_key === detail.preferred_backend,
+      (item) => probeMatchesPreference(item, detail.preferred_backend),
     );
-    if (preferredProbe && !preferredProbe.usable_by_ffmpeg) {
+    if (
+      preferredProbe
+      && !preferredProbe.usable_by_ffmpeg
+      && (!detail.allow_cpu_fallback || backendModeForPreference(detail.preferred_backend) === "intel_qsv")
+    ) {
       issues.add(preferredProbe.reason_unavailable ?? preferredProbe.message);
     }
   }
@@ -1516,10 +1621,12 @@ function formatBackendLabel(value: string | null | undefined) {
     cpu: "CPU",
     cpu_only: "CPU",
     intel_qsv: "Intel QSV",
-    intel_vaapi: "Intel iGPU / VAAPI",
-    intel_igpu: "Intel iGPU",
-    prefer_intel_igpu: "Intel iGPU",
-    vaapi: "Intel iGPU / VAAPI",
+    intel_vaapi: "Intel VAAPI",
+    intel_auto: "Intel auto",
+    intel_igpu: "Intel auto",
+    prefer_intel_igpu: "Intel auto",
+    qsv: "Intel QSV",
+    vaapi: "Intel VAAPI",
     nvidia_gpu: "NVIDIA",
     prefer_nvidia_gpu: "NVIDIA",
     amd_gpu: "AMD",
@@ -1528,7 +1635,7 @@ function formatBackendLabel(value: string | null | undefined) {
 }
 
 function formatSelectedHardwareHint(hardwareHints: string[], preferredBackend: string | null | undefined) {
-  if (!preferredBackend || preferredBackend === "cpu_only" || preferredBackend === "cpu") {
+  if (!preferredBackend || backendModeForPreference(preferredBackend) === "cpu") {
     return "CPU selected";
   }
   const selectedBackend = backendKeyForPreference(preferredBackend);
@@ -1543,6 +1650,9 @@ function formatSelectedHardwareHint(hardwareHints: string[], preferredBackend: s
 function backendKeyForPreference(value: string) {
   switch (value) {
     case "prefer_intel_igpu":
+    case "intel_auto":
+    case "intel_qsv":
+    case "intel_vaapi":
       return "intel_igpu";
     case "prefer_nvidia_gpu":
       return "nvidia_gpu";

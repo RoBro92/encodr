@@ -6,15 +6,22 @@ import platform
 from app.config import WorkerAgentSettings
 from app.version import read_agent_version
 from encodr_shared import collect_runtime_telemetry, recommend_worker_concurrency, validate_worker_path_mapping
-from encodr_core.execution import normalise_backend_preference
 from encodr_shared.worker_runtime import (
+    BinaryProbe,
+    HardwareProbe,
     probe_binary,
     probe_directory,
     probe_execution_backends,
     probe_which,
+    resolve_backend_runtime_status,
     serialise_backend_probe,
     serialise_binary_probe,
 )
+
+
+def probe_worker_backends(settings: WorkerAgentSettings) -> tuple[BinaryProbe, list[HardwareProbe]]:
+    ffmpeg = probe_binary(settings.ffmpeg_path)
+    return ffmpeg, probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else []
 
 
 def _binary_summary_item(name: str, configured_path: str | os.PathLike[str]) -> dict[str, object]:
@@ -29,19 +36,24 @@ def _binary_summary_item(name: str, configured_path: str | os.PathLike[str]) -> 
 def build_capability_summary(
     settings: WorkerAgentSettings,
     runtime_configuration: dict[str, object] | None = None,
+    backend_probes: list[HardwareProbe] | None = None,
+    ffmpeg_probe: BinaryProbe | None = None,
 ) -> dict[str, object]:
-    ffmpeg = probe_binary(settings.ffmpeg_path)
+    ffmpeg = ffmpeg_probe or probe_binary(settings.ffmpeg_path)
     ffprobe = probe_binary(settings.ffprobe_path)
     execution_modes: list[str] = []
     if ffmpeg.discoverable:
         execution_modes.extend(["remux", "transcode"])
-    backend_probes = probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else []
+    backend_probes = backend_probes if backend_probes is not None else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
 
-    hardware_hints: list[str] = [
-        probe.backend
-        for probe in backend_probes
-        if probe.backend != "cpu" and probe.usable
-    ]
+    hardware_hints: list[str] = []
+    for probe in backend_probes:
+        if probe.backend == "cpu" or not probe.usable:
+            continue
+        hardware_hints.append(probe.backend)
+        usable_backends = probe.details.get("usable_backends") if isinstance(probe.details, dict) else None
+        if isinstance(usable_backends, list):
+            hardware_hints.extend(str(item) for item in usable_backends if item)
     if not hardware_hints:
         hardware_hints.append("cpu_only")
     recommended_concurrency, recommendation_reason = recommend_worker_concurrency(
@@ -80,9 +92,29 @@ def build_host_summary() -> dict[str, object]:
 def build_runtime_summary(
     settings: WorkerAgentSettings,
     runtime_configuration: dict[str, object] | None = None,
+    backend_probes: list[HardwareProbe] | None = None,
+    ffmpeg_probe: BinaryProbe | None = None,
+    include_backend_diagnostics: bool = True,
 ) -> dict[str, object]:
     configured = runtime_configuration or {}
     scratch_dir = str(configured.get("scratch_dir") or settings.scratch_dir or ".")
+    ffmpeg = ffmpeg_probe or probe_binary(settings.ffmpeg_path)
+    preferred_backend = str(configured.get("preferred_backend") or settings.preferred_backend)
+    allow_cpu_fallback = bool(
+        configured.get("allow_cpu_fallback")
+        if isinstance(configured, dict) and configured.get("allow_cpu_fallback") is not None
+        else settings.allow_cpu_fallback
+    )
+    if include_backend_diagnostics:
+        backend_probes = backend_probes if backend_probes is not None else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
+        backend_status = resolve_backend_runtime_status(
+            preferred_backend,
+            backend_probes,
+            allow_cpu_fallback=allow_cpu_fallback,
+            cpu_available=ffmpeg.discoverable,
+        )
+    else:
+        backend_status = {}
     path_mappings: list[dict[str, object]] = []
     for item in configured.get("path_mappings", []) if isinstance(configured, dict) else []:
         worker_path = str(item.get("worker_path") or "").strip()
@@ -107,12 +139,16 @@ def build_runtime_summary(
         "scratch_status": probe_directory(scratch_dir, writable_required=True),
         "media_mounts": list(settings.media_mounts),
         "path_mappings": path_mappings,
-        "preferred_backend": str(configured.get("preferred_backend") or settings.preferred_backend),
-        "allow_cpu_fallback": bool(
-            configured.get("allow_cpu_fallback")
-            if isinstance(configured, dict) and configured.get("allow_cpu_fallback") is not None
-            else settings.allow_cpu_fallback
-        ),
+        "preferred_backend": preferred_backend,
+        "allow_cpu_fallback": allow_cpu_fallback,
+        "selected_backend": backend_status.get("selected_backend"),
+        "backend_fallback_used": backend_status.get("fallback_used"),
+        "backend_fallback_reason": backend_status.get("fallback_reason"),
+        "qsv_usable": backend_status.get("qsv_usable"),
+        "qsv_unavailable_reason": backend_status.get("qsv_unavailable_reason"),
+        "vaapi_usable": backend_status.get("vaapi_usable"),
+        "vaapi_unavailable_reason": backend_status.get("vaapi_unavailable_reason"),
+        "backend_diagnostic": backend_status,
         "max_concurrent_jobs": (
             int(configured.get("max_concurrent_jobs"))
             if isinstance(configured, dict) and configured.get("max_concurrent_jobs") is not None
@@ -135,16 +171,32 @@ def build_binary_summary(settings: WorkerAgentSettings) -> list[dict[str, object
 def build_worker_health(
     settings: WorkerAgentSettings,
     runtime_configuration: dict[str, object] | None = None,
+    backend_probes: list[HardwareProbe] | None = None,
+    ffmpeg_probe: BinaryProbe | None = None,
 ) -> tuple[str, str]:
-    ffmpeg = probe_binary(settings.ffmpeg_path)
+    ffmpeg = ffmpeg_probe or probe_binary(settings.ffmpeg_path)
     ffprobe = probe_binary(settings.ffprobe_path)
-    runtime_summary = build_runtime_summary(settings, runtime_configuration=runtime_configuration)
-    scratch = runtime_summary.get("scratch_status") or probe_directory(settings.scratch_dir or ".", writable_required=True)
-    backends = probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else []
-    preferred_backend = normalise_backend_preference(
-        str((runtime_configuration or {}).get("preferred_backend") or settings.preferred_backend)
+    runtime_summary = build_runtime_summary(
+        settings,
+        runtime_configuration=runtime_configuration,
+        backend_probes=backend_probes,
+        ffmpeg_probe=ffmpeg,
     )
-    preferred_probe = next((item for item in backends if item.backend == preferred_backend), None)
+    scratch = runtime_summary.get("scratch_status") or probe_directory(settings.scratch_dir or ".", writable_required=True)
+    backends = backend_probes if backend_probes is not None else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
+    configured = runtime_configuration or {}
+    preferred_backend = str(configured.get("preferred_backend") or settings.preferred_backend)
+    allow_cpu_fallback = bool(
+        configured.get("allow_cpu_fallback")
+        if isinstance(configured, dict) and configured.get("allow_cpu_fallback") is not None
+        else settings.allow_cpu_fallback
+    )
+    backend_status = resolve_backend_runtime_status(
+        preferred_backend,
+        backends,
+        allow_cpu_fallback=allow_cpu_fallback,
+        cpu_available=ffmpeg.discoverable,
+    )
     if not ffmpeg.discoverable or not ffprobe.discoverable:
         return "failed", "FFmpeg or FFprobe is not available on the worker."
     if scratch["status"] != "healthy":
@@ -159,8 +211,8 @@ def build_worker_health(
     )
     if invalid_mapping is not None:
         return "degraded", str(invalid_mapping.get("validation_message") or "One or more worker path mappings are invalid.")
-    if preferred_backend != "cpu" and preferred_probe is not None and not preferred_probe.usable:
-        if settings.allow_cpu_fallback:
-            return "degraded", "Preferred hardware backend is unavailable, so this worker will fall back to CPU."
-        return "degraded", "Preferred hardware backend is unavailable and CPU fallback is disabled."
+    if backend_status.get("degraded"):
+        return "degraded", str(backend_status.get("message") or "Preferred backend is unavailable.")
+    if not backend_status.get("transcode_backend_usable"):
+        return "degraded", str(backend_status.get("message") or "Preferred backend is unavailable and CPU fallback is disabled.")
     return "healthy", "Remote worker is ready to execute jobs."

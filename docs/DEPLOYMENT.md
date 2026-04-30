@@ -54,12 +54,20 @@ encodr mount-setup --validate-only
 
 Encodr can expose detected hardware paths through an app-managed runtime Compose override. Regeneration happens during install, start/restart, rebuild, and update flows.
 
-Intel iGPU support is validated against the worker runtime before Encodr treats it as usable. Validation checks include `/dev/dri`, `vainfo`, and an FFmpeg VAAPI smoke test. NVIDIA and AMD paths are surfaced only when the runtime can report them truthfully.
+Intel hardware support is validated against the worker runtime before Encodr treats it as usable. Validation checks include `/dev/dri`, `vainfo`, an FFmpeg VAAPI smoke encode, and an FFmpeg QSV smoke encode. VAAPI is a normal Intel hardware backend, not a degraded fallback; QSV is preferred in Intel auto mode only when its oneVPL/QSV smoke test passes.
+
+For Proxmox LXC deployments, pass the Intel render node through to the LXC and then into Docker. A typical host/LXC setup exposes `/dev/dri/renderD128` and the matching `card*` node, then the Encodr runtime override mounts `/dev/dri` into the worker container. The worker image includes `intel-media-va-driver`, `libva2`, `libva-drm2`, `mesa-va-drivers`, `vainfo`, and the available oneVPL/MFX runtime packages.
 
 To inspect the active Compose config:
 
 ```bash
 encodr compose-config | grep /dev/dri
+```
+
+To diagnose Intel QSV and VAAPI from the installed runtime:
+
+```bash
+encodr doctor qsv
 ```
 
 ## Reverse Proxy

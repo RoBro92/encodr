@@ -13,7 +13,12 @@ The local worker is not assumed to be ready just because Encodr is installed. Ad
 
 The local worker uses the stack's `/media` and `/temp` paths. Configure its backend preference, CPU fallback, concurrency, and schedule in Workers.
 
-For Intel iGPU/VAAPI, the host and worker container must both see `/dev/dri`. Encodr validates the actual worker runtime with `vainfo` and an FFmpeg VAAPI smoke test before marking the Intel path usable.
+For Intel hardware, the host and worker container must both see `/dev/dri`. Encodr validates the actual worker runtime before marking an Intel path usable:
+
+- QSV is usable only after an FFmpeg `h264_qsv` smoke encode succeeds.
+- VAAPI is a first-class Intel hardware backend and is usable after `vainfo` plus an FFmpeg `h264_vaapi` smoke encode succeeds.
+- If Intel auto mode cannot validate QSV but can validate VAAPI, the worker remains healthy and reports `Intel VAAPI active; QSV unavailable: <reason>`.
+- If hardware validation fails but CPU fallback is allowed, the worker can stay healthy using CPU. A required backend with fallback disabled is degraded.
 
 ## Remote Workers
 
@@ -62,9 +67,20 @@ Each worker can set:
 Supported backend preferences:
 
 - `cpu_only`
-- `prefer_intel_igpu`
+- `intel_auto`: try Intel QSV first, then Intel VAAPI, then CPU if fallback is allowed
+- `intel_qsv`: require validated Intel QSV
+- `intel_vaapi`: use validated Intel VAAPI; QSV is informational only
+- `prefer_intel_igpu`: legacy alias for Intel auto
 - `prefer_nvidia_gpu`
 - `prefer_amd_gpu`
+
+Run focused Intel diagnostics on the worker host or inside the worker container:
+
+```bash
+encodr doctor qsv
+```
+
+The diagnostic prints `/dev/dri` visibility, FFmpeg hardware flags, oneVPL/MFX libraries, the VAAPI smoke result, each QSV smoke command attempted, and the backend Encodr would choose next.
 
 Encodr only assigns jobs to workers that are enabled, compatible, and within schedule unless the operator explicitly overrides scheduling for a dry run.
 

@@ -1008,11 +1008,21 @@ function ProcessingRulesSection({
 function formatBackendLabel(value: string): string {
   switch (value) {
     case "cpu":
+    case "cpu_only":
       return "CPU";
+    case "intel_qsv":
+      return "Intel QSV";
+    case "intel_vaapi":
+    case "vaapi":
+      return "Intel VAAPI";
+    case "intel_auto":
+    case "prefer_intel_igpu":
     case "intel_igpu":
-      return "Intel iGPU";
+      return "Intel auto";
+    case "prefer_nvidia_gpu":
     case "nvidia_gpu":
       return "NVIDIA GPU";
+    case "prefer_amd_gpu":
     case "amd_gpu":
       return "AMD GPU";
     default:
