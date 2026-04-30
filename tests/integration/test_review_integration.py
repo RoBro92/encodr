@@ -187,6 +187,46 @@ def test_approve_queues_review_job_without_extra_create_step(
         assert decisions[0].decision_type == ManualReviewDecisionType.APPROVED
 
 
+def test_reject_resolved_review_does_not_queue_duplicate_job(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source = layout.create_source_file("Movies/Resolved Reject Film (2024).mkv", contents="review")
+    media = media_at_path(parse_fixture("ambiguous_forced_subtitle.json"), source)
+    with session_factory() as session:
+        planned = create_planned_file(session, context.bundle, media, source_path=source.as_posix())
+        session.commit()
+
+    approve_response = context.client.post(
+        f"/api/review/items/{planned.tracked_file_id}/approve",
+        headers=auth.headers,
+        json={},
+    )
+    assert approve_response.status_code == 200
+
+    with session_factory() as session:
+        jobs = JobRepository(session).list_jobs(tracked_file_id=planned.tracked_file_id)
+        assert len(jobs) == 1
+        jobs[0].status = JobStatus.COMPLETED
+        session.commit()
+
+    reject_response = context.client.post(
+        f"/api/review/items/{planned.tracked_file_id}/reject",
+        headers=auth.headers,
+        json={},
+    )
+
+    assert reject_response.status_code == 409
+    assert "does not currently require review rejection" in reject_response.json()["detail"]
+    with session_factory() as session:
+        jobs = JobRepository(session).list_jobs(tracked_file_id=planned.tracked_file_id)
+        assert len(jobs) == 1
+
+
 def test_approve_post_encode_review_replaces_staged_output(
     tmp_path: Path,
     repo_root: Path,

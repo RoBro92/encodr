@@ -190,6 +190,8 @@ class ReviewService:
         request: Request,
     ) -> tuple[ReviewItemContext, ManualReviewDecision, Job]:
         item = self.get_item(session, item_id=item_id)
+        if not item.requires_review:
+            raise ApiConflictError("This item does not currently require review rejection.")
         queued_job, strip_plan = self._queue_review_job(
             session,
             item=item,
