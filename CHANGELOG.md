@@ -1,5 +1,23 @@
 # Changelog
 
+## 0.4.0 - 2026-04-30
+
+This release improves day-to-day operation around queues, backups, reviews, dashboard navigation, and worker diagnostics.
+
+- added clearer Dashboard entry points into the matching Jobs and Review views
+- improved Jobs filtering and tab navigation so active, completed, failed, cancelled, skipped, and review work are easier to browse
+- added backup search, pagination, visible selection, bulk delete controls, and more accurate backup totals when files have already been removed
+- improved Review filtering and item navigation so decisions stay focused on the selected queue
+- made Review failures easier to handle by keeping the current item visible if a list refresh fails
+- improved skipped-job presentation so policy skips are not shown as failures
+- improved worker diagnostics and backend display so operators can better understand current worker state
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - GitHub CI for backend, UI, and sanity checks
+
 ## 0.3.8.1 - 2026-04-29
 
 This hotfix restores the update path for installs moving onto the 0.3.8 release line.
