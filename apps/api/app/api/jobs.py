@@ -50,15 +50,8 @@ def _raise_service_error(error: ApiServiceError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 
-def get_review_service(
-    request: Request,
-    config_bundle: ConfigBundle = Depends(get_config_bundle),
-) -> ReviewService:
-    files_service = FilesService(
-        config_bundle=config_bundle,
-        probe_client_factory=request.app.state.probe_client_factory,
-    )
-    return ReviewService(plans_service=PlansService(config_bundle=config_bundle, files_service=files_service))
+def get_review_service() -> ReviewService:
+    return ReviewService()
 
 
 def get_plans_service(

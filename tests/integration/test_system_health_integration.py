@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -37,6 +38,8 @@ def test_worker_status_endpoint_returns_enriched_health_data(
     assert payload["queue_health"]["failed_count"] == 1
     assert payload["queue_health"]["manual_review_count"] == 1
     assert payload["queue_health"]["status"] == "degraded"
+    assert payload["status"] == "healthy"
+    assert payload["summary"] == "The local worker is healthy and available."
     assert payload["self_test_available"] is True
 
 
@@ -87,6 +90,8 @@ def test_runtime_endpoint_returns_health_summary_and_queue_state(
     assert payload["user_count"] == 1
     assert payload["queue_health"]["pending_count"] == 1
     assert payload["queue_health"]["manual_review_count"] == 1
+    assert payload["status"] == "healthy"
+    assert not any("job history" in warning.lower() for warning in payload["warnings"])
 
 
 def test_runtime_endpoint_reports_auth_enforced_when_config_flag_is_false(
@@ -158,7 +163,12 @@ def build_context(
     bundle.app.data_dir.mkdir(parents=True, exist_ok=True)
     bundle.app.media.ffmpeg_path = ffmpeg_path
     bundle.app.media.ffprobe_path = ffprobe_path
+    bundle.workers.local.scratch_dir = layout.scratch_dir
     bundle.workers.local.media_mounts = [layout.source_dir, *(extra_media_mounts or [])]
+    monkeypatch.setattr(
+        "shutil.disk_usage",
+        lambda _path: SimpleNamespace(total=100 * 1024**3, free=80 * 1024**3),
+    )
 
     monkeypatch.setenv("ENCODR_AUTH_SECRET", "test-auth-secret-with-sufficient-length")
     context = create_test_api_context(

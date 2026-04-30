@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_config_bundle, get_session, require_admin_user
+from app.core.dependencies import get_session, require_admin_user
 from app.schemas.jobs import JobDetailResponse
 from app.schemas.review import (
     ReviewDecisionRequest,
@@ -14,10 +14,7 @@ from app.schemas.review import (
 )
 from app.services.audit import AuditService
 from app.services.errors import ApiServiceError
-from app.services.files import FilesService
-from app.services.plans import PlansService
 from app.services.review import ReviewService
-from encodr_core.config import ConfigBundle
 from encodr_db.models import User
 
 router = APIRouter(
@@ -27,22 +24,8 @@ router = APIRouter(
 )
 
 
-def get_files_service(
-    request: Request,
-    config_bundle: ConfigBundle = Depends(get_config_bundle),
-) -> FilesService:
-    return FilesService(
-        config_bundle=config_bundle,
-        probe_client_factory=request.app.state.probe_client_factory,
-    )
-
-
-def get_review_service(
-    files_service: FilesService = Depends(get_files_service),
-    config_bundle: ConfigBundle = Depends(get_config_bundle),
-) -> ReviewService:
-    plans_service = PlansService(config_bundle=config_bundle, files_service=files_service)
-    return ReviewService(plans_service=plans_service, audit_service=AuditService())
+def get_review_service() -> ReviewService:
+    return ReviewService(audit_service=AuditService())
 
 
 def _raise_service_error(error: ApiServiceError) -> None:
@@ -103,7 +86,7 @@ def approve_review_item(
     current_user: User = Depends(require_admin_user),
 ) -> ReviewDecisionResponse:
     try:
-        item, decision = service.approve_item(
+        item, decision, job = service.approve_item(
             session,
             item_id=item_id,
             note=payload.note,
@@ -114,6 +97,7 @@ def approve_review_item(
         return ReviewDecisionResponse(
             review_item=service.to_detail_response(item),
             decision=service._decision_summary(decision),
+            job=JobDetailResponse.from_model(job) if job is not None else None,
         )
     except ApiServiceError as error:
         session.rollback()
@@ -130,7 +114,7 @@ def reject_review_item(
     current_user: User = Depends(require_admin_user),
 ) -> ReviewDecisionResponse:
     try:
-        item, decision = service.reject_item(
+        item, decision, job = service.reject_item(
             session,
             item_id=item_id,
             note=payload.note,
@@ -141,6 +125,7 @@ def reject_review_item(
         return ReviewDecisionResponse(
             review_item=service.to_detail_response(item),
             decision=service._decision_summary(decision),
+            job=JobDetailResponse.from_model(job),
         )
     except ApiServiceError as error:
         session.rollback()
@@ -222,61 +207,6 @@ def clear_review_item_protected(
         return ReviewDecisionResponse(
             review_item=service.to_detail_response(item),
             decision=service._decision_summary(decision),
-        )
-    except ApiServiceError as error:
-        session.rollback()
-        _raise_service_error(error)
-
-
-@router.post("/items/{item_id}/replan", response_model=ReviewDecisionResponse)
-def replan_review_item(
-    item_id: str,
-    payload: ReviewDecisionRequest,
-    request: Request,
-    session: Session = Depends(get_session),
-    service: ReviewService = Depends(get_review_service),
-    current_user: User = Depends(require_admin_user),
-) -> ReviewDecisionResponse:
-    try:
-        item, decision = service.replan_item(
-            session,
-            item_id=item_id,
-            note=payload.note,
-            actor=current_user,
-            request=request,
-        )
-        session.commit()
-        return ReviewDecisionResponse(
-            review_item=service.to_detail_response(item),
-            decision=service._decision_summary(decision),
-        )
-    except ApiServiceError as error:
-        session.rollback()
-        _raise_service_error(error)
-
-
-@router.post("/items/{item_id}/create-job", response_model=ReviewDecisionResponse, status_code=201)
-def create_job_from_review_item(
-    item_id: str,
-    payload: ReviewDecisionRequest,
-    request: Request,
-    session: Session = Depends(get_session),
-    service: ReviewService = Depends(get_review_service),
-    current_user: User = Depends(require_admin_user),
-) -> ReviewDecisionResponse:
-    try:
-        item, decision, job = service.create_job(
-            session,
-            item_id=item_id,
-            note=payload.note,
-            actor=current_user,
-            request=request,
-        )
-        session.commit()
-        return ReviewDecisionResponse(
-            review_item=service.to_detail_response(item),
-            decision=service._decision_summary(decision),
-            job=JobDetailResponse.from_model(job),
         )
     except ApiServiceError as error:
         session.rollback()

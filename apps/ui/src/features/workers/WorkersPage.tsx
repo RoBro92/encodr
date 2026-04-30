@@ -212,6 +212,9 @@ export function WorkersPage() {
   const selectedHardwareBackendProbe = configuredBackendProbe && configuredBackendProbe.backend !== "cpu"
     ? configuredBackendProbe
     : null;
+  const selectedRuntimeBackend = readProbeString(configuredBackendProbe, "selected_backend");
+  const usableRuntimeBackends = readProbeStringList(configuredBackendProbe, "usable_backends");
+  const backendFallbackReason = readProbeString(configuredBackendProbe, "fallback_reason");
   const selectedRuntimeDevices = selectedHardwareBackendProbe?.device_paths ?? [];
 
   function openAddWorker(mode: Exclude<AddWorkerMode, "choose">) {
@@ -390,7 +393,7 @@ export function WorkersPage() {
                 <WorkerDetailTag label="Type" value={titleCase(detail.worker_type)} />
                 <WorkerDetailTag
                   label="Backend"
-                  value={cpuFallbackActive ? "CPU fallback" : formatBackendLabel(detailCurrentBackend ?? detail.preferred_backend)}
+                  value={cpuFallbackActive ? "CPU fallback" : formatBackendLabel(selectedRuntimeBackend ?? detailCurrentBackend ?? detail.preferred_backend)}
                 />
                 <WorkerDetailTag
                   label="Status"
@@ -450,7 +453,8 @@ export function WorkersPage() {
                   items={[
                     { label: "Host", value: detail.host_summary.hostname ?? "Not reported" },
                     { label: "Preferred backend", value: formatBackendLabel(detail.preferred_backend) },
-                    { label: "Actual backend", value: formatBackendLabel(detailCurrentBackend) },
+                    { label: "Selected backend", value: formatBackendLabel(selectedRuntimeBackend ?? detailCurrentBackend) },
+                    { label: "Usable backends", value: usableRuntimeBackends.length > 0 ? usableRuntimeBackends.map(formatBackendLabel).join(" • ") : "Not reported" },
                     { label: "CPU fallback", value: detail.allow_cpu_fallback ? "Allowed" : "Disabled" },
                     { label: "Platform", value: detail.host_summary.platform ?? detail.onboarding_platform ?? "Not reported" },
                     { label: "Current job", value: detail.current_job_id ?? detail.runtime_summary?.current_job_id ?? "Idle" },
@@ -499,7 +503,8 @@ export function WorkersPage() {
                           description={formatSelectedBackendDiagnosticMessage(
                             formatBackendLabel(detail.preferred_backend),
                             selectedHardwareBackendProbe.status,
-                            selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
+                            backendFallbackReason ?? selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
+                            selectedRuntimeBackend,
                           )}
                           tone={selectedHardwareBackendProbe.status === "failed" ? "danger" : "default"}
                           status={selectedHardwareBackendProbe.status}
@@ -1357,8 +1362,16 @@ function formatGpuMetric(gpu: Record<string, unknown> | null | undefined) {
   return typeof gpu.message === "string" ? gpu.message : vendor;
 }
 
-function formatSelectedBackendDiagnosticMessage(backendLabel: string, status: string, reason: string | null | undefined) {
+function formatSelectedBackendDiagnosticMessage(
+  backendLabel: string,
+  status: string,
+  reason: string | null | undefined,
+  selectedBackend: string | null,
+) {
   const reasonText = reason ? trimSentencePunctuation(reason) : "No specific issue reported";
+  if (status === "healthy" && selectedBackend && selectedBackend !== "intel_qsv") {
+    return `${backendLabel} is selected as the primary backend. ${formatBackendLabel(selectedBackend)} is usable now. Reason: ${reasonText}.`;
+  }
   if (status === "failed") {
     return `${backendLabel} is selected as the primary backend, but failed to initialize. Reason: ${reasonText}.`;
   }
@@ -1372,6 +1385,33 @@ function isUnavailableMetric(value: string) {
 
 function readNumber(value: unknown) {
   return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+function readProbeString(
+  probe: { selected_backend?: string | null; fallback_reason?: string | null; details?: Record<string, unknown> } | null | undefined,
+  key: "selected_backend" | "fallback_reason",
+) {
+  const direct = probe?.[key];
+  if (typeof direct === "string" && direct.trim()) {
+    return direct;
+  }
+  const nested = probe?.details?.[key];
+  return typeof nested === "string" && nested.trim() ? nested : null;
+}
+
+function readProbeStringList(
+  probe: { usable_backends?: string[]; details?: Record<string, unknown> } | null | undefined,
+  key: "usable_backends",
+) {
+  const direct = probe?.[key];
+  if (Array.isArray(direct)) {
+    return direct.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
+  }
+  const nested = probe?.details?.[key];
+  if (!Array.isArray(nested)) {
+    return [];
+  }
+  return nested.filter((item): item is string => typeof item === "string" && item.trim().length > 0);
 }
 
 function buildWorkerStatusRollup(
@@ -1470,8 +1510,10 @@ function formatBackendLabel(value: string | null | undefined) {
   return {
     cpu: "CPU",
     cpu_only: "CPU",
+    intel_qsv: "Intel QSV",
     intel_igpu: "Intel iGPU",
     prefer_intel_igpu: "Intel iGPU",
+    vaapi: "VAAPI",
     nvidia_gpu: "NVIDIA",
     prefer_nvidia_gpu: "NVIDIA",
     amd_gpu: "AMD",

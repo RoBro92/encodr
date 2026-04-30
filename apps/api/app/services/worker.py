@@ -361,10 +361,6 @@ class WorkerService:
             status = HealthStatus.DEGRADED
             summary = str(runtime_probes["eligibility_summary"])
             configuration_state = "local_degraded"
-        elif queue_health["status"] == HealthStatus.DEGRADED:
-            status = HealthStatus.DEGRADED
-            summary = "The local worker is available but queue health needs attention."
-            configuration_state = "local_degraded"
         else:
             status = HealthStatus.HEALTHY
             summary = "The local worker is healthy and available."

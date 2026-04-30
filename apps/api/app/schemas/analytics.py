@@ -94,9 +94,18 @@ class RecentAnalyticsResponse(BaseModel):
     recent_failed_jobs: list[RecentOutcomeResponse]
 
 
+class DashboardQueueCountsResponse(BaseModel):
+    manual_review: int
+    failed: int
+    interrupted: int
+    running: int
+    completed: int
+
+
 class AnalyticsDashboardResponse(BaseModel):
     overview: AnalyticsOverviewResponse
     storage: AnalyticsStorageResponse
     outcomes: AnalyticsOutcomesResponse
     media: AnalyticsMediaResponse
     recent: RecentAnalyticsResponse
+    queue_counts: DashboardQueueCountsResponse

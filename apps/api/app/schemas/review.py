@@ -47,6 +47,8 @@ class ReviewItemSummaryResponse(BaseModel):
     protected_state: ProtectedStateSummaryResponse
     reasons: list[ReviewReasonResponse]
     warnings: list[ReviewReasonResponse]
+    primary_reason: ReviewReasonResponse | None = None
+    detail_reasons: list[ReviewReasonResponse] = []
     latest_probe_at: datetime | None = None
     latest_plan_at: datetime | None = None
     latest_job_at: datetime | None = None

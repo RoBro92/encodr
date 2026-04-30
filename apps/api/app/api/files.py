@@ -64,11 +64,8 @@ def get_library_service(
     return LibraryService(config_bundle=config_bundle)
 
 
-def get_review_service(
-    files_service: FilesService = Depends(get_files_service),
-    config_bundle: ConfigBundle = Depends(get_config_bundle),
-) -> ReviewService:
-    return ReviewService(plans_service=PlansService(config_bundle=config_bundle, files_service=files_service))
+def get_review_service() -> ReviewService:
+    return ReviewService()
 
 
 def _raise_service_error(error: ApiServiceError) -> None:

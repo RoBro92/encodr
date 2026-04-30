@@ -11,7 +11,7 @@ from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
 from tests.helpers.filesystem import create_filesystem_layout
-from tests.helpers.jobs import create_job, media_at_path, parse_fixture
+from tests.helpers.jobs import create_job, create_planned_file, media_at_path, parse_fixture
 
 pytestmark = [pytest.mark.integration]
 
@@ -122,6 +122,88 @@ def test_analytics_endpoints_reject_unauthenticated_access(
 
     assert context.client.get("/api/analytics/overview").status_code == 401
     assert context.client.get("/api/analytics/dashboard").status_code == 401
+
+
+def test_dashboard_counts_match_open_review_and_status_filters(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+    with session_factory() as session:
+        review_source = layout.create_source_file("Movies/Open Review (2024).mkv", contents="review")
+        review_media = media_at_path(parse_fixture("ambiguous_forced_subtitle.json"), review_source)
+        planned = create_planned_file(session, bundle, review_media, source_path=review_source.as_posix())
+        held_source = layout.create_source_file("Movies/Held Review (2024).mkv", contents="review")
+        held_media = media_at_path(parse_fixture("ambiguous_forced_subtitle.json"), held_source)
+        held_planned = create_planned_file(session, bundle, held_media, source_path=held_source.as_posix())
+
+        failed_source = layout.create_source_file("Movies/Failed Dashboard Film (2024).mkv", contents="failed")
+        failed_context = create_job(
+            session,
+            bundle,
+            media_at_path(parse_fixture("non4k_remux_languages.json"), failed_source),
+            source_path=failed_source.as_posix(),
+        )
+        failed_context.job.status = JobStatus.FAILED
+
+        interrupted_source = layout.create_source_file("Movies/Interrupted Dashboard Film (2024).mkv", contents="interrupted")
+        interrupted_context = create_job(
+            session,
+            bundle,
+            media_at_path(parse_fixture("non4k_remux_languages.json"), interrupted_source),
+            source_path=interrupted_source.as_posix(),
+        )
+        interrupted_context.job.status = JobStatus.INTERRUPTED
+
+        running_source = layout.create_source_file("Movies/Running Dashboard Film (2024).mkv", contents="running")
+        running_context = create_job(
+            session,
+            bundle,
+            media_at_path(parse_fixture("non4k_remux_languages.json"), running_source),
+            source_path=running_source.as_posix(),
+        )
+        running_context.job.status = JobStatus.RUNNING
+
+        completed_source = layout.create_source_file("Movies/Completed Dashboard Film (2024).mkv", contents="completed")
+        completed_context = create_job(
+            session,
+            bundle,
+            media_at_path(parse_fixture("non4k_remux_languages.json"), completed_source),
+            source_path=completed_source.as_posix(),
+        )
+        completed_context.job.status = JobStatus.COMPLETED
+        session.commit()
+
+    hold_response = context.client.post(
+        f"/api/review/items/{held_planned.tracked_file_id}/hold",
+        headers=auth.headers,
+        json={},
+    )
+    assert hold_response.status_code == 200
+
+    response = context.client.get("/api/analytics/dashboard", headers=auth.headers)
+
+    assert response.status_code == 200
+    assert response.json()["queue_counts"] == {
+        "manual_review": 2,
+        "failed": 1,
+        "interrupted": 1,
+        "running": 1,
+        "completed": 1,
+    }
+
+    approve_response = context.client.post(
+        f"/api/review/items/{planned.tracked_file_id}/approve",
+        headers=auth.headers,
+        json={},
+    )
+    assert approve_response.status_code == 200
+
+    refreshed = context.client.get("/api/analytics/dashboard", headers=auth.headers)
+    assert refreshed.status_code == 200
+    assert refreshed.json()["queue_counts"]["manual_review"] == 1
 
 
 def build_context(

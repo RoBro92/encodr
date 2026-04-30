@@ -358,22 +358,6 @@ export function clearReviewItemProtected(
   return postReviewDecision(client, itemId, "clear-protected", payload);
 }
 
-export function replanReviewItem(
-  client: ApiClient,
-  itemId: string,
-  payload: ReviewDecisionPayload,
-): Promise<ReviewDecisionResponse> {
-  return postReviewDecision(client, itemId, "replan", payload);
-}
-
-export function createJobFromReviewItem(
-  client: ApiClient,
-  itemId: string,
-  payload: ReviewDecisionPayload,
-): Promise<ReviewDecisionResponse> {
-  return postReviewDecision(client, itemId, "create-job", payload);
-}
-
 export function createJob(client: ApiClient, payload: CreateJobPayload): Promise<JobDetail> {
   return client.request<JobDetail>("/jobs", {
     method: "POST",

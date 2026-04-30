@@ -26,7 +26,7 @@ from encodr_core.config import ConfigBundle
 from encodr_db.models import JobStatus
 from encodr_db.repositories import JobRepository, UserRepository
 from encodr_db.runtime import resolve_local_worker_configuration
-from encodr_shared.worker_runtime import discover_runtime_devices, probe_execution_backends
+from encodr_shared.worker_runtime import discover_runtime_devices, probe_execution_backends, serialise_backend_probe
 from encodr_shared.update import UpdateChecker
 
 
@@ -327,24 +327,7 @@ class SystemService:
         queue_health = self.queue_health_summary()
         storage = self.storage_status()
         execution_backends = [
-            {
-                "backend": probe.backend,
-                "preference_key": {
-                    "cpu": "cpu_only",
-                    "intel_igpu": "prefer_intel_igpu",
-                    "nvidia_gpu": "prefer_nvidia_gpu",
-                    "amd_gpu": "prefer_amd_gpu",
-                }.get(probe.backend, probe.backend),
-                "detected": probe.detected,
-                "usable_by_ffmpeg": probe.usable,
-                "ffmpeg_path_verified": bool(probe.details.get("ffmpeg_path_verified", probe.usable)),
-                "status": probe.status,
-                "message": probe.message,
-                "reason_unavailable": probe.details.get("reason_unavailable"),
-                "recommended_usage": probe.details.get("recommended_usage"),
-                "device_paths": probe.details.get("device_paths", []),
-                "details": probe.details,
-            }
+            serialise_backend_probe(probe)
             for probe in probe_execution_backends(self.config_bundle.app.media.ffmpeg_path)
         ]
         runtime_device_paths = discover_runtime_devices()
@@ -386,9 +369,6 @@ class SystemService:
             if backend["detected"] and not backend["usable_by_ffmpeg"]:
                 notes.append(str(backend["message"]))
                 break
-        if queue_health["status"] == HealthStatus.DEGRADED:
-            warnings.append(str(queue_health["summary"]))
-
         if not db_reachable or not schema_reachable:
             status = HealthStatus.FAILED
             summary = "Runtime health checks failed."

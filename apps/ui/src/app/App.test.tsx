@@ -1565,6 +1565,20 @@ describe("Encodr UI shell", () => {
       },
       {
         method: "GET",
+        path: "/api/review/items/item-2",
+        body: {
+          ...reviewItemDetail(),
+          id: "item-2",
+          review_status: "held",
+          tracked_file: {
+            ...reviewItemDetail().tracked_file,
+            id: "file-2",
+            source_filename: "Another Film (2024).mkv",
+          },
+        },
+      },
+      {
+        method: "GET",
         path: "/api/review/items",
         body: {
           items: [
@@ -1602,11 +1616,15 @@ describe("Encodr UI shell", () => {
 
     expect(await screen.findByRole("heading", { name: /^review$/i })).toBeInTheDocument();
     expect(screen.getByRole("list", { name: /review items list/i })).toBeInTheDocument();
-    expect(screen.getAllByText(/missing english audio/i).length).toBeGreaterThan(0);
+    expect(within(screen.getByLabelText(/review alerts/i)).getByText(/missing english audio/i)).toBeInTheDocument();
+    expect(screen.queryByText(/video transcode required/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/planner protected/i)).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /replan/i })).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /create job/i })).not.toBeInTheDocument();
 
-    await userEvent.click(screen.getByRole("button", { name: /show protection details/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^details\b/i }));
     expect(screen.getByText(/planner protected/i)).toBeInTheDocument();
+    expect(screen.getByText(/video transcode required/i)).toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /^approve$/i }));
 
@@ -1614,6 +1632,12 @@ describe("Encodr UI shell", () => {
       expect(fetchMock).toHaveBeenCalledWith(
         expect.stringContaining("/api/review/items/item-1/approve"),
         expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/review/items/item-2"),
+        expect.objectContaining({ headers: expect.any(Headers) }),
       );
     });
   });
@@ -1994,6 +2018,13 @@ function analyticsDashboard() {
         },
       ],
     },
+    queue_counts: {
+      manual_review: 1,
+      failed: 2,
+      interrupted: 0,
+      running: 1,
+      completed: 5,
+    },
   };
 }
 
@@ -2204,6 +2235,9 @@ function executionBackendStatuses() {
       message: "CPU execution is available.",
       reason_unavailable: null,
       recommended_usage: "Use CPU execution as the safe fallback on any host.",
+      selected_backend: "cpu",
+      usable_backends: ["cpu"],
+      fallback_reason: null,
       device_paths: [],
       details: {},
     },
@@ -2217,6 +2251,9 @@ function executionBackendStatuses() {
       message: "Intel iGPU passthrough is not fully usable in this runtime.",
       reason_unavailable: "Intel driver missing",
       recommended_usage: "Expose /dev/dri to the worker runtime and validate Intel VAAPI before selecting Intel iGPU.",
+      selected_backend: null,
+      usable_backends: [],
+      fallback_reason: null,
       device_paths: runtimeDevicePaths(),
       details: {
         qsv: {
@@ -2241,6 +2278,9 @@ function executionBackendStatuses() {
       message: "No NVIDIA runtime device is visible to the runtime.",
       reason_unavailable: "No NVIDIA runtime device is visible to the runtime.",
       recommended_usage: "Expose /dev/nvidia* devices and the NVIDIA container runtime before selecting this backend.",
+      selected_backend: null,
+      usable_backends: [],
+      fallback_reason: null,
       device_paths: [],
       details: {},
     },
@@ -2254,6 +2294,9 @@ function executionBackendStatuses() {
       message: "AMD GPU passthrough is not fully usable by FFmpeg.",
       reason_unavailable: "AMD render device is not visible to the runtime.",
       recommended_usage: "Expose the AMD /dev/dri render device and verify VAAPI support before selecting this backend.",
+      selected_backend: null,
+      usable_backends: [],
+      fallback_reason: null,
       device_paths: [],
       details: {},
     },
@@ -2614,6 +2657,10 @@ function reviewItemDetail() {
       { code: "manual_review_missing_english_audio", message: "Missing English audio", kind: "reason" },
     ],
     warnings: [
+      { code: "video_transcode_required_for_policy_codec", message: "Video transcode required", kind: "warning" },
+    ],
+    primary_reason: { code: "manual_review_missing_english_audio", message: "Missing English audio", kind: "reason" },
+    detail_reasons: [
       { code: "video_transcode_required_for_policy_codec", message: "Video transcode required", kind: "warning" },
     ],
     latest_probe_at: "2026-04-20T10:00:30Z",
