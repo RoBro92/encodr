@@ -599,6 +599,29 @@ def test_local_compose_override_exposes_datastores_on_loopback_only(repo_root: P
     assert '"127.0.0.1:${REDIS_PORT:-6379}:6379"' in override_file
 
 
+def test_host_cli_maps_container_postgres_dsn_to_loopback_port(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_path = encodr_cli.Path
+
+    class FakePath:
+        def __new__(cls, value):
+            if value == "/.dockerenv":
+                return SimpleNamespace(exists=lambda: False)
+            return real_path(value)
+
+    monkeypatch.setattr(encodr_cli, "Path", FakePath)
+    (tmp_path / ".env").write_text("POSTGRES_PORT=6543\n", encoding="utf-8")
+
+    resolved = encodr_cli.host_reachable_database_dsn(
+        "postgresql+psycopg://encodr:local-secret@postgres:5432/encodr",
+        tmp_path,
+    )
+
+    assert resolved == "postgresql+psycopg://encodr:local-secret@127.0.0.1:6543/encodr"
+
+
 def test_worker_agent_installers_protect_and_clear_registration_credentials(repo_root: Path) -> None:
     unix_installer = (repo_root / "infra" / "scripts" / "install-worker-agent-unix.sh").read_text(encoding="utf-8")
     windows_installer = (repo_root / "infra" / "scripts" / "install-worker-agent-windows.ps1").read_text(encoding="utf-8")

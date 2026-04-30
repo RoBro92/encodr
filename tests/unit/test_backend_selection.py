@@ -56,10 +56,10 @@ def test_intel_backend_falls_back_to_vaapi_when_qsv_fails(monkeypatch) -> None:
                 detected=True,
                 usable=True,
                 status="healthy",
-                message="QSV unavailable (MFX session init failed), using VAAPI.",
+                message="Intel VAAPI active; QSV unavailable: MFX session init failed",
                 details={
-                    "selected_backend": "vaapi",
-                    "fallback_reason": "MFX session init failed",
+                    "selected_backend": "intel_vaapi",
+                    "qsv_unavailable_reason": "MFX session init failed",
                     "qsv": {
                         "usable": False,
                         "render_devices": ["/dev/dri/renderD128"],
@@ -79,7 +79,7 @@ def test_intel_backend_falls_back_to_vaapi_when_qsv_fails(monkeypatch) -> None:
     )
 
     assert selection.accelerator == "vaapi"
-    assert selection.actual_backend == "vaapi"
+    assert selection.actual_backend == "intel_vaapi"
     assert selection.video_encoder == "h264_vaapi"
     assert selection.device_path == "/dev/dri/renderD128"
-    assert selection.selection_reason == "Using Intel VAAPI because QSV is unavailable in this runtime."
+    assert selection.selection_reason == "Using Intel iGPU / VAAPI for hardware-accelerated video encoding. QSV unavailable: MFX session init failed."

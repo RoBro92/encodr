@@ -57,6 +57,7 @@ def serialise_backend_probe(probe: HardwareProbe) -> dict[str, object]:
         "selected_backend": details.get("selected_backend"),
         "usable_backends": details.get("usable_backends", []),
         "fallback_reason": details.get("fallback_reason"),
+        "qsv_unavailable_reason": details.get("qsv_unavailable_reason"),
         "device_paths": details.get("device_paths", []),
         "details": details,
     }
@@ -768,20 +769,20 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
         },
     )
     intel_usable = qsv_probe.usable or intel_vaapi_probe.usable
-    usable_intel_backends = [
-        backend
-        for backend, probe in (("intel_qsv", qsv_probe), ("vaapi", intel_vaapi_probe))
-        if probe.usable
-    ]
+    usable_intel_backends = []
+    if qsv_probe.usable:
+        usable_intel_backends.append("intel_qsv")
+    if intel_vaapi_probe.usable:
+        usable_intel_backends.append("intel_vaapi")
     selected_intel_backend = usable_intel_backends[0] if usable_intel_backends else None
     qsv_reason = qsv_probe.details.get("reason_unavailable") or qsv_probe.message
     vaapi_reason = intel_vaapi_probe.details.get("reason_unavailable") or intel_vaapi_probe.message
     intel_reason = None if intel_usable else qsv_reason or vaapi_reason
-    intel_fallback_reason = qsv_reason if selected_intel_backend == "vaapi" and not qsv_probe.usable else None
+    qsv_unavailable_reason = qsv_reason if selected_intel_backend == "intel_vaapi" and not qsv_probe.usable else None
     if qsv_probe.usable:
         intel_message = "Intel iGPU is available via QSV in this runtime."
     elif intel_vaapi_probe.usable:
-        intel_message = f"QSV unavailable ({qsv_reason}), using VAAPI."
+        intel_message = f"Intel VAAPI active; QSV unavailable: {qsv_reason}"
     else:
         intel_message = "Intel iGPU passthrough is not fully usable in this runtime."
     intel_probe = HardwareProbe(
@@ -803,7 +804,8 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
             "preferred_backend": "intel_qsv",
             "selected_backend": selected_intel_backend,
             "usable_backends": usable_intel_backends,
-            "fallback_reason": intel_fallback_reason,
+            "fallback_reason": None,
+            "qsv_unavailable_reason": qsv_unavailable_reason,
             "qsv": qsv_probe.details | {"usable": qsv_probe.usable, "message": qsv_probe.message, "status": qsv_probe.status},
             "vaapi": intel_vaapi_probe.details | {"usable": intel_vaapi_probe.usable, "message": intel_vaapi_probe.message},
             "windows_adapters": windows_adapters,

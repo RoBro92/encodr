@@ -213,11 +213,11 @@ def _sample_gpu_telemetry(*, current_backend: str | None) -> dict[str, Any] | No
     if nvidia is not None:
         return nvidia
 
-    if current_backend in {"intel_igpu", "amd_gpu"}:
+    if current_backend in {"intel_igpu", "intel_vaapi", "amd_gpu"}:
         temperature = _sample_linux_drm_temperature(current_backend)
         if temperature is not None:
             return {
-                "vendor": "Intel" if current_backend == "intel_igpu" else "AMD",
+                "vendor": "Intel" if current_backend in {"intel_igpu", "intel_vaapi"} else "AMD",
                 "status": "partial",
                 "usage_percent": None,
                 "memory_used_bytes": None,
@@ -226,7 +226,7 @@ def _sample_gpu_telemetry(*, current_backend: str | None) -> dict[str, Any] | No
                 "message": "Only temperature telemetry is currently available for this backend in this runtime.",
             }
         return {
-            "vendor": "Intel" if current_backend == "intel_igpu" else "AMD",
+            "vendor": "Intel" if current_backend in {"intel_igpu", "intel_vaapi"} else "AMD",
             "status": "unavailable",
             "usage_percent": None,
             "memory_used_bytes": None,
@@ -282,7 +282,7 @@ def _sample_nvidia_telemetry() -> dict[str, Any] | None:
 def _sample_linux_drm_temperature(backend: str) -> float | None:
     if os.name != "posix":
         return None
-    vendor = "Intel" if backend == "intel_igpu" else "AMD"
+    vendor = "Intel" if backend in {"intel_igpu", "intel_vaapi"} else "AMD"
     for device in discover_runtime_devices():
         if device.get("vendor_name") != vendor:
             continue

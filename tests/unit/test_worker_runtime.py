@@ -50,6 +50,7 @@ def test_worker_runtime_serialisation_golden_payloads() -> None:
         "selected_backend": None,
         "usable_backends": [],
         "fallback_reason": None,
+        "qsv_unavailable_reason": None,
         "device_paths": [{"path": "/dev/dri/renderD128", "status": "failed"}],
         "details": {
             "ffmpeg_path_verified": False,
@@ -491,6 +492,8 @@ def test_probe_execution_backends_keeps_worker_healthy_when_qsv_fails_and_vaapi_
 
     assert intel_probe.usable is True
     assert intel_probe.status == "healthy"
-    assert intel_probe.details["selected_backend"] == "vaapi"
-    assert intel_probe.details["fallback_reason"] == "MFX session init failed"
-    assert "using VAAPI" in intel_probe.message
+    assert intel_probe.details["selected_backend"] == "intel_vaapi"
+    assert intel_probe.details["usable_backends"] == ["intel_vaapi"]
+    assert intel_probe.details["fallback_reason"] is None
+    assert intel_probe.details["qsv_unavailable_reason"] == "MFX session init failed"
+    assert intel_probe.message == "Intel VAAPI active; QSV unavailable: MFX session init failed"

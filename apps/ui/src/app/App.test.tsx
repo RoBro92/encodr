@@ -1905,6 +1905,59 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByText(/amd render device is not visible/i)).not.toBeInTheDocument();
   });
 
+  it("shows Intel VAAPI as active without degrading the worker when QSV is unavailable", async () => {
+    const intelVaapiStatus = workerStatus({
+      hardware_acceleration: ["intel_igpu"],
+      hardware_probes: intelVaapiActiveBackendStatuses(),
+      current_backend: "intel_vaapi",
+    });
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: intelVaapiStatus },
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: {
+          ...workerInventory(),
+          preferred_backend: "prefer_intel_igpu",
+          current_backend: "intel_vaapi",
+          runtime_summary: {
+            ...workerInventory().runtime_summary,
+            preferred_backend: "prefer_intel_igpu",
+            current_backend: "intel_vaapi",
+          },
+          recent_jobs: [
+            {
+              job_id: "job-intel-vaapi",
+              source_filename: "Intel Film (2026).mkv",
+              status: "completed",
+              actual_execution_backend: "intel_vaapi",
+              requested_execution_backend: "prefer_intel_igpu",
+              backend_fallback_used: false,
+              completed_at: "2026-04-22T11:50:00Z",
+              duration_seconds: 120,
+              failure_message: null,
+            },
+          ],
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [{ ...workerInventory(), preferred_backend: "prefer_intel_igpu", health_status: "healthy" }],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByText(/Intel VAAPI active; QSV unavailable: MFX session init failed/i)).toBeInTheDocument();
+    expect(screen.getAllByText(/Intel iGPU \/ VAAPI/i).length).toBeGreaterThan(0);
+    expect(screen.queryByText(/backend degraded/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/cpu fallback active/i)).not.toBeInTheDocument();
+  });
+
   it("marks workers failed when the configured backend fails and CPU fallback is disabled", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
@@ -2238,6 +2291,7 @@ function executionBackendStatuses() {
       selected_backend: "cpu",
       usable_backends: ["cpu"],
       fallback_reason: null,
+      qsv_unavailable_reason: null,
       device_paths: [],
       details: {},
     },
@@ -2254,6 +2308,7 @@ function executionBackendStatuses() {
       selected_backend: null,
       usable_backends: [],
       fallback_reason: null,
+      qsv_unavailable_reason: null,
       device_paths: runtimeDevicePaths(),
       details: {
         qsv: {
@@ -2281,6 +2336,7 @@ function executionBackendStatuses() {
       selected_backend: null,
       usable_backends: [],
       fallback_reason: null,
+      qsv_unavailable_reason: null,
       device_paths: [],
       details: {},
     },
@@ -2297,10 +2353,48 @@ function executionBackendStatuses() {
       selected_backend: null,
       usable_backends: [],
       fallback_reason: null,
+      qsv_unavailable_reason: null,
       device_paths: [],
       details: {},
     },
   ];
+}
+
+function intelVaapiActiveBackendStatuses() {
+  return executionBackendStatuses().map((item) => {
+    if (item.backend !== "intel_igpu") {
+      return item;
+    }
+    return {
+      ...item,
+      usable_by_ffmpeg: true,
+      ffmpeg_path_verified: true,
+      status: "healthy",
+      message: "Intel VAAPI active; QSV unavailable: MFX session init failed",
+      reason_unavailable: null,
+      recommended_usage: "Use Intel QSV when the oneVPL/MFX smoke test succeeds, otherwise use Intel VAAPI when validated.",
+      selected_backend: "intel_vaapi",
+      usable_backends: ["intel_vaapi"],
+      fallback_reason: null,
+      qsv_unavailable_reason: "MFX session init failed",
+      details: {
+        qsv: {
+          usable: false,
+          status: "failed",
+          message: "Intel QSV is visible, but FFmpeg could not create an MFX session.",
+          reason_unavailable: "MFX session init failed",
+        },
+        vaapi: {
+          usable: true,
+          message: "Intel VAAPI is available and validated in the current runtime.",
+          device_paths: runtimeDevicePaths(),
+        },
+        selected_backend: "intel_vaapi",
+        usable_backends: ["intel_vaapi"],
+        qsv_unavailable_reason: "MFX session init failed",
+      },
+    };
+  });
 }
 
 function storageStatus() {

@@ -447,6 +447,7 @@ export type ExecutionBackendStatus = {
   selected_backend: string | null;
   usable_backends: string[];
   fallback_reason: string | null;
+  qsv_unavailable_reason: string | null;
   device_paths: DevicePathStatus[];
   details: Record<string, unknown>;
 };

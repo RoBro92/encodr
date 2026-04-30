@@ -67,3 +67,30 @@ def test_collect_runtime_telemetry_reports_unavailable_gpu_for_intel_without_sou
 
     assert telemetry["gpu"]["vendor"] == "Intel"
     assert telemetry["gpu"]["status"] == "unavailable"
+
+
+def test_collect_runtime_telemetry_treats_intel_vaapi_as_intel_backend(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr("encodr_shared.telemetry._sample_system_cpu_percent", lambda: None)
+    monkeypatch.setattr("encodr_shared.telemetry._sample_process_cpu_percent", lambda: None)
+    monkeypatch.setattr(
+        "encodr_shared.telemetry._sample_memory",
+        lambda: {
+            "total_bytes": None,
+            "available_bytes": None,
+            "used_bytes": None,
+            "usage_percent": None,
+        },
+    )
+    monkeypatch.setattr("encodr_shared.telemetry._sample_process_memory_bytes", lambda: None)
+    monkeypatch.setattr("encodr_shared.telemetry._sample_cpu_temperature_c", lambda: None)
+    monkeypatch.setattr("encodr_shared.telemetry._sample_nvidia_telemetry", lambda: None)
+    monkeypatch.setattr("encodr_shared.telemetry._sample_linux_drm_temperature", lambda backend: 48.5 if backend == "intel_vaapi" else None)
+
+    telemetry = collect_runtime_telemetry(current_backend="intel_vaapi")
+
+    assert telemetry["backend_in_use"] == "intel_vaapi"
+    assert telemetry["gpu"]["vendor"] == "Intel"
+    assert telemetry["gpu"]["status"] == "partial"
+    assert telemetry["gpu"]["temperature_c"] == 48.5
