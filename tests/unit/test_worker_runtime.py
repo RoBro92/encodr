@@ -11,6 +11,7 @@ from encodr_shared.worker_runtime import (
     probe_execution_backends,
     probe_intel_qsv,
     probe_intel_vaapi,
+    resolve_backend_runtime_status,
     serialise_backend_probe,
     serialise_binary_probe,
 )
@@ -40,6 +41,7 @@ def test_worker_runtime_serialisation_golden_payloads() -> None:
     assert backend_payload == {
         "backend": "intel_igpu",
         "preference_key": "prefer_intel_igpu",
+        "preference_keys": ["prefer_intel_igpu", "intel_auto", "intel_qsv", "intel_vaapi", "qsv", "vaapi", "auto"],
         "detected": True,
         "usable_by_ffmpeg": False,
         "ffmpeg_path_verified": False,
@@ -497,3 +499,81 @@ def test_probe_execution_backends_keeps_worker_healthy_when_qsv_fails_and_vaapi_
     assert intel_probe.details["fallback_reason"] is None
     assert intel_probe.details["qsv_unavailable_reason"] == "MFX session init failed"
     assert intel_probe.message == "Intel VAAPI active; QSV unavailable: MFX session init failed"
+
+
+def test_runtime_status_selects_vaapi_when_qsv_fails_and_vaapi_passes() -> None:
+    status = resolve_backend_runtime_status(
+        "intel_auto",
+        [
+            {
+                "backend": "intel_igpu",
+                "preference_key": "prefer_intel_igpu",
+                "preference_keys": ["prefer_intel_igpu", "intel_auto", "intel_qsv", "intel_vaapi"],
+                "usable_by_ffmpeg": True,
+                "message": "Intel VAAPI active; QSV unavailable: MFX session init failed",
+                "details": {
+                    "qsv": {"usable": False, "reason_unavailable": "MFX session init failed"},
+                    "vaapi": {"usable": True},
+                    "qsv_unavailable_reason": "MFX session init failed",
+                },
+            }
+        ],
+        allow_cpu_fallback=True,
+        cpu_available=True,
+    )
+
+    assert status["selected_backend"] == "intel_vaapi"
+    assert status["transcode_backend_usable"] is True
+    assert status["degraded"] is False
+    assert status["qsv_unavailable_reason"] == "MFX session init failed"
+
+
+def test_runtime_status_selects_cpu_when_intel_hardware_fails_and_fallback_allowed() -> None:
+    status = resolve_backend_runtime_status(
+        "intel_auto",
+        [
+            {
+                "backend": "intel_igpu",
+                "preference_key": "prefer_intel_igpu",
+                "preference_keys": ["prefer_intel_igpu", "intel_auto", "intel_qsv", "intel_vaapi"],
+                "usable_by_ffmpeg": False,
+                "message": "Intel hardware unavailable.",
+                "details": {
+                    "qsv": {"usable": False, "reason_unavailable": "MFX session init failed"},
+                    "vaapi": {"usable": False, "reason_unavailable": "VAAPI init failed"},
+                },
+            }
+        ],
+        allow_cpu_fallback=True,
+        cpu_available=True,
+    )
+
+    assert status["selected_backend"] == "cpu"
+    assert status["transcode_backend_usable"] is True
+    assert status["degraded"] is False
+    assert "QSV unavailable: MFX session init failed" in str(status["fallback_reason"])
+
+
+def test_runtime_status_degrades_when_qsv_is_required_and_fails() -> None:
+    status = resolve_backend_runtime_status(
+        "intel_qsv",
+        [
+            {
+                "backend": "intel_igpu",
+                "preference_key": "prefer_intel_igpu",
+                "preference_keys": ["prefer_intel_igpu", "intel_auto", "intel_qsv", "intel_vaapi"],
+                "usable_by_ffmpeg": True,
+                "message": "Intel VAAPI active; QSV unavailable: MFX session init failed",
+                "details": {
+                    "qsv": {"usable": False, "reason_unavailable": "MFX session init failed"},
+                    "vaapi": {"usable": True},
+                },
+            }
+        ],
+        allow_cpu_fallback=True,
+        cpu_available=True,
+    )
+
+    assert status["selected_backend"] == "cpu"
+    assert status["transcode_backend_usable"] is True
+    assert status["degraded"] is True

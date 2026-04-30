@@ -4,16 +4,22 @@ import os
 from pathlib import Path
 
 from encodr_core.config.base import ConfigModel
-from encodr_shared.worker_runtime import probe_execution_backends
+from encodr_shared.worker_runtime import normalise_backend_preference_key, probe_execution_backends
 
 
 PREFERENCE_TO_BACKEND = {
     "cpu_only": "cpu",
-    "prefer_intel_igpu": "intel_igpu",
+    "prefer_intel_igpu": "intel_auto",
+    "intel_igpu": "intel_auto",
+    "intel_auto": "intel_auto",
+    "auto": "intel_auto",
+    "qsv": "intel_qsv",
+    "intel_qsv": "intel_qsv",
+    "vaapi": "intel_vaapi",
+    "intel_vaapi": "intel_vaapi",
     "prefer_nvidia_gpu": "nvidia_gpu",
     "prefer_amd_gpu": "amd_gpu",
     "cpu": "cpu",
-    "intel_igpu": "intel_igpu",
     "nvidia_gpu": "nvidia_gpu",
     "amd_gpu": "amd_gpu",
 }
@@ -102,8 +108,7 @@ class SelectedExecutionBackend(ConfigModel):
 
 
 def normalise_backend_preference(value: str | None) -> str:
-    cleaned = str(value or "cpu_only").strip()
-    return PREFERENCE_TO_BACKEND.get(cleaned, "cpu")
+    return normalise_backend_preference_key(value)
 
 
 def select_execution_backend(
@@ -119,11 +124,9 @@ def select_execution_backend(
     if requested_backend == "cpu":
         return _cpu_selection(requested_backend=requested_backend, codec=codec)
 
-    probes = {
-        probe.backend: probe
-        for probe in probe_execution_backends(ffmpeg_path)
-    }
-    requested_probe = probes.get(requested_backend)
+    probes = {probe.backend: probe for probe in probe_execution_backends(ffmpeg_path)}
+    probe_key = "intel_igpu" if requested_backend in {"intel_auto", "intel_qsv", "intel_vaapi"} else requested_backend
+    requested_probe = probes.get(probe_key)
 
     selection = _accelerated_selection(
         requested_backend=requested_backend,
@@ -139,16 +142,12 @@ def select_execution_backend(
             codec=codec,
             fallback_used=True,
             selection_reason=(
-                requested_probe.details.get("reason_unavailable") if requested_probe is not None else None
+                _selection_failure_reason(requested_backend, requested_probe)
             )
             or f"Preferred backend '{requested_backend}' is unavailable, so Encodr is falling back to CPU execution.",
         )
 
-    reason = (
-        requested_probe.details.get("reason_unavailable")
-        if requested_probe is not None
-        else f"Preferred backend '{requested_backend}' is not supported."
-    )
+    reason = _selection_failure_reason(requested_backend, requested_probe) or f"Preferred backend '{requested_backend}' is not supported."
     raise BackendSelectionError(
         f"{reason} CPU fallback is disabled, so Encodr cannot execute this transcode safely.",
         requested_backend=requested_backend,
@@ -250,21 +249,19 @@ def _accelerated_selection(
     if probe is None or not probe.usable:
         return None
 
-    if requested_backend == "intel_igpu":
+    if requested_backend in {"intel_auto", "intel_qsv", "intel_vaapi"}:
         qsv = (probe.details.get("qsv") or {}) if isinstance(probe.details, dict) else {}
         vaapi = (probe.details.get("vaapi") or {}) if isinstance(probe.details, dict) else {}
-        if qsv.get("usable"):
+        if requested_backend in {"intel_auto", "intel_qsv"} and qsv.get("usable"):
             encoder = QSV_ENCODERS.get(codec)
             if encoder is None:
                 return None
             render_devices = qsv.get("render_devices") or []
-            command_prefix = ["-init_hw_device", "qsv=qs", "-filter_hw_device", "qs"]
+            command_prefix = _string_list(qsv.get("command_prefix")) or ["-init_hw_device", "qsv=qs", "-filter_hw_device", "qs"]
             if render_devices and os.name != "nt":
-                command_prefix = [
+                command_prefix = _string_list(qsv.get("command_prefix")) or [
                     "-init_hw_device",
-                    f"vaapi=va:{render_devices[0]}",
-                    "-init_hw_device",
-                    "qsv=qs@va",
+                    f"qsv=qs:hw,child_device={render_devices[0]}",
                     "-filter_hw_device",
                     "qs",
                 ]
@@ -278,7 +275,7 @@ def _accelerated_selection(
                 selection_reason="Using Intel QSV for hardware-accelerated video encoding.",
                 device_path=str(render_devices[0]) if render_devices else None,
             )
-        if vaapi.get("usable"):
+        if requested_backend in {"intel_auto", "intel_vaapi"} and vaapi.get("usable"):
             encoder = VAAPI_ENCODERS.get(codec)
             if encoder is None:
                 return None
@@ -370,3 +367,37 @@ def _qsv_unavailable_reason(details: dict[str, object]) -> str | None:
         if isinstance(value, str) and value.strip():
             return value.strip().rstrip(".")
     return None
+
+
+def _selection_failure_reason(requested_backend: str, probe) -> str | None:
+    if probe is None:
+        return None
+    if requested_backend in {"intel_auto", "intel_qsv", "intel_vaapi"} and isinstance(probe.details, dict):
+        qsv = probe.details.get("qsv") if isinstance(probe.details.get("qsv"), dict) else {}
+        vaapi = probe.details.get("vaapi") if isinstance(probe.details.get("vaapi"), dict) else {}
+        if requested_backend == "intel_qsv":
+            return _first_reason(qsv, fallback=probe.details.get("qsv_unavailable_reason"))
+        if requested_backend == "intel_vaapi":
+            return _first_reason(vaapi)
+        qsv_reason = _first_reason(qsv, fallback=probe.details.get("qsv_unavailable_reason"))
+        vaapi_reason = _first_reason(vaapi)
+        if qsv_reason and vaapi_reason:
+            return f"QSV unavailable: {qsv_reason}; VAAPI unavailable: {vaapi_reason}"
+        return qsv_reason or vaapi_reason or _first_reason(probe.details)
+    return _first_reason(probe.details if isinstance(probe.details, dict) else {})
+
+
+def _first_reason(details: dict[str, object], *, fallback: object = None) -> str | None:
+    if isinstance(fallback, str) and fallback.strip():
+        return fallback.strip().rstrip(".")
+    for key in ("reason_unavailable", "validation_state", "message"):
+        value = details.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().rstrip(".")
+    return None
+
+
+def _string_list(value: object) -> list[str]:
+    if not isinstance(value, list):
+        return []
+    return [str(item) for item in value if isinstance(item, str) and item.strip()]

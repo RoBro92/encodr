@@ -35,7 +35,17 @@ from sqlalchemy.orm import sessionmaker
 from encodr_core.config import ConfigBundle, load_config_bundle
 from encodr_db.models import AuditEventType, AuditOutcome, UserRole
 from encodr_db.repositories import AuditEventRepository, UserRepository
-from encodr_shared import UpdateCheckSettings, UpdateChecker, read_version
+from encodr_shared import (
+    UpdateCheckSettings,
+    UpdateChecker,
+    detect_ffmpeg_hwaccels,
+    discover_runtime_devices,
+    probe_binary,
+    probe_intel_qsv,
+    probe_intel_vaapi,
+    read_version,
+    resolve_backend_runtime_status,
+)
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -61,6 +71,7 @@ def build_parser() -> argparse.ArgumentParser:
     help_parser.set_defaults(func=lambda args: parser.print_help() or 0)
 
     doctor_parser = subparsers.add_parser("doctor", help="Run local health and configuration checks.")
+    doctor_parser.add_argument("scope", nargs="?", choices=["qsv"], help="Run a focused diagnostic scope.")
     doctor_parser.set_defaults(func=command_doctor)
 
     status_parser = subparsers.add_parser("status", help="Alias for doctor.")
@@ -301,6 +312,9 @@ def command_dev_clear_ui_seed(args: argparse.Namespace) -> int:
 
 
 def command_doctor(args: argparse.Namespace) -> int:
+    if getattr(args, "scope", None) == "qsv":
+        return command_doctor_qsv(args)
+
     project_root = Path(args.project_root).resolve()
     bundle = load_bundle(project_root)
     api_health = check_api_health(bundle)
@@ -347,11 +361,129 @@ def command_doctor(args: argparse.Namespace) -> int:
     return 1 if failed else 0
 
 
+def command_doctor_qsv(args: argparse.Namespace) -> int:
+    project_root = Path(args.project_root).resolve()
+    bundle = load_bundle(project_root)
+    ffmpeg_path = bundle.app.media.ffmpeg_path
+    ffmpeg = probe_binary(ffmpeg_path)
+    devices = discover_runtime_devices()
+    hwaccels = detect_ffmpeg_hwaccels(ffmpeg_path)
+    qsv = probe_intel_qsv(ffmpeg_path)
+    vaapi = probe_intel_vaapi(ffmpeg_path)
+    intel_probe_payload = {
+        "backend": "intel_igpu",
+        "preference_key": "prefer_intel_igpu",
+        "preference_keys": ["prefer_intel_igpu", "intel_auto", "intel_qsv", "intel_vaapi", "qsv", "vaapi", "auto"],
+        "usable_by_ffmpeg": qsv.usable or vaapi.usable,
+        "message": "Intel backend diagnostic",
+        "details": {
+            "qsv": qsv.details | {"usable": qsv.usable, "message": qsv.message, "status": qsv.status},
+            "vaapi": vaapi.details | {"usable": vaapi.usable, "message": vaapi.message, "status": vaapi.status},
+            "qsv_unavailable_reason": None if qsv.usable else qsv.details.get("reason_unavailable") or qsv.message,
+        },
+    }
+    recommendation = resolve_backend_runtime_status(
+        "intel_auto",
+        [intel_probe_payload],
+        allow_cpu_fallback=True,
+        cpu_available=ffmpeg.discoverable,
+    )
+
+    print("Intel QSV diagnostic")
+    print("--------------------")
+    print(f"FFmpeg: {ffmpeg.resolved_path or ffmpeg.configured_path} ({ffmpeg.status})")
+    print(f"FFmpeg hwaccels: {', '.join(hwaccels) if hwaccels else 'not reported'}")
+    print("FFmpeg build flags:")
+    for flag in ffmpeg_build_flags(ffmpeg.resolved_path or str(ffmpeg_path), ["--enable-libvpl", "--enable-libmfx", "--enable-vaapi"]):
+        print(f"  - {flag}")
+    print("oneVPL/MFX libraries:")
+    for line in qsv_runtime_libraries():
+        print(f"  - {line}")
+    print("/dev/dri devices:")
+    intel_devices = [item for item in devices if str(item.get("path", "")).startswith("/dev/dri")]
+    if not intel_devices:
+        print("  - none visible")
+    for item in intel_devices:
+        print(
+            "  - "
+            f"{item.get('path')} "
+            f"{item.get('status')} "
+            f"vendor={item.get('vendor_name') or item.get('vendor_id') or 'unknown'} "
+            f"readable={item.get('readable')} writable={item.get('writable')}"
+        )
+
+    print(f"VAAPI smoke: {vaapi.status} - {vaapi.message}")
+    if vaapi.details.get("reason_unavailable"):
+        print(f"  reason: {vaapi.details['reason_unavailable']}")
+    print(f"QSV smoke: {qsv.status} - {qsv.message}")
+    if qsv.details.get("reason_unavailable"):
+        print(f"  reason: {qsv.details['reason_unavailable']}")
+    attempts = qsv.details.get("ffmpeg_smoke_attempts")
+    if isinstance(attempts, list) and attempts:
+        print("QSV smoke commands:")
+        for attempt in attempts:
+            if isinstance(attempt, dict):
+                print(f"  - {attempt.get('init_method')}: {attempt.get('command')}")
+                if attempt.get("stderr"):
+                    print(f"    stderr: {attempt['stderr']}")
+
+    selected = recommendation.get("selected_backend") or "none"
+    print(f"Recommended backend: {selected}")
+    if recommendation.get("fallback_reason"):
+        print(f"Fallback reason: {recommendation['fallback_reason']}")
+    return 0 if qsv.usable or vaapi.usable else 1
+
+
 def command_update_check(args: argparse.Namespace) -> int:
     checker = build_update_checker(load_bundle(args.project_root))
     status = checker.check_now()
     print_update_status(status)
     return 0 if status.status != "error" else 1
+
+
+def ffmpeg_build_flags(ffmpeg_path: str, interesting_flags: list[str]) -> list[str]:
+    try:
+        completed = subprocess.run(
+            [ffmpeg_path, "-hide_banner", "-buildconf"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return [f"unable to read build configuration: {error}"]
+    output = f"{completed.stdout}\n{completed.stderr}"
+    flags = []
+    for flag in interesting_flags:
+        if flag in output:
+            flags.append(flag)
+    if not flags:
+        return ["none of --enable-libvpl, --enable-libmfx, or --enable-vaapi were reported"]
+    return flags
+
+
+def qsv_runtime_libraries() -> list[str]:
+    if os.name == "nt":
+        return ["Windows QSV runtime discovery is not implemented by this CLI."]
+    ldconfig_path = shutil.which("ldconfig")
+    if not ldconfig_path:
+        return ["ldconfig is not available; cannot list libvpl/libmfx."]
+    try:
+        completed = subprocess.run(
+            [ldconfig_path, "-p"],
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=10,
+        )
+    except (OSError, subprocess.SubprocessError) as error:
+        return [f"unable to query runtime libraries: {error}"]
+    matches = [
+        line.strip()
+        for line in completed.stdout.splitlines()
+        if "libvpl" in line.lower() or "libmfx" in line.lower()
+    ]
+    return matches or ["libvpl/libmfx not reported by ldconfig"]
 
 
 def command_update(args: argparse.Namespace) -> int:

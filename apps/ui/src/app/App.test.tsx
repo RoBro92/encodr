@@ -1897,10 +1897,9 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
     expect(screen.getByText(/selected backend diagnostic/i)).toBeInTheDocument();
     expect(screen.getAllByText(/no nvidia runtime device is visible/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/primary backend failed\. falling back to cpu execution/i).length).toBeGreaterThan(0);
-    expect(screen.getAllByText(/cpu fallback active/i).length).toBeGreaterThan(0);
-    expect(screen.getByText(/backend degraded/i)).toBeInTheDocument();
-    expect(screen.getByText(/primary backend failed \(reason: no nvidia runtime device is visible to the runtime\)\. worker is safely falling back to cpu execution\./i)).toBeInTheDocument();
+    expect(screen.getByText(/nvidia is selected as the primary backend, but failed to initialize/i)).toBeInTheDocument();
+    expect(screen.queryByText(/cpu fallback active/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/backend degraded/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/intel driver missing/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/amd render device is not visible/i)).not.toBeInTheDocument();
   });
@@ -1953,9 +1952,85 @@ describe("Encodr UI shell", () => {
 
     expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
     expect(screen.getByText(/Intel VAAPI active; QSV unavailable: MFX session init failed/i)).toBeInTheDocument();
-    expect(screen.getAllByText(/Intel iGPU \/ VAAPI/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Intel VAAPI/i).length).toBeGreaterThan(0);
     expect(screen.queryByText(/backend degraded/i)).not.toBeInTheDocument();
     expect(screen.queryByText(/cpu fallback active/i)).not.toBeInTheDocument();
+  });
+
+  it("shows the next selected backend when no worker job is active", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/worker/status",
+        body: workerStatus({
+          hardware_acceleration: ["intel_igpu"],
+          hardware_probes: intelVaapiActiveBackendStatuses(),
+          current_backend: null,
+        }),
+      },
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: {
+          ...workerInventory(),
+          preferred_backend: "intel_auto",
+          current_backend: null,
+          runtime_summary: {
+            ...workerInventory().runtime_summary,
+            preferred_backend: "intel_auto",
+            current_backend: null,
+            selected_backend: "intel_vaapi",
+            qsv_usable: false,
+            qsv_unavailable_reason: "MFX session init failed",
+            vaapi_usable: true,
+          },
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [{ ...workerInventory(), preferred_backend: "intel_auto", health_status: "healthy" }],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByText(/No active job running\. Worker will use Intel VAAPI for the next eligible job\./i)).toBeInTheDocument();
+    expect(screen.getAllByText(/QSV status/i).length).toBeGreaterThan(0);
+    expect(screen.getAllByText(/Unavailable: MFX session init failed/i).length).toBeGreaterThan(0);
+  });
+
+  it("hides selected backend diagnostics when no diagnostic payload exists", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: {
+          ...workerInventory(),
+          preferred_backend: "cpu_only",
+          runtime_summary: {
+            ...workerInventory().runtime_summary,
+            selected_backend: "cpu",
+          },
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [{ ...workerInventory(), preferred_backend: "cpu_only", health_status: "healthy" }],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.queryByText(/selected backend diagnostic/i)).not.toBeInTheDocument();
   });
 
   it("marks workers failed when the configured backend fails and CPU fallback is disabled", async () => {

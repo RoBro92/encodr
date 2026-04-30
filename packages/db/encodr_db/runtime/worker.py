@@ -39,6 +39,7 @@ from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerR
 from encodr_db.runtime.dispatch import job_allows_worker
 from encodr_shared import (
     collect_runtime_telemetry,
+    backend_probe_matches_preference,
     discover_runtime_devices,
     load_execution_preferences,
     probe_binary,
@@ -46,6 +47,7 @@ from encodr_shared import (
     probe_execution_backends,
     probe_which,
     recommend_worker_concurrency,
+    resolve_backend_runtime_status,
     serialise_backend_probe,
     serialise_binary_probe,
 )
@@ -219,17 +221,14 @@ def build_local_worker_capability_report(
     )
     preferred_backend = worker.preferred_backend if worker is not None and worker.preferred_backend else "cpu_only"
     allow_cpu_fallback = bool(worker.allow_cpu_fallback) if worker is not None else True
-    preferred_probe = next((item for item in hardware_probes if item["preference_key"] == preferred_backend), None)
-    transcode_backend_usable = (
-        preferred_backend == "cpu_only"
-        or (
-            preferred_probe is not None
-            and (
-                preferred_probe["usable_by_ffmpeg"]
-                or allow_cpu_fallback
-            )
-        )
+    backend_runtime_status = resolve_backend_runtime_status(
+        preferred_backend,
+        hardware_probes,
+        allow_cpu_fallback=allow_cpu_fallback,
+        cpu_available=ffmpeg["status"] == "healthy",
     )
+    preferred_probe = next((item for item in hardware_probes if backend_probe_matches_preference(item, preferred_backend)), None)
+    transcode_backend_usable = bool(backend_runtime_status["transcode_backend_usable"])
     scratch_ready = scratch_path["status"] == "healthy"
     media_ready = all(item["status"] == "healthy" for item in media_paths) if media_paths else False
     binaries_healthy = ffmpeg["status"] == "healthy" and ffprobe["status"] == "healthy"
@@ -247,11 +246,11 @@ def build_local_worker_capability_report(
     elif not media_ready:
         health_status = WorkerHealthStatus.DEGRADED
         health_summary = "One or more media mount paths are unavailable."
-    elif not transcode_backend_usable:
+    elif not transcode_backend_usable or backend_runtime_status.get("degraded"):
         health_status = WorkerHealthStatus.DEGRADED
-        health_summary = (
-            "The preferred transcode backend is unavailable and CPU fallback is disabled. "
-            "Remux jobs can still run, but transcodes will stay pending."
+        health_summary = str(
+            backend_runtime_status.get("message")
+            or "The preferred transcode backend is unavailable. Remux jobs can still run, but transcodes will stay pending."
         )
     else:
         health_status = WorkerHealthStatus.HEALTHY
@@ -290,6 +289,14 @@ def build_local_worker_capability_report(
         "schedule_windows": worker.schedule_windows if worker is not None and worker.schedule_windows is not None else [],
         "current_job_id": snapshot.current_job_id,
         "current_backend": snapshot.current_backend,
+        "selected_backend": backend_runtime_status.get("selected_backend"),
+        "backend_fallback_used": backend_runtime_status.get("fallback_used"),
+        "backend_fallback_reason": backend_runtime_status.get("fallback_reason"),
+        "qsv_usable": backend_runtime_status.get("qsv_usable"),
+        "qsv_unavailable_reason": backend_runtime_status.get("qsv_unavailable_reason"),
+        "vaapi_usable": backend_runtime_status.get("vaapi_usable"),
+        "vaapi_unavailable_reason": backend_runtime_status.get("vaapi_unavailable_reason"),
+        "backend_diagnostic": backend_runtime_status,
         "current_stage": snapshot.current_stage,
         "current_progress_percent": snapshot.current_progress_percent,
         "current_progress_updated_at": snapshot.current_progress_updated_at.isoformat() if snapshot.current_progress_updated_at else None,

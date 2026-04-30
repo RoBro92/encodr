@@ -22,8 +22,25 @@ from encodr_core.planning.rules import merge_optional_model, merge_video_rules
 LANGUAGE_CODE_RE = re.compile(r"^[a-z]{3}$")
 
 RulesetName = Literal["movies", "movies_4k", "tv", "tv_4k"]
-ExecutionBackendPreference = Literal["cpu_only", "prefer_intel_igpu", "prefer_nvidia_gpu", "prefer_amd_gpu"]
+ExecutionBackendPreference = Literal[
+    "cpu_only",
+    "prefer_intel_igpu",
+    "intel_auto",
+    "intel_qsv",
+    "intel_vaapi",
+    "prefer_nvidia_gpu",
+    "prefer_amd_gpu",
+]
 QualityPreset = Literal["high_quality", "balanced", "efficient", "custom"]
+SUPPORTED_EXECUTION_BACKENDS = {
+    "cpu_only",
+    "prefer_intel_igpu",
+    "intel_auto",
+    "intel_qsv",
+    "intel_vaapi",
+    "prefer_nvidia_gpu",
+    "prefer_amd_gpu",
+}
 
 
 class ProcessingRuleValues(TypedDict):
@@ -126,12 +143,7 @@ class SetupStateService:
         preferred_backend: ExecutionBackendPreference,
         allow_cpu_fallback: bool,
     ) -> dict[str, object]:
-        if preferred_backend not in {
-            "cpu_only",
-            "prefer_intel_igpu",
-            "prefer_nvidia_gpu",
-            "prefer_amd_gpu",
-        }:
+        if preferred_backend not in SUPPORTED_EXECUTION_BACKENDS:
             raise ApiValidationError("Unsupported execution backend preference.")
         payload = self._load_state_payload()
         payload["execution_preferences"] = {
@@ -214,12 +226,7 @@ class SetupStateService:
         execution_preferences = raw.get("execution_preferences")
         if isinstance(execution_preferences, dict):
             preferred_backend = str(execution_preferences.get("preferred_backend") or "cpu_only").strip()
-            if preferred_backend not in {
-                "cpu_only",
-                "prefer_intel_igpu",
-                "prefer_nvidia_gpu",
-                "prefer_amd_gpu",
-            }:
+            if preferred_backend not in SUPPORTED_EXECUTION_BACKENDS:
                 preferred_backend = "cpu_only"
             payload["execution_preferences"] = {
                 "preferred_backend": preferred_backend,

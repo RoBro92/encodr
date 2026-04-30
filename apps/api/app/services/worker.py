@@ -54,10 +54,12 @@ from encodr_shared import (
 )
 from encodr_shared.scheduling import normalise_schedule_windows, schedule_windows_summary
 from encodr_shared.worker_runtime import (
+    backend_probe_matches_preference,
     discover_runtime_devices,
     probe_binary,
     probe_directory,
     probe_execution_backends,
+    resolve_backend_runtime_status,
 )
 
 
@@ -131,20 +133,17 @@ class WorkerService:
             config_bundle=self.config_bundle
         ).get_execution_preferences()
         preferred_backend = str(execution_preferences["preferred_backend"])
+        backend_runtime_status = resolve_backend_runtime_status(
+            preferred_backend,
+            execution_backend_probes,
+            allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+            cpu_available=ffmpeg["status"] == HealthStatus.HEALTHY,
+        )
         preferred_backend_probe = next(
-            (item for item in execution_backend_probes if item["preference_key"] == preferred_backend),
+            (item for item in execution_backend_probes if backend_probe_matches_preference(item, preferred_backend)),
             None,
         )
-        transcode_backend_usable = (
-            preferred_backend == "cpu_only"
-            or (
-                preferred_backend_probe is not None
-                and (
-                    preferred_backend_probe["usable_by_ffmpeg"]
-                    or bool(execution_preferences["allow_cpu_fallback"])
-                )
-            )
-        )
+        transcode_backend_usable = bool(backend_runtime_status["transcode_backend_usable"])
         eligible = bool(
             self.config_bundle.workers.local.enabled
             and binaries_healthy
@@ -159,10 +158,10 @@ class WorkerService:
             eligibility_summary = "The scratch path is not ready for execution."
         elif not media_ready:
             eligibility_summary = "One or more media mount paths are unavailable."
-        elif not transcode_backend_usable:
-            eligibility_summary = (
-                "The preferred transcode backend is unavailable and CPU fallback is disabled. "
-                "Remux jobs can still run, but transcodes will stay pending."
+        elif not transcode_backend_usable or backend_runtime_status.get("degraded"):
+            eligibility_summary = str(
+                backend_runtime_status.get("message")
+                or "The preferred transcode backend is unavailable. Remux jobs can still run, but transcodes will stay pending."
             )
         else:
             eligibility_summary = "The local worker can accept execution work."
@@ -179,6 +178,7 @@ class WorkerService:
             "execution_preferences": execution_preferences,
             "preferred_backend_probe": preferred_backend_probe,
             "transcode_backend_usable": transcode_backend_usable,
+            "backend_runtime_status": backend_runtime_status,
             "eligible": eligible,
             "eligibility_summary": eligibility_summary,
         }
@@ -207,8 +207,14 @@ class WorkerService:
         hardware_probes = list(runtime_payload.get("hardware_probes") or [])
         preferred_backend = str(execution_preferences["preferred_backend"])
         preferred_backend_probe = next(
-            (item for item in hardware_probes if item.get("preference_key") == preferred_backend),
+            (item for item in hardware_probes if backend_probe_matches_preference(item, preferred_backend)),
             None,
+        )
+        backend_runtime_status = resolve_backend_runtime_status(
+            preferred_backend,
+            hardware_probes,
+            allow_cpu_fallback=bool(execution_preferences["allow_cpu_fallback"]),
+            cpu_available=bool((runtime_payload.get("ffmpeg") or {}).get("discoverable", True)),
         )
         return {
             "ffmpeg": runtime_payload.get("ffmpeg") or {},
@@ -221,7 +227,8 @@ class WorkerService:
             "runtime_device_paths": list(runtime_payload.get("runtime_device_paths") or []),
             "execution_preferences": execution_preferences,
             "preferred_backend_probe": preferred_backend_probe,
-            "transcode_backend_usable": bool(runtime_payload.get("transcode_backend_usable")),
+            "transcode_backend_usable": bool(runtime_payload.get("transcode_backend_usable", backend_runtime_status["transcode_backend_usable"])),
+            "backend_runtime_status": runtime_payload.get("backend_diagnostic") or backend_runtime_status,
             "eligible": bool(runtime_payload.get("eligible")),
             "eligibility_summary": str(runtime_payload.get("eligibility_summary") or "The local worker runtime has not reported eligibility."),
         }
@@ -357,7 +364,7 @@ class WorkerService:
             status = HealthStatus.DEGRADED
             summary = str(runtime_probes["eligibility_summary"])
             configuration_state = "local_degraded"
-        elif not runtime_probes["transcode_backend_usable"]:
+        elif not runtime_probes["transcode_backend_usable"] or (runtime_probes.get("backend_runtime_status") or {}).get("degraded"):
             status = HealthStatus.DEGRADED
             summary = str(runtime_probes["eligibility_summary"])
             configuration_state = "local_degraded"
@@ -379,11 +386,12 @@ class WorkerService:
                 for item in runtime_probes["hardware_probes"]
             ),
             "vaapi": any(
-                item["backend"] in {"intel_igpu", "amd_gpu"} and item["usable_by_ffmpeg"]
+                item["backend"] in {"intel_igpu", "amd_gpu"}
+                and bool((item.get("details") or {}).get("vaapi", {}).get("usable"))
                 for item in runtime_probes["hardware_probes"]
             ),
             "amd_amf": any(
-                item["backend"] == "amd_gpu" and item["usable_by_ffmpeg"]
+                item["backend"] == "amd_gpu" and bool((item.get("details") or {}).get("amf", {}).get("usable"))
                 for item in runtime_probes["hardware_probes"]
             ),
         }
@@ -420,6 +428,14 @@ class WorkerService:
             "processed_jobs": snapshot.processed_jobs,
             "current_job_id": snapshot.current_job_id,
             "current_backend": snapshot.current_backend,
+            "selected_backend": (runtime_probes.get("backend_runtime_status") or {}).get("selected_backend"),
+            "backend_fallback_used": (runtime_probes.get("backend_runtime_status") or {}).get("fallback_used"),
+            "backend_fallback_reason": (runtime_probes.get("backend_runtime_status") or {}).get("fallback_reason"),
+            "qsv_usable": (runtime_probes.get("backend_runtime_status") or {}).get("qsv_usable"),
+            "qsv_unavailable_reason": (runtime_probes.get("backend_runtime_status") or {}).get("qsv_unavailable_reason"),
+            "vaapi_usable": (runtime_probes.get("backend_runtime_status") or {}).get("vaapi_usable"),
+            "vaapi_unavailable_reason": (runtime_probes.get("backend_runtime_status") or {}).get("vaapi_unavailable_reason"),
+            "backend_diagnostic": runtime_probes.get("backend_runtime_status"),
             "current_stage": snapshot.current_stage,
             "current_progress_percent": snapshot.current_progress_percent,
             "current_progress_updated_at": snapshot.current_progress_updated_at,
@@ -1380,6 +1396,14 @@ class WorkerService:
                         "schedule_windows": worker.schedule_windows or [],
                         "current_job_id": current_job_id,
                         "current_backend": current_backend,
+                        "selected_backend": status.get("selected_backend"),
+                        "backend_fallback_used": status.get("backend_fallback_used"),
+                        "backend_fallback_reason": status.get("backend_fallback_reason"),
+                        "qsv_usable": status.get("qsv_usable"),
+                        "qsv_unavailable_reason": status.get("qsv_unavailable_reason"),
+                        "vaapi_usable": status.get("vaapi_usable"),
+                        "vaapi_unavailable_reason": status.get("vaapi_unavailable_reason"),
+                        "backend_diagnostic": status.get("backend_diagnostic"),
                         "current_stage": current_stage,
                         "current_progress_percent": current_progress_percent,
                         "current_progress_updated_at": current_progress_updated_at,
@@ -1527,18 +1551,18 @@ class WorkerService:
         if not plan.video.transcode_required:
             return "remux" in execution_modes or "transcode" in execution_modes
 
-        preferred_backend = normalise_backend_preference(preferred_backend or worker.preferred_backend or "cpu_only")
+        preferred_backend = preferred_backend or worker.preferred_backend or "cpu_only"
         allow_cpu_fallback = bool(worker.allow_cpu_fallback)
         codec = (plan.video.target_codec or "hevc").strip().lower()
-        hardware_hints = {str(item) for item in capability_summary.get("hardware_hints", [])}
-
-        if preferred_backend == "cpu":
-            return "transcode" in execution_modes
-
-        if preferred_backend in hardware_hints and codec in {"h264", "hevc"}:
-            return True
-
-        return allow_cpu_fallback and "transcode" in execution_modes
+        if codec not in {"h264", "hevc", "av1"}:
+            return False
+        backend_status = resolve_backend_runtime_status(
+            preferred_backend,
+            list(capability_summary.get("hardware_probes") or []),
+            allow_cpu_fallback=allow_cpu_fallback,
+            cpu_available="transcode" in execution_modes,
+        )
+        return bool(backend_status["transcode_backend_usable"]) and "transcode" in execution_modes
 
     def _validate_local_backend_preferences(
         self,
@@ -1552,12 +1576,13 @@ class WorkerService:
                 "allow_cpu_fallback": allow_cpu_fallback,
             }
         )
-        if preferred_backend == "cpu_only":
+        backend_status = runtime_probes.get("backend_runtime_status") or {}
+        if normalise_backend_preference(preferred_backend) == "cpu":
             return
         preferred_probe = runtime_probes.get("preferred_backend_probe")
         if preferred_probe is None:
             raise ApiConflictError("The selected local backend is not recognised.")
-        if not preferred_probe["usable_by_ffmpeg"] and not allow_cpu_fallback:
+        if not backend_status.get("transcode_backend_usable"):
             raise ApiConflictError(
                 "The selected local backend is unavailable in this runtime and CPU fallback is disabled."
             )
@@ -1816,6 +1841,14 @@ class WorkerService:
             "max_concurrent_jobs": payload.get("max_concurrent_jobs"),
             "current_job_id": payload.get("current_job_id"),
             "current_backend": payload.get("current_backend"),
+            "selected_backend": payload.get("selected_backend"),
+            "backend_fallback_used": payload.get("backend_fallback_used"),
+            "backend_fallback_reason": payload.get("backend_fallback_reason"),
+            "qsv_usable": payload.get("qsv_usable"),
+            "qsv_unavailable_reason": payload.get("qsv_unavailable_reason"),
+            "vaapi_usable": payload.get("vaapi_usable"),
+            "vaapi_unavailable_reason": payload.get("vaapi_unavailable_reason"),
+            "backend_diagnostic": payload.get("backend_diagnostic"),
             "current_stage": payload.get("current_stage"),
             "current_progress_percent": payload.get("current_progress_percent"),
             "current_progress_updated_at": payload.get("current_progress_updated_at"),

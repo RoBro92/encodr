@@ -37,9 +37,44 @@ BACKEND_PREFERENCE_KEYS = {
     "amd_gpu": "prefer_amd_gpu",
 }
 
+BACKEND_ADDITIONAL_PREFERENCE_KEYS = {
+    "cpu": ["cpu"],
+    "intel_igpu": ["intel_auto", "intel_qsv", "intel_vaapi", "qsv", "vaapi", "auto"],
+    "nvidia_gpu": ["nvidia_gpu"],
+    "amd_gpu": ["amd_gpu"],
+}
+
+BACKEND_PREFERENCE_ALIASES = {
+    "cpu_only": "cpu",
+    "cpu": "cpu",
+    "prefer_intel_igpu": "intel_auto",
+    "intel_igpu": "intel_auto",
+    "intel_auto": "intel_auto",
+    "auto": "intel_auto",
+    "qsv": "intel_qsv",
+    "intel_qsv": "intel_qsv",
+    "vaapi": "intel_vaapi",
+    "intel_vaapi": "intel_vaapi",
+    "prefer_nvidia_gpu": "nvidia_gpu",
+    "nvidia_gpu": "nvidia_gpu",
+    "prefer_amd_gpu": "amd_gpu",
+    "amd_gpu": "amd_gpu",
+}
+
 
 def backend_preference_key(backend: str) -> str:
     return BACKEND_PREFERENCE_KEYS.get(backend, backend)
+
+
+def backend_preference_keys(backend: str) -> list[str]:
+    primary = backend_preference_key(backend)
+    aliases = BACKEND_ADDITIONAL_PREFERENCE_KEYS.get(backend, [])
+    return list(dict.fromkeys([primary, *aliases]))
+
+
+def normalise_backend_preference_key(value: str | None) -> str:
+    cleaned = str(value or "cpu_only").strip()
+    return BACKEND_PREFERENCE_ALIASES.get(cleaned, "cpu")
 
 
 def serialise_backend_probe(probe: HardwareProbe) -> dict[str, object]:
@@ -47,6 +82,7 @@ def serialise_backend_probe(probe: HardwareProbe) -> dict[str, object]:
     return {
         "backend": probe.backend,
         "preference_key": backend_preference_key(probe.backend),
+        "preference_keys": backend_preference_keys(probe.backend),
         "detected": probe.detected,
         "usable_by_ffmpeg": probe.usable,
         "ffmpeg_path_verified": bool(details.get("ffmpeg_path_verified", probe.usable)),
@@ -83,6 +119,335 @@ def serialise_binary_probe(
     if which_payload is not None:
         payload["which"] = which_payload
     return payload
+
+
+def backend_probe_matches_preference(probe: HardwareProbe | dict[str, object], preferred_backend: str | None) -> bool:
+    payload = _coerce_backend_probe_payload(probe)
+    requested = str(preferred_backend or "cpu_only").strip()
+    normalised = normalise_backend_preference_key(requested)
+    keys = [str(payload.get("preference_key") or ""), *[str(item) for item in payload.get("preference_keys", [])]]
+    backend = str(payload.get("backend") or "")
+    if requested in keys or normalised in keys or requested == backend or normalised == backend:
+        return True
+    if backend == "intel_igpu" and normalised in {"intel_auto", "intel_qsv", "intel_vaapi"}:
+        return True
+    return False
+
+
+def resolve_backend_runtime_status(
+    preferred_backend: str | None,
+    hardware_probes: list[HardwareProbe | dict[str, object]],
+    *,
+    allow_cpu_fallback: bool,
+    cpu_available: bool = True,
+) -> dict[str, object]:
+    requested = str(preferred_backend or "cpu_only").strip() or "cpu_only"
+    mode = normalise_backend_preference_key(requested)
+    payloads = [_coerce_backend_probe_payload(item) for item in hardware_probes]
+    cpu_probe = _find_backend_probe(payloads, "cpu")
+    cpu_usable = bool(cpu_available and (cpu_probe is None or cpu_probe.get("usable_by_ffmpeg", True)))
+
+    if mode == "cpu":
+        return _backend_status_payload(
+            requested=requested,
+            normalised=mode,
+            selected_backend="cpu" if cpu_usable else None,
+            transcode_backend_usable=cpu_usable,
+            fallback_used=False,
+            reason_unavailable=None if cpu_usable else "CPU execution is unavailable because FFmpeg is not discoverable.",
+            message="CPU execution is selected." if cpu_usable else "CPU execution is unavailable.",
+        )
+
+    if mode in {"intel_auto", "intel_qsv", "intel_vaapi"}:
+        return _resolve_intel_runtime_status(
+            requested=requested,
+            normalised=mode,
+            intel_probe=_find_backend_probe(payloads, "intel_igpu"),
+            allow_cpu_fallback=allow_cpu_fallback,
+            cpu_usable=cpu_usable,
+        )
+
+    requested_probe = _find_backend_probe(payloads, mode)
+    probe_usable = bool(requested_probe and requested_probe.get("usable_by_ffmpeg"))
+    if probe_usable:
+        return _backend_status_payload(
+            requested=requested,
+            normalised=mode,
+            selected_backend=mode,
+            transcode_backend_usable=True,
+            fallback_used=False,
+            reason_unavailable=None,
+            message=f"{mode.replace('_', ' ')} is selected and usable.",
+        )
+
+    reason = _probe_reason(requested_probe) if requested_probe is not None else f"Preferred backend '{requested}' was not reported."
+    if allow_cpu_fallback and cpu_usable:
+        return _backend_status_payload(
+            requested=requested,
+            normalised=mode,
+            selected_backend="cpu",
+            transcode_backend_usable=True,
+            fallback_used=True,
+            fallback_reason=reason,
+            reason_unavailable=reason,
+            message=f"Preferred backend is unavailable; CPU fallback is selected. {reason}",
+        )
+    return _backend_status_payload(
+        requested=requested,
+        normalised=mode,
+        selected_backend=None,
+        transcode_backend_usable=False,
+        fallback_used=False,
+        reason_unavailable=reason,
+        degraded=True,
+        message=f"Preferred backend is unavailable and CPU fallback is disabled. {reason}",
+    )
+
+
+def _coerce_backend_probe_payload(probe: HardwareProbe | dict[str, object]) -> dict[str, object]:
+    if isinstance(probe, dict):
+        return probe
+    if not isinstance(probe, HardwareProbe):
+        backend = str(getattr(probe, "backend", ""))
+        usable = bool(getattr(probe, "usable", False))
+        details = getattr(probe, "details", {}) or {}
+        return {
+            "backend": backend,
+            "preference_key": backend_preference_key(backend),
+            "preference_keys": backend_preference_keys(backend),
+            "usable_by_ffmpeg": usable,
+            "message": str(getattr(probe, "message", "")),
+            "reason_unavailable": None if usable else str(getattr(probe, "message", "") or "Backend is unavailable."),
+            "details": details if isinstance(details, dict) else {},
+        }
+    return serialise_backend_probe(probe)
+
+
+def _find_backend_probe(payloads: list[dict[str, object]], backend: str) -> dict[str, object] | None:
+    return next((item for item in payloads if item.get("backend") == backend), None)
+
+
+def _resolve_intel_runtime_status(
+    *,
+    requested: str,
+    normalised: str,
+    intel_probe: dict[str, object] | None,
+    allow_cpu_fallback: bool,
+    cpu_usable: bool,
+) -> dict[str, object]:
+    details = intel_probe.get("details", {}) if intel_probe is not None else {}
+    details = details if isinstance(details, dict) else {}
+    qsv = details.get("qsv") if isinstance(details.get("qsv"), dict) else {}
+    vaapi = details.get("vaapi") if isinstance(details.get("vaapi"), dict) else {}
+    qsv_usable = bool(qsv.get("usable"))
+    vaapi_usable = bool(vaapi.get("usable"))
+    qsv_reason = _nested_reason(qsv) or _clean_reason(details.get("qsv_unavailable_reason")) or "Intel QSV was not reported as usable."
+    vaapi_reason = _nested_reason(vaapi) or "Intel VAAPI was not reported as usable."
+
+    if normalised == "intel_auto":
+        if qsv_usable:
+            return _backend_status_payload(
+                requested=requested,
+                normalised=normalised,
+                selected_backend="intel_qsv",
+                transcode_backend_usable=True,
+                fallback_used=False,
+                qsv_usable=True,
+                vaapi_usable=vaapi_usable,
+                vaapi_unavailable_reason=None if vaapi_usable else vaapi_reason,
+                message="Intel QSV is selected and usable.",
+            )
+        if vaapi_usable:
+            return _backend_status_payload(
+                requested=requested,
+                normalised=normalised,
+                selected_backend="intel_vaapi",
+                transcode_backend_usable=True,
+                fallback_used=False,
+                fallback_reason=f"QSV unavailable: {qsv_reason}",
+                qsv_usable=False,
+                qsv_unavailable_reason=qsv_reason,
+                vaapi_usable=True,
+                message=f"Intel VAAPI active; QSV unavailable: {qsv_reason}",
+            )
+        return _hardware_cpu_fallback_or_failure(
+            requested=requested,
+            normalised=normalised,
+            allow_cpu_fallback=allow_cpu_fallback,
+            cpu_usable=cpu_usable,
+            reason=f"QSV unavailable: {qsv_reason}; VAAPI unavailable: {vaapi_reason}",
+            qsv_usable=False,
+            qsv_unavailable_reason=qsv_reason,
+            vaapi_usable=False,
+            vaapi_unavailable_reason=vaapi_reason,
+        )
+
+    if normalised == "intel_qsv":
+        if qsv_usable:
+            return _backend_status_payload(
+                requested=requested,
+                normalised=normalised,
+                selected_backend="intel_qsv",
+                transcode_backend_usable=True,
+                fallback_used=False,
+                qsv_usable=True,
+                vaapi_usable=vaapi_usable,
+                vaapi_unavailable_reason=None if vaapi_usable else vaapi_reason,
+                message="Intel QSV is selected and usable.",
+            )
+        if allow_cpu_fallback and cpu_usable:
+            return _backend_status_payload(
+                requested=requested,
+                normalised=normalised,
+                selected_backend="cpu",
+                transcode_backend_usable=True,
+                fallback_used=True,
+                fallback_reason=qsv_reason,
+                reason_unavailable=qsv_reason,
+                qsv_usable=False,
+                qsv_unavailable_reason=qsv_reason,
+                vaapi_usable=vaapi_usable,
+                degraded=True,
+                message=f"Intel QSV is required but unavailable; CPU fallback is selected. {qsv_reason}",
+            )
+        return _backend_status_payload(
+            requested=requested,
+            normalised=normalised,
+            selected_backend=None,
+            transcode_backend_usable=False,
+            fallback_used=False,
+            reason_unavailable=qsv_reason,
+            qsv_usable=False,
+            qsv_unavailable_reason=qsv_reason,
+            vaapi_usable=vaapi_usable,
+            degraded=True,
+            message=f"Intel QSV is required but unavailable. {qsv_reason}",
+        )
+
+    if vaapi_usable:
+        return _backend_status_payload(
+            requested=requested,
+            normalised=normalised,
+            selected_backend="intel_vaapi",
+            transcode_backend_usable=True,
+            fallback_used=False,
+            qsv_usable=qsv_usable,
+            qsv_unavailable_reason=None if qsv_usable else qsv_reason,
+            vaapi_usable=True,
+            message="Intel VAAPI is selected and usable.",
+        )
+    return _hardware_cpu_fallback_or_failure(
+        requested=requested,
+        normalised=normalised,
+        allow_cpu_fallback=allow_cpu_fallback,
+        cpu_usable=cpu_usable,
+        reason=vaapi_reason,
+        qsv_usable=qsv_usable,
+        qsv_unavailable_reason=None if qsv_usable else qsv_reason,
+        vaapi_usable=False,
+        vaapi_unavailable_reason=vaapi_reason,
+    )
+
+
+def _hardware_cpu_fallback_or_failure(
+    *,
+    requested: str,
+    normalised: str,
+    allow_cpu_fallback: bool,
+    cpu_usable: bool,
+    reason: str,
+    qsv_usable: bool | None = None,
+    qsv_unavailable_reason: str | None = None,
+    vaapi_usable: bool | None = None,
+    vaapi_unavailable_reason: str | None = None,
+) -> dict[str, object]:
+    if allow_cpu_fallback and cpu_usable:
+        return _backend_status_payload(
+            requested=requested,
+            normalised=normalised,
+            selected_backend="cpu",
+            transcode_backend_usable=True,
+            fallback_used=True,
+            fallback_reason=reason,
+            reason_unavailable=reason,
+            qsv_usable=qsv_usable,
+            qsv_unavailable_reason=qsv_unavailable_reason,
+            vaapi_usable=vaapi_usable,
+            vaapi_unavailable_reason=vaapi_unavailable_reason,
+            message=f"Hardware acceleration is unavailable; CPU fallback is selected. {reason}",
+        )
+    return _backend_status_payload(
+        requested=requested,
+        normalised=normalised,
+        selected_backend=None,
+        transcode_backend_usable=False,
+        fallback_used=False,
+        reason_unavailable=reason,
+        qsv_usable=qsv_usable,
+        qsv_unavailable_reason=qsv_unavailable_reason,
+        vaapi_usable=vaapi_usable,
+        vaapi_unavailable_reason=vaapi_unavailable_reason,
+        degraded=True,
+        message=f"Hardware acceleration is unavailable and CPU fallback is disabled. {reason}",
+    )
+
+
+def _backend_status_payload(
+    *,
+    requested: str,
+    normalised: str,
+    selected_backend: str | None,
+    transcode_backend_usable: bool,
+    fallback_used: bool,
+    message: str,
+    fallback_reason: str | None = None,
+    reason_unavailable: str | None = None,
+    qsv_usable: bool | None = None,
+    qsv_unavailable_reason: str | None = None,
+    vaapi_usable: bool | None = None,
+    vaapi_unavailable_reason: str | None = None,
+    degraded: bool = False,
+) -> dict[str, object]:
+    return {
+        "preferred_backend": requested,
+        "normalised_backend": normalised,
+        "selected_backend": selected_backend,
+        "transcode_backend_usable": transcode_backend_usable,
+        "fallback_used": fallback_used,
+        "fallback_reason": fallback_reason,
+        "reason_unavailable": reason_unavailable,
+        "qsv_usable": qsv_usable,
+        "qsv_unavailable_reason": qsv_unavailable_reason,
+        "vaapi_usable": vaapi_usable,
+        "vaapi_unavailable_reason": vaapi_unavailable_reason,
+        "degraded": degraded,
+        "message": message,
+    }
+
+
+def _probe_reason(probe: dict[str, object] | None) -> str:
+    if probe is None:
+        return "Backend probe was not reported."
+    return (
+        _clean_reason(probe.get("reason_unavailable"))
+        or _clean_reason(probe.get("message"))
+        or "Backend is unavailable."
+    )
+
+
+def _nested_reason(payload: dict[str, object]) -> str | None:
+    for key in ("reason_unavailable", "validation_state", "message"):
+        reason = _clean_reason(payload.get(key))
+        if reason:
+            return reason
+    return None
+
+
+def _clean_reason(value: object) -> str | None:
+    if not isinstance(value, str):
+        return None
+    cleaned = value.strip().rstrip(".")
+    return cleaned or None
 
 
 def _read_text_if_present(path: Path) -> str | None:
@@ -718,6 +1083,8 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
             "ffmpeg_path_verified": ffmpeg_probe.discoverable,
             "reason_unavailable": None if ffmpeg_probe.discoverable else ffmpeg_probe.message,
             "recommended_usage": "Use CPU execution as the safe fallback on any host.",
+            "selected_backend": "cpu" if ffmpeg_probe.discoverable else None,
+            "usable_backends": ["cpu"] if ffmpeg_probe.discoverable else [],
         },
     )
 
@@ -797,17 +1164,18 @@ def probe_execution_backends(ffmpeg_path: Path | str) -> list[HardwareProbe]:
             "ffmpeg_path_verified": intel_usable,
             "reason_unavailable": intel_reason,
             "recommended_usage": (
-                "Use Intel QSV when the oneVPL/MFX smoke test succeeds, otherwise use Intel VAAPI when validated."
+                "Use Intel QSV when the oneVPL/MFX smoke test succeeds. Intel VAAPI is also a validated Intel hardware path."
                 if intel_usable
-                else "Expose /dev/dri to the worker runtime and validate Intel QSV or VAAPI before selecting Intel iGPU."
+                else "Expose /dev/dri to the worker runtime and validate Intel QSV or Intel VAAPI before selecting Intel hardware."
             ),
-            "preferred_backend": "intel_qsv",
+            "preferred_backend": "intel_auto",
             "selected_backend": selected_intel_backend,
             "usable_backends": usable_intel_backends,
             "fallback_reason": None,
             "qsv_unavailable_reason": qsv_unavailable_reason,
+            "fallback_chain": ["intel_qsv", "intel_vaapi", "cpu"],
             "qsv": qsv_probe.details | {"usable": qsv_probe.usable, "message": qsv_probe.message, "status": qsv_probe.status},
-            "vaapi": intel_vaapi_probe.details | {"usable": intel_vaapi_probe.usable, "message": intel_vaapi_probe.message},
+            "vaapi": intel_vaapi_probe.details | {"usable": intel_vaapi_probe.usable, "message": intel_vaapi_probe.message, "status": intel_vaapi_probe.status},
             "windows_adapters": windows_adapters,
         },
     )
@@ -986,28 +1354,15 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
         )
 
     resolved_ffmpeg = probe_binary(ffmpeg_path).resolved_path or str(ffmpeg_path)
-    command = [
-        resolved_ffmpeg,
-        "-hide_banner",
-        "-loglevel",
-        "error",
-    ]
-    if is_windows:
-        command.extend(["-init_hw_device", "qsv=qs", "-filter_hw_device", "qs"])
-    else:
-        render_device = render_devices[0]
-        command.extend(
-            [
-                "-init_hw_device",
-                f"vaapi=va:{render_device}",
-                "-init_hw_device",
-                "qsv=qs@va",
-                "-filter_hw_device",
-                "qs",
-            ]
-        )
-    command.extend(
-        [
+    attempts: list[dict[str, object]] = []
+    selected_attempt: dict[str, object] | None = None
+    for init_name, command_prefix in _qsv_init_candidates(render_devices, is_windows=is_windows):
+        command = [
+            resolved_ffmpeg,
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            *command_prefix,
             "-f",
             "lavfi",
             "-i",
@@ -1022,20 +1377,30 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
             "null",
             "-",
         ]
-    )
-    returncode, stdout, stderr = _run_command_capture(
-        command,
-        env={"LIBVA_DRIVER_NAME": "iHD"} if not is_windows else None,
-        timeout=20,
-    )
-    smoke_payload = {
-        "command": ("LIBVA_DRIVER_NAME=iHD " if not is_windows else "") + " ".join(shlex.quote(part) for part in command),
-        "returncode": returncode,
-        "stdout": stdout.strip()[:1000] if stdout else None,
-        "stderr": stderr.strip()[:1000] if stderr else None,
-    }
-    if returncode != 0:
-        reason, message = _classify_intel_qsv_failure(stderr or stdout)
+        returncode, stdout, stderr = _run_command_capture(
+            command,
+            env={"LIBVA_DRIVER_NAME": "iHD"} if not is_windows else None,
+            timeout=20,
+        )
+        smoke_payload = {
+            "init_method": init_name,
+            "command_prefix": command_prefix,
+            "command": ("LIBVA_DRIVER_NAME=iHD " if not is_windows else "") + " ".join(shlex.quote(part) for part in command),
+            "returncode": returncode,
+            "stdout": stdout.strip()[:1000] if stdout else None,
+            "stderr": stderr.strip()[:1000] if stderr else None,
+        }
+        attempts.append(smoke_payload)
+        if returncode == 0:
+            selected_attempt = smoke_payload
+            break
+
+    if selected_attempt is None:
+        failure_text = "\n".join(
+            str(attempt.get("stderr") or attempt.get("stdout") or "")
+            for attempt in attempts
+        )
+        reason, message = _classify_intel_qsv_failure(failure_text)
         return HardwareProbe(
             backend="intel_qsv",
             detected=True,
@@ -1045,7 +1410,8 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
             details={
                 "hwaccels": hwaccels,
                 "render_devices": render_devices,
-                "ffmpeg_smoke_test": smoke_payload,
+                "ffmpeg_smoke_test": attempts[-1] if attempts else None,
+                "ffmpeg_smoke_attempts": attempts,
                 "validation_state": reason,
                 "reason_unavailable": reason,
                 "recommended_usage": "Validate Intel QSV with the worker FFmpeg build, oneVPL/MFX runtime, and the Intel render node.",
@@ -1061,13 +1427,44 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
         details={
             "hwaccels": hwaccels,
             "render_devices": render_devices,
-            "ffmpeg_smoke_test": smoke_payload,
+            "ffmpeg_smoke_test": selected_attempt,
+            "ffmpeg_smoke_attempts": attempts,
+            "init_method": selected_attempt.get("init_method"),
+            "command_prefix": selected_attempt.get("command_prefix"),
             "ffmpeg_path_verified": True,
             "reason_unavailable": None,
             "recommended_usage": "Intel QSV is ready to use in this worker runtime.",
             "validation_state": "usable",
         },
     )
+
+
+def _qsv_init_candidates(render_devices: list[str], *, is_windows: bool) -> list[tuple[str, list[str]]]:
+    if is_windows:
+        return [("default qsv", ["-init_hw_device", "qsv=qs", "-filter_hw_device", "qs"])]
+    render_device = render_devices[0]
+    return [
+        (
+            "oneVPL direct render node",
+            [
+                "-init_hw_device",
+                f"qsv=qs:hw,child_device={render_device}",
+                "-filter_hw_device",
+                "qs",
+            ],
+        ),
+        (
+            "VAAPI-derived QSV",
+            [
+                "-init_hw_device",
+                f"vaapi=va:{render_device}",
+                "-init_hw_device",
+                "qsv=qs@va",
+                "-filter_hw_device",
+                "qs",
+            ],
+        ),
+    ]
 
 
 def probe_directory(path: Path | str, *, writable_required: bool) -> dict[str, object]:

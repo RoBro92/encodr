@@ -13,6 +13,7 @@ from app.capabilities import (
     build_host_summary,
     build_worker_health,
     build_runtime_summary,
+    probe_worker_backends,
 )
 from app.client import WorkerAgentHttpError, WorkerApiClient
 from app.config import WorkerAgentSettings
@@ -86,9 +87,12 @@ class WorkerAgentService:
 
     def build_registration_payload(self) -> dict:
         runtime_configuration = self.load_runtime_configuration()
+        ffmpeg_probe, backend_probes = probe_worker_backends(self.settings)
         health_status, health_summary = build_worker_health(
             self.settings,
             runtime_configuration=runtime_configuration,
+            backend_probes=backend_probes,
+            ffmpeg_probe=ffmpeg_probe,
         )
         return {
             "registration_secret": self.settings.registration_secret,
@@ -99,11 +103,15 @@ class WorkerAgentService:
             "capability_summary": build_capability_summary(
                 self.settings,
                 runtime_configuration=runtime_configuration,
+                backend_probes=backend_probes,
+                ffmpeg_probe=ffmpeg_probe,
             ),
             "host_summary": build_host_summary(),
             "runtime_summary": build_runtime_summary(
                 self.settings,
                 runtime_configuration=runtime_configuration,
+                backend_probes=backend_probes,
+                ffmpeg_probe=ffmpeg_probe,
             ),
             "binary_summary": build_binary_summary(self.settings),
             "health_status": health_status,
@@ -112,19 +120,26 @@ class WorkerAgentService:
 
     def build_heartbeat_payload(self) -> dict:
         runtime_configuration = self.load_runtime_configuration()
+        ffmpeg_probe, backend_probes = probe_worker_backends(self.settings)
         health_status, health_summary = build_worker_health(
             self.settings,
             runtime_configuration=runtime_configuration,
+            backend_probes=backend_probes,
+            ffmpeg_probe=ffmpeg_probe,
         )
         return {
             "capability_summary": build_capability_summary(
                 self.settings,
                 runtime_configuration=runtime_configuration,
+                backend_probes=backend_probes,
+                ffmpeg_probe=ffmpeg_probe,
             ),
             "host_summary": build_host_summary(),
             "runtime_summary": build_runtime_summary(
                 self.settings,
                 runtime_configuration=runtime_configuration,
+                backend_probes=backend_probes,
+                ffmpeg_probe=ffmpeg_probe,
             ),
             "binary_summary": build_binary_summary(self.settings),
             "health_status": health_status,
@@ -466,6 +481,7 @@ class WorkerAgentService:
         base_runtime = build_runtime_summary(
             self.settings,
             runtime_configuration=runtime_configuration or self.load_runtime_configuration(),
+            include_backend_diagnostics=False,
         )
         return base_runtime | {
             "preferred_backend": preferred_backend or str(base_runtime.get("preferred_backend") or self.settings.preferred_backend),

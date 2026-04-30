@@ -437,6 +437,7 @@ export type DevicePathStatus = {
 export type ExecutionBackendStatus = {
   backend: string;
   preference_key: string;
+  preference_keys?: string[];
   detected: boolean;
   usable_by_ffmpeg: boolean;
   ffmpeg_path_verified: boolean;
@@ -517,6 +518,14 @@ export type WorkerStatus = {
   processed_jobs: number;
   current_job_id: string | null;
   current_backend: string | null;
+  selected_backend?: string | null;
+  backend_fallback_used?: boolean | null;
+  backend_fallback_reason?: string | null;
+  qsv_usable?: boolean | null;
+  qsv_unavailable_reason?: string | null;
+  vaapi_usable?: boolean | null;
+  vaapi_unavailable_reason?: string | null;
+  backend_diagnostic?: Record<string, unknown> | null;
   current_stage: string | null;
   current_progress_percent: number | null;
   current_progress_updated_at: string | null;
@@ -667,6 +676,14 @@ export type WorkerRuntimeSummary = {
   schedule_windows: ScheduleWindow[];
   current_job_id: string | null;
   current_backend: string | null;
+  selected_backend?: string | null;
+  backend_fallback_used?: boolean | null;
+  backend_fallback_reason?: string | null;
+  qsv_usable?: boolean | null;
+  qsv_unavailable_reason?: string | null;
+  vaapi_usable?: boolean | null;
+  vaapi_unavailable_reason?: string | null;
+  backend_diagnostic?: Record<string, unknown> | null;
   current_stage: string | null;
   current_progress_percent: number | null;
   current_progress_updated_at: string | null;

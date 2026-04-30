@@ -8,6 +8,7 @@ import pytest
 from encodr_core.execution import ExecutionResult
 from encodr_core.replacement import ReplacementResult
 from encodr_core.verification import VerificationResult
+from encodr_shared.worker_runtime import HardwareProbe
 
 
 pytestmark = [pytest.mark.unit]
@@ -299,6 +300,100 @@ def test_worker_health_normalises_preferred_backend_keys(monkeypatch: pytest.Mon
 
     assert status == "degraded"
     assert "CPU fallback is disabled" in summary
+
+
+def test_worker_health_keeps_vaapi_fallback_healthy(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_PREFERRED_BACKEND": "intel_auto",
+        }
+    )
+    monkeypatch.setattr(
+        worker_agent_capabilities,
+        "probe_binary",
+        lambda _path: type(
+            "BinaryProbe",
+            (),
+            {
+                "discoverable": True,
+                "configured_path": "ffmpeg",
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "status": "healthy",
+                "message": "ok",
+            },
+        )(),
+    )
+    monkeypatch.setattr(worker_agent_capabilities, "probe_directory", lambda _path, writable_required: {"status": "healthy"})
+
+    status, summary = build_worker_health(
+        settings,
+        backend_probes=[
+            HardwareProbe(
+                backend="intel_igpu",
+                detected=True,
+                usable=True,
+                status="healthy",
+                message="Intel VAAPI active; QSV unavailable: MFX session init failed",
+                details={
+                    "qsv": {"usable": False, "reason_unavailable": "MFX session init failed"},
+                    "vaapi": {"usable": True},
+                },
+            )
+        ],
+    )
+
+    assert status == "healthy"
+    assert summary == "Remote worker is ready to execute jobs."
+
+
+def test_worker_health_degrades_when_qsv_required_and_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    settings = load_settings(
+        {
+            "ENCODR_WORKER_AGENT_API_BASE_URL": "http://encodr.test/api",
+            "ENCODR_WORKER_AGENT_PREFERRED_BACKEND": "intel_qsv",
+        }
+    )
+    monkeypatch.setattr(
+        worker_agent_capabilities,
+        "probe_binary",
+        lambda _path: type(
+            "BinaryProbe",
+            (),
+            {
+                "discoverable": True,
+                "configured_path": "ffmpeg",
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "status": "healthy",
+                "message": "ok",
+            },
+        )(),
+    )
+    monkeypatch.setattr(worker_agent_capabilities, "probe_directory", lambda _path, writable_required: {"status": "healthy"})
+
+    status, summary = build_worker_health(
+        settings,
+        backend_probes=[
+            HardwareProbe(
+                backend="intel_igpu",
+                detected=True,
+                usable=True,
+                status="healthy",
+                message="Intel VAAPI active; QSV unavailable: MFX session init failed",
+                details={
+                    "qsv": {"usable": False, "reason_unavailable": "MFX session init failed"},
+                    "vaapi": {"usable": True},
+                },
+            )
+        ],
+    )
+
+    assert status == "degraded"
+    assert "Intel QSV is required but unavailable" in summary
 
 
 def test_worker_agent_rejects_non_positive_heartbeat_interval() -> None:

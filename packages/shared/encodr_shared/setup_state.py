@@ -23,6 +23,9 @@ def load_execution_preferences(data_dir: Path | str) -> dict[str, object]:
     if preferred_backend not in {
         "cpu_only",
         "prefer_intel_igpu",
+        "intel_auto",
+        "intel_qsv",
+        "intel_vaapi",
         "prefer_nvidia_gpu",
         "prefer_amd_gpu",
     }:
