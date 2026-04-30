@@ -13,15 +13,13 @@ import { StatusBadge } from "../../components/StatusBadge";
 import {
   useApproveReviewItemMutation,
   useClearReviewItemProtectedMutation,
-  useCreateJobFromReviewItemMutation,
   useHoldReviewItemMutation,
   useRejectReviewItemMutation,
-  useReplanReviewItemMutation,
   useMarkReviewItemProtectedMutation,
   useReviewItemDetailQuery,
   useReviewItemsQuery,
 } from "../../lib/api/hooks";
-import type { ReviewItemDetail, ReviewReason } from "../../lib/types/api";
+import type { ReviewItemDetail, ReviewItemSummary, ReviewReason } from "../../lib/types/api";
 import { formatDateTime, formatRelativeBoolean } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -30,9 +28,7 @@ type ReviewDecisionAction =
   | "reject"
   | "hold"
   | "mark_protected"
-  | "clear_protected"
-  | "replan"
-  | "create_job";
+  | "clear_protected";
 
 export function ReviewPage() {
   const { itemId } = useParams();
@@ -62,8 +58,6 @@ export function ReviewPage() {
   const holdMutation = useHoldReviewItemMutation();
   const protectMutation = useMarkReviewItemProtectedMutation();
   const clearProtectedMutation = useClearReviewItemProtectedMutation();
-  const replanMutation = useReplanReviewItemMutation();
-  const createJobMutation = useCreateJobFromReviewItemMutation();
 
   const queryError = itemsQuery.error ?? detailQuery.error;
   const mutationError =
@@ -71,9 +65,7 @@ export function ReviewPage() {
     rejectMutation.error ??
     holdMutation.error ??
     protectMutation.error ??
-    clearProtectedMutation.error ??
-    replanMutation.error ??
-    createJobMutation.error;
+    clearProtectedMutation.error;
 
   if (itemsQuery.isLoading) {
     return <LoadingBlock label="Loading review items" />;
@@ -91,9 +83,7 @@ export function ReviewPage() {
     rejectMutation.isPending ||
     holdMutation.isPending ||
     protectMutation.isPending ||
-    clearProtectedMutation.isPending ||
-    replanMutation.isPending ||
-    createJobMutation.isPending;
+    clearProtectedMutation.isPending;
   const metrics = summariseReviewItems(items);
 
   async function handleDecision(
@@ -120,16 +110,14 @@ export function ReviewPage() {
       case "clear_protected":
         await clearProtectedMutation.mutateAsync(payload);
         break;
-      case "replan":
-        await replanMutation.mutateAsync(payload);
-        break;
-      case "create_job":
-        await createJobMutation.mutateAsync(payload);
-        break;
       default:
         return;
     }
     setDecisionNote("");
+    if (action === "approve" || action === "reject") {
+      const nextItem = nextReviewItemAfterAction(items, detail.id);
+      navigate(nextItem ? reviewDetailRouteWithStatus(nextItem.id, status) : reviewRouteWithStatus(status));
+    }
   }
 
   function closeDrawer() {
@@ -245,7 +233,7 @@ export function ReviewPage() {
                           <span title={item.source_path}>{item.source_path}</span>
                         </div>
                         <p className="review-inbox-reason">
-                          {summariseReasons(item.reasons, item.warnings)}
+                          {summariseReasons(item.primary_reason, item.reasons, item.warnings)}
                         </p>
                         <div className="badge-row">
                           <StatusBadge value={item.review_status} />
@@ -358,18 +346,7 @@ function ReviewDetailDrawer({
           ) : detail ? (
             <div className="card-stack">
               <section className="review-alert-stack" aria-label="Review alerts">
-                <ReviewAlert
-                  tone="danger"
-                  title="Needs review because"
-                  items={detail.reasons}
-                  emptyMessage="No explicit review reasons are attached."
-                />
-                <ReviewAlert
-                  tone="warning"
-                  title="Warnings"
-                  items={detail.warnings}
-                  emptyMessage="No warnings recorded."
-                />
+                <ReviewPrimaryReason item={detail.primary_reason ?? detail.reasons[0] ?? detail.warnings[0] ?? null} />
               </section>
 
               <section className="review-metadata-grid" aria-label="Review metadata">
@@ -405,9 +382,16 @@ function ReviewDetailDrawer({
               </label>
 
               <CollapsibleSection
-                title="Show protection details"
-                subtitle="Planner and operator protection are kept separate."
+                title="Details"
+                subtitle="Secondary notes, protection state, and the latest plan."
               >
+                <ReviewDetailReasons
+                  items={
+                    detail.detail_reasons.length > 0
+                      ? detail.detail_reasons
+                      : [...detail.reasons.slice(1), ...detail.warnings]
+                  }
+                />
                 <section className="review-metadata-grid" aria-label="Protection details">
                   <ReviewMetadataItem label="Planner protected" value={formatRelativeBoolean(detail.protected_state.planner_protected)} />
                   <ReviewMetadataItem label="Operator protected" value={formatRelativeBoolean(detail.protected_state.operator_protected)} />
@@ -503,22 +487,6 @@ function ReviewDetailDrawer({
               >
                 Approve
               </button>
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={() => onDecision("replan")}
-                disabled={isActionPending}
-              >
-                Replan
-              </button>
-              <button
-                className="button button-primary"
-                type="button"
-                onClick={() => onDecision("create_job")}
-                disabled={isActionPending || detail.review_status !== "approved"}
-              >
-                Create job
-              </button>
             </div>
           </footer>
         ) : null}
@@ -527,32 +495,31 @@ function ReviewDetailDrawer({
   );
 }
 
-function ReviewAlert({
-  tone,
-  title,
-  items,
-  emptyMessage,
-}: {
-  tone: "danger" | "warning";
-  title: string;
-  items: ReviewReason[];
-  emptyMessage: string;
-}) {
+function ReviewPrimaryReason({ item }: { item: ReviewReason | null }) {
   return (
-    <div className={`review-callout review-callout-${tone}`}>
-      <span className="metric-label">{title}</span>
-      {items.length > 0 ? (
-        <ul className="plain-list">
-          {items.map((item) => (
-            <li key={`${tone}-${item.code}`}>
-              <span>{item.message}</span>
-            </li>
-          ))}
-        </ul>
+    <div className="review-callout review-callout-danger">
+      <span className="metric-label">Primary reason</span>
+      {item ? (
+        <p>{item.message}</p>
       ) : (
-        <p className="muted-copy">{emptyMessage}</p>
+        <p className="muted-copy">No explicit review reason is attached.</p>
       )}
     </div>
+  );
+}
+
+function ReviewDetailReasons({ items }: { items: ReviewReason[] }) {
+  if (items.length === 0) {
+    return <p className="muted-copy">No secondary details recorded.</p>;
+  }
+  return (
+    <ul className="plain-list">
+      {items.map((item) => (
+        <li key={`${item.kind}-${item.code}-${item.message}`}>
+          <span>{item.message}</span>
+        </li>
+      ))}
+    </ul>
   );
 }
 
@@ -601,6 +568,15 @@ function reviewDetailRouteWithStatus(itemId: string, status: string) {
   return `${APP_ROUTES.reviewDetail(itemId)}?status=${encodeURIComponent(status || "any")}`;
 }
 
+function nextReviewItemAfterAction(items: ReviewItemSummary[], currentItemId: string) {
+  const currentIndex = items.findIndex((item) => item.id === currentItemId);
+  const candidates = items.filter((item) => item.id !== currentItemId);
+  if (currentIndex === -1) {
+    return candidates[0];
+  }
+  return candidates.find((_item, index) => index >= currentIndex) ?? candidates[0];
+}
+
 function reviewPriorityLabel(item: {
   protected_state: { is_protected: boolean };
   requires_review: boolean;
@@ -619,9 +595,13 @@ function reviewPriorityLabel(item: {
 }
 
 function summariseReasons(
+  primaryReason: { message: string } | null | undefined,
   reasons: Array<{ message: string }>,
   warnings: Array<{ message: string }>,
 ) {
+  if (primaryReason?.message) {
+    return primaryReason.message;
+  }
   if (reasons[0]?.message) {
     return reasons[0].message;
   }

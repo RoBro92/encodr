@@ -64,11 +64,12 @@ export function DashboardPage() {
   const storage = storageQuery.data;
   const runningJobs = runningJobsQuery.data?.items ?? [];
   const jobStatusCounts = toCountMap(analytics?.overview.jobs_by_status ?? []);
-  const completedJobCount = (jobStatusCounts.completed ?? 0) + (jobStatusCounts.skipped ?? 0);
-  const manualReviewCount = jobStatusCounts.manual_review ?? 0;
-  const failedJobCount = jobStatusCounts.failed ?? 0;
-  const interruptedJobCount = jobStatusCounts.interrupted ?? 0;
-  const runningJobCount = jobStatusCounts.running ?? 0;
+  const dashboardCounts = analytics?.queue_counts;
+  const completedJobCount = dashboardCounts?.completed ?? jobStatusCounts.completed ?? 0;
+  const manualReviewCount = dashboardCounts?.manual_review ?? jobStatusCounts.manual_review ?? 0;
+  const failedJobCount = dashboardCounts?.failed ?? jobStatusCounts.failed ?? 0;
+  const interruptedJobCount = dashboardCounts?.interrupted ?? jobStatusCounts.interrupted ?? 0;
+  const runningJobCount = dashboardCounts?.running ?? jobStatusCounts.running ?? 0;
   const totalTranscodes = countByValue(analytics?.overview.plans_by_action ?? [], "transcode");
   const processedFileCount = analytics?.overview.processed_file_count ?? completedJobCount;
   const averageProcessedPerDay = analytics?.overview.average_processed_per_day ?? null;

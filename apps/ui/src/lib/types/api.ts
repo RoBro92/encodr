@@ -444,6 +444,9 @@ export type ExecutionBackendStatus = {
   message: string;
   reason_unavailable: string | null;
   recommended_usage: string | null;
+  selected_backend: string | null;
+  usable_backends: string[];
+  fallback_reason: string | null;
   device_paths: DevicePathStatus[];
   details: Record<string, unknown>;
 };
@@ -817,6 +820,8 @@ export type ReviewItemSummary = {
   protected_state: ProtectedStateSummary;
   reasons: ReviewReason[];
   warnings: ReviewReason[];
+  primary_reason: ReviewReason | null;
+  detail_reasons: ReviewReason[];
   latest_probe_at: string | null;
   latest_plan_at: string | null;
   latest_job_at: string | null;
@@ -1098,10 +1103,19 @@ export type RecentAnalytics = {
   recent_failed_jobs: RecentOutcome[];
 };
 
+export type DashboardQueueCounts = {
+  manual_review: number;
+  failed: number;
+  interrupted: number;
+  running: number;
+  completed: number;
+};
+
 export type AnalyticsDashboard = {
   overview: AnalyticsOverview;
   storage: AnalyticsStorage;
   outcomes: AnalyticsOutcomes;
   media: AnalyticsMedia;
   recent: RecentAnalytics;
+  queue_counts: DashboardQueueCounts;
 };

@@ -66,13 +66,17 @@ def test_approve_decision_persists_and_is_audited(
     assert response.status_code == 200
     payload = response.json()
     assert payload["decision"]["decision_type"] == "approved"
-    assert payload["review_item"]["review_status"] == "approved"
+    assert payload["job"]["status"] == "pending"
+    assert payload["review_item"]["review_status"] == "resolved"
 
     with session_factory() as session:
         latest = ManualReviewDecisionRepository(session).get_latest_for_tracked_file(planned.tracked_file_id)
+        jobs = JobRepository(session).list_jobs(tracked_file_id=planned.tracked_file_id)
         events = AuditEventRepository(session).list_events(limit=5)
         assert latest is not None
         assert latest.decision_type == ManualReviewDecisionType.APPROVED
+        assert latest.job_id == jobs[0].id
+        assert jobs[0].plan_snapshot.action.value != "manual_review"
         assert any(event.event_type == AuditEventType.MANUAL_REVIEW_ACTION for event in events)
 
 
@@ -107,8 +111,16 @@ def test_reject_and_hold_decisions_persist_correctly(
 
     assert reject_response.status_code == 200
     assert hold_response.status_code == 200
+    assert reject_response.json()["job"]["status"] == "pending"
     assert reject_response.json()["review_item"]["review_status"] == "rejected"
     assert hold_response.json()["review_item"]["review_status"] == "held"
+
+    with session_factory() as session:
+        jobs = JobRepository(session).list_jobs(tracked_file_id=reject_context.tracked_file_id)
+        assert len(jobs) == 1
+        strip_plan = jobs[0].plan_snapshot
+        assert strip_plan.action.value == "remux"
+        assert strip_plan.payload["video"]["transcode_required"] is False
 
 
 def test_mark_protected_and_clear_protected_update_state_safely(
@@ -142,7 +154,7 @@ def test_mark_protected_and_clear_protected_update_state_safely(
     assert clear_response.json()["review_item"]["protected_state"]["operator_protected"] is False
 
 
-def test_create_job_from_approved_review_item_is_append_only(
+def test_approve_queues_review_job_without_extra_create_step(
     tmp_path: Path,
     repo_root: Path,
     monkeypatch: pytest.MonkeyPatch,
@@ -156,21 +168,14 @@ def test_create_job_from_approved_review_item_is_append_only(
         planned = create_planned_file(session, context.bundle, media, source_path=source.as_posix())
         session.commit()
 
-    approve = context.client.post(
+    approve_response = context.client.post(
         f"/api/review/items/{planned.tracked_file_id}/approve",
         headers=auth.headers,
         json={"note": "Approved for job creation."},
     )
-    assert approve.status_code == 200
 
-    create_job_response = context.client.post(
-        f"/api/review/items/{planned.tracked_file_id}/create-job",
-        headers=auth.headers,
-        json={"note": "Queue the approved file."},
-    )
-
-    assert create_job_response.status_code == 201
-    payload = create_job_response.json()
+    assert approve_response.status_code == 200
+    payload = approve_response.json()
     assert payload["job"]["status"] == "pending"
     assert payload["review_item"]["review_status"] == "resolved"
 
@@ -178,8 +183,123 @@ def test_create_job_from_approved_review_item_is_append_only(
         jobs = JobRepository(session).list_jobs(tracked_file_id=planned.tracked_file_id)
         decisions = ManualReviewDecisionRepository(session).list_for_tracked_file(planned.tracked_file_id)
         assert len(jobs) == 1
-        assert decisions[0].decision_type == ManualReviewDecisionType.JOB_CREATED
-        assert decisions[1].decision_type == ManualReviewDecisionType.APPROVED
+        assert jobs[0].plan_snapshot.action.value != "manual_review"
+        assert decisions[0].decision_type == ManualReviewDecisionType.APPROVED
+
+
+def test_reject_resolved_review_does_not_queue_duplicate_job(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source = layout.create_source_file("Movies/Resolved Reject Film (2024).mkv", contents="review")
+    media = media_at_path(parse_fixture("ambiguous_forced_subtitle.json"), source)
+    with session_factory() as session:
+        planned = create_planned_file(session, context.bundle, media, source_path=source.as_posix())
+        session.commit()
+
+    approve_response = context.client.post(
+        f"/api/review/items/{planned.tracked_file_id}/approve",
+        headers=auth.headers,
+        json={},
+    )
+    assert approve_response.status_code == 200
+
+    with session_factory() as session:
+        jobs = JobRepository(session).list_jobs(tracked_file_id=planned.tracked_file_id)
+        assert len(jobs) == 1
+        jobs[0].status = JobStatus.COMPLETED
+        session.commit()
+
+    reject_response = context.client.post(
+        f"/api/review/items/{planned.tracked_file_id}/reject",
+        headers=auth.headers,
+        json={},
+    )
+
+    assert reject_response.status_code == 409
+    assert "does not currently require review rejection" in reject_response.json()["detail"]
+    with session_factory() as session:
+        jobs = JobRepository(session).list_jobs(tracked_file_id=planned.tracked_file_id)
+        assert len(jobs) == 1
+
+
+def test_approve_post_encode_review_replaces_staged_output(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source = layout.create_source_file("Movies/Post Encode Approve (2024).mkv", contents="source")
+    staged_output = layout.scratch_dir / "post-encode-approve.tmp.mkv"
+    staged_output.write_text("encoded", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source)
+    with session_factory() as session:
+        job_context = create_job(session, context.bundle, media, source_path=source.as_posix())
+        job_context.job.status = JobStatus.MANUAL_REVIEW
+        job_context.job.output_path = staged_output.as_posix()
+        job_context.job.failure_category = "compression_safety_exceeded"
+        job_context.job.failure_message = "Video compression reduced by 43.1%, exceeding 35% threshold."
+        job_context.job.verification_payload = {"status": "passed", "passed": True, "checks": [], "warnings": [], "failures": []}
+        session.commit()
+        tracked_file_id = job_context.job.tracked_file_id
+
+    response = context.client.post(
+        f"/api/review/items/{tracked_file_id}/approve",
+        headers=auth.headers,
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["status"] == "completed"
+    assert source.read_text(encoding="utf-8") == "encoded"
+    assert not staged_output.exists()
+    with session_factory() as session:
+        job = JobRepository(session).get_latest_for_tracked_file(tracked_file_id)
+        assert job is not None
+        assert job.status == JobStatus.COMPLETED
+
+
+def test_reject_post_encode_review_deletes_staged_output_and_queues_strip_only(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source = layout.create_source_file("Movies/Post Encode Reject (2024).mkv", contents="source")
+    staged_output = layout.scratch_dir / "post-encode-reject.tmp.mkv"
+    staged_output.write_text("encoded", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source)
+    with session_factory() as session:
+        job_context = create_job(session, context.bundle, media, source_path=source.as_posix())
+        job_context.job.status = JobStatus.MANUAL_REVIEW
+        job_context.job.output_path = staged_output.as_posix()
+        job_context.job.failure_category = "compression_safety_exceeded"
+        job_context.job.failure_message = "Video compression reduced by 43.1%, exceeding 35% threshold."
+        session.commit()
+        tracked_file_id = job_context.job.tracked_file_id
+
+    response = context.client.post(
+        f"/api/review/items/{tracked_file_id}/reject",
+        headers=auth.headers,
+        json={},
+    )
+
+    assert response.status_code == 200
+    assert response.json()["job"]["status"] == "pending"
+    assert not staged_output.exists()
+    with session_factory() as session:
+        jobs = JobRepository(session).list_jobs(tracked_file_id=tracked_file_id)
+        assert len(jobs) == 2
+        assert jobs[0].plan_snapshot.action.value == "remux"
+        assert jobs[0].plan_snapshot.payload["video"]["transcode_required"] is False
 
 
 def test_review_endpoints_reject_unauthenticated_access(
@@ -221,8 +341,7 @@ def test_invalid_review_actions_are_rejected_clearly(
         json={"note": "Attempt to clear planner protection."},
     )
 
-    assert job_response.status_code == 409
-    assert "approved" in job_response.json()["detail"].lower()
+    assert job_response.status_code == 404
     assert clear_response.status_code == 409
     assert "operator-applied protection" in clear_response.json()["detail"].lower()
 

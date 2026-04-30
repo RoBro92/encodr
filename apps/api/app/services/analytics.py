@@ -10,14 +10,16 @@ from app.schemas.analytics import (
     AnalyticsOverviewResponse,
     AnalyticsStorageResponse,
     CountByValueResponse,
+    DashboardQueueCountsResponse,
     FailureCategoryResponse,
     RecentAnalyticsResponse,
     RecentOutcomeResponse,
     ResolutionActionBreakdownResponse,
 )
 from encodr_core.config import ConfigBundle
-from encodr_db.models import Job
+from encodr_db.models import Job, JobStatus
 from encodr_db.repositories import AnalyticsRepository
+from app.services.review import REVIEW_STATUS_HELD, REVIEW_STATUS_OPEN, ReviewService
 
 
 class AnalyticsService:
@@ -168,6 +170,26 @@ class AnalyticsService:
             outcomes=self.outcomes(session),
             media=self._dashboard_media(session),
             recent=self.recent(session),
+            queue_counts=self._dashboard_queue_counts(session),
+        )
+
+    def _dashboard_queue_counts(self, session: Session) -> DashboardQueueCountsResponse:
+        repository = AnalyticsRepository(session)
+        status_counts = repository.count_jobs_by_status()
+        pending_review_count = len(
+            [
+                item
+                for item in ReviewService().list_items(session, limit=None)
+                if item.review_status in {REVIEW_STATUS_OPEN, REVIEW_STATUS_HELD}
+                and not (item.latest_job is not None and item.latest_job.status == JobStatus.FAILED)
+            ]
+        )
+        return DashboardQueueCountsResponse(
+            manual_review=pending_review_count,
+            failed=status_counts.get(JobStatus.FAILED.value, 0),
+            interrupted=status_counts.get(JobStatus.INTERRUPTED.value, 0),
+            running=status_counts.get(JobStatus.RUNNING.value, 0),
+            completed=status_counts.get(JobStatus.COMPLETED.value, 0),
         )
 
     def _dashboard_media(self, session: Session) -> AnalyticsMediaResponse:

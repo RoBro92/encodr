@@ -15,7 +15,6 @@ import {
   createDryRunJobs,
   createRemoteWorkerOnboarding,
   createBatchJobs,
-  createJobFromReviewItem,
   disableWorker,
   deleteWorker,
   deleteJobBackup,
@@ -50,7 +49,6 @@ import {
   listReviewItems,
   markReviewItemProtected,
   runWorkerSelfTest,
-  replanReviewItem,
   listFiles,
   listJobs,
   login,
@@ -999,16 +997,6 @@ export function useMarkReviewItemProtectedMutation() {
 export function useClearReviewItemProtectedMutation() {
   const { apiClient } = useSession();
   return useReviewDecisionMutation(({ itemId, request }) => clearReviewItemProtected(apiClient, itemId, request));
-}
-
-export function useReplanReviewItemMutation() {
-  const { apiClient } = useSession();
-  return useReviewDecisionMutation(({ itemId, request }) => replanReviewItem(apiClient, itemId, request));
-}
-
-export function useCreateJobFromReviewItemMutation() {
-  const { apiClient } = useSession();
-  return useReviewDecisionMutation(({ itemId, request }) => createJobFromReviewItem(apiClient, itemId, request));
 }
 
 export function useLoginMutation() {

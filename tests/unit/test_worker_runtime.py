@@ -47,6 +47,9 @@ def test_worker_runtime_serialisation_golden_payloads() -> None:
         "message": "Intel iGPU passthrough is not fully usable in this runtime.",
         "reason_unavailable": "permission denied",
         "recommended_usage": "Expose /dev/dri to the worker runtime.",
+        "selected_backend": None,
+        "usable_backends": [],
+        "fallback_reason": None,
         "device_paths": [{"path": "/dev/dri/renderD128", "status": "failed"}],
         "details": {
             "ffmpeg_path_verified": False,
@@ -185,6 +188,7 @@ def test_probe_device_node_reports_missing_path() -> None:
 
 def test_worker_image_includes_intel_vaapi_runtime_packages(repo_root: Path) -> None:
     dockerfile = (repo_root / "infra/docker/worker.Dockerfile").read_text(encoding="utf-8")
+    agent_dockerfile = (repo_root / "infra/docker/worker-agent.Dockerfile").read_text(encoding="utf-8")
 
     for package_name in [
         "vainfo",
@@ -192,8 +196,10 @@ def test_worker_image_includes_intel_vaapi_runtime_packages(repo_root: Path) -> 
         "libva2",
         "libva-drm2",
         "mesa-va-drivers",
+        "libvpl2",
     ]:
         assert package_name in dockerfile
+        assert package_name in agent_dockerfile
 
     assert "intel-media-va-driver-non-free" not in dockerfile
 
@@ -328,15 +334,163 @@ def test_probe_intel_vaapi_reports_driver_missing(monkeypatch: pytest.MonkeyPatc
     assert probe.details["reason_unavailable"] == "Intel driver missing"
 
 
-def test_probe_intel_qsv_is_left_unverified_without_dedicated_validation(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_probe_intel_qsv_reports_mfx_session_failure(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr("encodr_shared.worker_runtime.detect_ffmpeg_hwaccels", lambda _path: ["qsv", "vaapi"])
     monkeypatch.setattr(
-        "encodr_shared.worker_runtime.Path.glob",
-        lambda self, pattern: [Path("/dev/dri/renderD128")] if str(self) == "/dev/dri" and pattern == "renderD*" else [],
+        "encodr_shared.worker_runtime.discover_runtime_devices",
+        lambda: [
+            {
+                "path": "/dev/dri/renderD128",
+                "exists": True,
+                "readable": True,
+                "writable": True,
+                "is_character_device": True,
+                "status": "healthy",
+                "message": "Device path is present and readable.",
+                "vendor_id": "0x8086",
+                "vendor_name": "Intel",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_binary",
+        lambda path: type(
+            "BinaryProbe",
+            (),
+            {
+                "configured_path": str(path),
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "discoverable": True,
+                "status": "healthy",
+                "message": "Binary is discoverable and executable.",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime._run_command_capture",
+        lambda command, **kwargs: (1, "", "Error creating a MFX session: -9"),
     )
 
     probe = probe_intel_qsv("ffmpeg")
 
     assert probe.detected is True
     assert probe.usable is False
-    assert probe.status == "unknown"
+    assert probe.status == "failed"
+    assert probe.details["reason_unavailable"] == "MFX session init failed"
+
+
+def test_probe_intel_qsv_validates_smoke_test(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("encodr_shared.worker_runtime.detect_ffmpeg_hwaccels", lambda _path: ["qsv", "vaapi"])
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.discover_runtime_devices",
+        lambda: [
+            {
+                "path": "/dev/dri/renderD128",
+                "exists": True,
+                "readable": True,
+                "writable": True,
+                "is_character_device": True,
+                "status": "healthy",
+                "message": "Device path is present and readable.",
+                "vendor_id": "0x8086",
+                "vendor_name": "Intel",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_binary",
+        lambda path: type(
+            "BinaryProbe",
+            (),
+            {
+                "configured_path": str(path),
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "discoverable": True,
+                "status": "healthy",
+                "message": "Binary is discoverable and executable.",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime._run_command_capture",
+        lambda command, **kwargs: (0, "", ""),
+    )
+
+    probe = probe_intel_qsv("ffmpeg")
+
+    assert probe.detected is True
+    assert probe.usable is True
+    assert probe.status == "healthy"
+    assert probe.details["validation_state"] == "usable"
+
+
+def test_probe_execution_backends_keeps_worker_healthy_when_qsv_fails_and_vaapi_passes(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_binary",
+        lambda _path: type(
+            "BinaryProbe",
+            (),
+            {
+                "configured_path": "ffmpeg",
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "discoverable": True,
+                "status": "healthy",
+                "message": "Binary is discoverable and executable.",
+            },
+        )(),
+    )
+    monkeypatch.setattr("encodr_shared.worker_runtime.detect_ffmpeg_hwaccels", lambda _path: ["qsv", "vaapi"])
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.discover_runtime_devices",
+        lambda: [
+            {
+                "path": "/dev/dri/renderD128",
+                "exists": True,
+                "readable": True,
+                "writable": True,
+                "is_character_device": True,
+                "status": "healthy",
+                "message": "Device path is present and readable.",
+                "vendor_id": "0x8086",
+                "vendor_name": "Intel",
+            },
+        ],
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_intel_qsv",
+        lambda _path: HardwareProbe(
+            backend="intel_qsv",
+            detected=True,
+            usable=False,
+            status="failed",
+            message="Intel QSV is visible, but FFmpeg could not create an MFX session.",
+            details={"reason_unavailable": "MFX session init failed", "render_devices": ["/dev/dri/renderD128"]},
+        ),
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_intel_vaapi",
+        lambda _path: HardwareProbe(
+            backend="vaapi",
+            detected=True,
+            usable=True,
+            status="healthy",
+            message="Intel VAAPI is available and validated in the current runtime.",
+            details={"device_paths": [{"path": "/dev/dri/renderD128"}]},
+        ),
+    )
+
+    intel_probe = next(item for item in probe_execution_backends("ffmpeg") if item.backend == "intel_igpu")
+
+    assert intel_probe.usable is True
+    assert intel_probe.status == "healthy"
+    assert intel_probe.details["selected_backend"] == "vaapi"
+    assert intel_probe.details["fallback_reason"] == "MFX session init failed"
+    assert "using VAAPI" in intel_probe.message

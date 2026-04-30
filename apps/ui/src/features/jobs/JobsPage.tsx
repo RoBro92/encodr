@@ -1879,8 +1879,10 @@ function formatBackendLabel(value: string | null | undefined) {
   return {
     cpu: "CPU",
     cpu_only: "CPU",
+    intel_qsv: "Intel QSV",
     intel_igpu: "Intel iGPU",
     prefer_intel_igpu: "Intel iGPU",
+    vaapi: "VAAPI",
     nvidia_gpu: "NVIDIA",
     prefer_nvidia_gpu: "NVIDIA",
     amd_gpu: "AMD",

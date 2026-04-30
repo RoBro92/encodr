@@ -258,15 +258,22 @@ def _accelerated_selection(
             if encoder is None:
                 return None
             render_devices = qsv.get("render_devices") or []
-            init_hw_device = "qsv=qsv"
+            command_prefix = ["-init_hw_device", "qsv=qs", "-filter_hw_device", "qs"]
             if render_devices and os.name != "nt":
-                init_hw_device = f"qsv=qsv:{render_devices[0]}"
+                command_prefix = [
+                    "-init_hw_device",
+                    f"vaapi=va:{render_devices[0]}",
+                    "-init_hw_device",
+                    "qsv=qs@va",
+                    "-filter_hw_device",
+                    "qs",
+                ]
             return SelectedExecutionBackend(
                 requested_backend=requested_backend,
-                actual_backend="intel_igpu",
+                actual_backend="intel_qsv",
                 accelerator="qsv",
                 video_encoder=encoder,
-                command_prefix=["-init_hw_device", init_hw_device, "-filter_hw_device", "qsv"],
+                command_prefix=command_prefix,
                 video_filter="format=nv12,hwupload=extra_hw_frames=64",
                 selection_reason="Using Intel QSV for hardware-accelerated video encoding.",
                 device_path=str(render_devices[0]) if render_devices else None,
@@ -280,7 +287,7 @@ def _accelerated_selection(
                 return None
             return SelectedExecutionBackend(
                 requested_backend=requested_backend,
-                actual_backend="intel_igpu",
+                actual_backend="vaapi",
                 accelerator="vaapi",
                 video_encoder=encoder,
                 command_prefix=["-vaapi_device", device_path],
