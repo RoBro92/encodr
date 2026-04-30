@@ -1,4 +1,8 @@
 from encodr_core.media.enums import StreamType, SubtitleKind
+from encodr_core.media.exclusions import (
+    encodr_exclusion_reason,
+    is_encodr_excluded_path,
+)
 from encodr_core.media.models import (
     AttachmentStream,
     AudioStream,
@@ -32,5 +36,7 @@ __all__ = [
     "SubtitleStream",
     "UnknownStream",
     "VideoStream",
+    "encodr_exclusion_reason",
+    "is_encodr_excluded_path",
     "normalise_ffprobe_payload",
 ]

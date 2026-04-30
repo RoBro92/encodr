@@ -44,6 +44,11 @@ const JOB_STATUS_OPTIONS = [
 type JobsTab = "active" | "completed" | "problem";
 type ConfirmAction = "clear-queue" | "clear-failed" | null;
 const BACKUP_PAGE_SIZE = 15;
+const ARTWORK_CONCURRENCY_LIMIT = 4;
+const NO_ARTWORK_CACHE = new Set<string>();
+const ARTWORK_URL_CACHE = new Map<string, string>();
+const ARTWORK_QUEUE: Array<() => void> = [];
+let activeArtworkRequests = 0;
 
 type JobWorkerGroup = {
   key: string;
@@ -1235,44 +1240,114 @@ function MutedValue({ children }: { children: ReactNode }) {
 
 function JobArtwork({ jobId, title }: { jobId: string; title: string }) {
   const { tokens } = useSession();
+  const placeholderRef = useRef<HTMLDivElement | null>(null);
+  const [isVisible, setIsVisible] = useState(false);
   const [artworkUrl, setArtworkUrl] = useState<string | null>(null);
 
   useEffect(() => {
+    const node = placeholderRef.current;
+    if (!node) {
+      return undefined;
+    }
+    if (!("IntersectionObserver" in window)) {
+      setIsVisible(true);
+      return undefined;
+    }
+    const observer = new IntersectionObserver(
+      ([entry]) => {
+        if (entry.isIntersecting) {
+          setIsVisible(true);
+          observer.disconnect();
+        }
+      },
+      { rootMargin: "160px" },
+    );
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, []);
+
+  useEffect(() => {
+    if (!isVisible) {
+      return undefined;
+    }
     if (!tokens?.access_token) {
       setArtworkUrl(null);
       return;
     }
+    const cachedUrl = ARTWORK_URL_CACHE.get(jobId);
+    if (cachedUrl) {
+      setArtworkUrl(cachedUrl);
+      return undefined;
+    }
+    if (NO_ARTWORK_CACHE.has(jobId)) {
+      setArtworkUrl(null);
+      return undefined;
+    }
     const controller = new AbortController();
-    let objectUrl: string | null = null;
-    fetch(`/api/jobs/${jobId}/artwork`, {
-      headers: { Authorization: `Bearer ${tokens.access_token}` },
-      signal: controller.signal,
+    enqueueArtworkRequest(async () => {
+      if (controller.signal.aborted) {
+        return null;
+      }
+      const response = await fetch(`/api/jobs/${jobId}/artwork`, {
+        headers: { Authorization: `Bearer ${tokens.access_token}` },
+        signal: controller.signal,
+      });
+      if (!response.ok) {
+        if (response.status === 404) {
+          NO_ARTWORK_CACHE.add(jobId);
+        }
+        return null;
+      }
+      const blob = await response.blob();
+      const objectUrl = URL.createObjectURL(blob);
+      ARTWORK_URL_CACHE.set(jobId, objectUrl);
+      return objectUrl;
     })
       .then(async (response) => {
-        if (!response.ok) {
-          return null;
+        if (response) {
+          setArtworkUrl(response);
         }
-        const blob = await response.blob();
-        objectUrl = URL.createObjectURL(blob);
-        setArtworkUrl(objectUrl);
         return null;
       })
       .catch(() => {
+        if (!controller.signal.aborted) {
+          NO_ARTWORK_CACHE.add(jobId);
+        }
         setArtworkUrl(null);
       });
     return () => {
       controller.abort();
-      if (objectUrl) {
-        URL.revokeObjectURL(objectUrl);
-      }
     };
-  }, [jobId, tokens?.access_token]);
+  }, [isVisible, jobId, tokens?.access_token]);
 
   if (!artworkUrl) {
-    return null;
+    return <div ref={placeholderRef} className="job-artwork job-artwork-placeholder" aria-hidden="true" />;
   }
 
   return <img className="job-artwork" src={artworkUrl} alt={`${title} artwork`} />;
+}
+
+function enqueueArtworkRequest<T>(task: () => Promise<T>): Promise<T> {
+  return new Promise((resolve, reject) => {
+    const run = () => {
+      activeArtworkRequests += 1;
+      task()
+        .then(resolve)
+        .catch(reject)
+        .finally(() => {
+          activeArtworkRequests -= 1;
+          const next = ARTWORK_QUEUE.shift();
+          if (next) {
+            next();
+          }
+        });
+    };
+    if (activeArtworkRequests < ARTWORK_CONCURRENCY_LIMIT) {
+      run();
+    } else {
+      ARTWORK_QUEUE.push(run);
+    }
+  });
 }
 
 function TrackedFilePicker({

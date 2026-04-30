@@ -6,7 +6,7 @@ from typing import Any
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.schemas.schedules import ScheduleWindowRequest, ScheduleWindowResponse
-from encodr_db.models import Job
+from encodr_db.models import BulkQueueOperation, Job
 
 
 class CreateJobRequest(BaseModel):
@@ -112,6 +112,79 @@ class DryRunJobCreateResponse(BaseModel):
     blocked_count: int
     warning_threshold: int = 15
     items: list[BatchJobItemResponse]
+
+
+class BulkQueueStartRequest(CreateBatchJobsRequest):
+    pass
+
+
+class BulkQueueOperationItemResponse(BaseModel):
+    source_path: str
+    status: str
+    message: str | None = None
+
+
+class BulkQueueOperationResponse(BaseModel):
+    id: str
+    scope: str
+    status: str
+    stage: str
+    status_text: str | None = None
+    batch_size: int
+    total_expected: int
+    discovered_count: int
+    queued_count: int
+    skipped_count: int
+    blocked_count: int
+    failed_count: int
+    current_batch: int
+    total_batches: int
+    error_summary: str | None = None
+    items: list[BulkQueueOperationItemResponse] = Field(default_factory=list)
+    started_at: datetime | None = None
+    completed_at: datetime | None = None
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_model(cls, operation: BulkQueueOperation) -> "BulkQueueOperationResponse":
+        result_summary = operation.result_summary if isinstance(operation.result_summary, dict) else {}
+        raw_items = result_summary.get("items") if isinstance(result_summary, dict) else []
+        items = raw_items if isinstance(raw_items, list) else []
+        return cls(
+            id=operation.id,
+            scope=operation.scope,
+            status=operation.status,
+            stage=operation.stage,
+            status_text=operation.status_text,
+            batch_size=operation.batch_size,
+            total_expected=operation.total_expected,
+            discovered_count=operation.discovered_count,
+            queued_count=operation.queued_count,
+            skipped_count=operation.skipped_count,
+            blocked_count=operation.blocked_count,
+            failed_count=operation.failed_count,
+            current_batch=operation.current_batch,
+            total_batches=operation.total_batches,
+            error_summary=operation.error_summary,
+            items=[
+                BulkQueueOperationItemResponse(
+                    source_path=str(item.get("source_path", "")),
+                    status=str(item.get("status", "")),
+                    message=str(item.get("message")) if item.get("message") else None,
+                )
+                for item in items
+                if isinstance(item, dict)
+            ],
+            started_at=operation.started_at,
+            completed_at=operation.completed_at,
+            created_at=operation.created_at,
+            updated_at=operation.updated_at,
+        )
+
+
+class BulkQueueOperationListResponse(BaseModel):
+    items: list[BulkQueueOperationResponse]
 
 
 class BulkJobActionResponse(BaseModel):

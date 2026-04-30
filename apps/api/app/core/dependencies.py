@@ -99,6 +99,48 @@ def require_admin_user(current_user: User = Depends(require_current_user)) -> Us
     return current_user
 
 
+def require_current_user_once(
+    credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
+    session_factory: sessionmaker = Depends(get_session_factory),
+    token_service: TokenService = Depends(get_token_service),
+) -> User:
+    if credentials is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication is required.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+
+    try:
+        claims = token_service.decode_access_token(credentials.credentials)
+    except Exception as error:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Invalid authentication credentials.",
+            headers={"WWW-Authenticate": "Bearer"},
+        ) from error
+
+    with session_factory() as session:
+        user = UserRepository(session).get_by_id(claims.user_id)
+        if user is None or not user.is_active:
+            raise HTTPException(
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                detail="Invalid authentication credentials.",
+                headers={"WWW-Authenticate": "Bearer"},
+            )
+        session.expunge(user)
+        return user
+
+
+def require_admin_user_once(current_user: User = Depends(require_current_user_once)) -> User:
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Administrator access is required.",
+        )
+    return current_user
+
+
 def require_authenticated_worker(
     request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),

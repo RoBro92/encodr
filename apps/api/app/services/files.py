@@ -8,6 +8,7 @@ from sqlalchemy.orm import Session
 
 from app.services.errors import ApiDependencyError, ApiNotFoundError, ApiValidationError
 from encodr_core.config import ConfigBundle
+from encodr_core.media import encodr_exclusion_reason
 from encodr_core.media.models import MediaFile
 from encodr_core.probe import ProbeBinaryNotFoundError, ProbeError
 from encodr_db.models import ComplianceState, FileLifecycleState, PlanSnapshot, ProbeSnapshot, TrackedFile
@@ -119,7 +120,11 @@ class FilesService:
             raise ApiNotFoundError("The source path does not exist.")
         if not raw_path.is_file():
             raise ApiValidationError("The source path must point to a file.")
-        return raw_path.resolve()
+        resolved = raw_path.resolve()
+        reason = encodr_exclusion_reason(resolved, scratch_dir=self.config_bundle.app.scratch_dir)
+        if reason is not None:
+            raise ApiValidationError(reason)
+        return resolved
 
     def _probe_media_file(self, source_path: Path) -> MediaFile:
         try:

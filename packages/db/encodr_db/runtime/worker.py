@@ -29,6 +29,7 @@ from encodr_core.execution import (
     normalise_backend_preference,
 )
 from encodr_core.execution.safety import evaluate_execution_safety
+from encodr_core.media import encodr_exclusion_reason
 from encodr_core.media.models import MediaFile
 from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload, build_processing_plan
 from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
@@ -404,6 +405,21 @@ class WorkerExecutionService:
         if job is None:
             raise ValueError(f"Job '{job_id}' could not be found.")
 
+        blocked_result = _blocked_artifact_result(
+            source_path=media_file.file_path,
+            scratch_dir=scratch_dir,
+            started_at=job.started_at or datetime.now(timezone.utc),
+        )
+        if blocked_result is not None:
+            job_repository.mark_result(job, blocked_result)
+            tracked_file_repository.update_file_state_from_execution_result(job.tracked_file, plan, blocked_result)
+            logger.warning(
+                "job skipped because target is an encodr artifact",
+                extra={"job_id": job.id, "source_path": str(media_file.file_path), "reason": blocked_result.failure_message},
+            )
+            session.flush()
+            return blocked_result
+
         try:
             result = self.runner.execute_plan(
                 plan,
@@ -525,6 +541,22 @@ class WorkerExecutionService:
         job = session.get(Job, job_id)
         if job is None:
             raise ValueError(f"Job '{job_id}' could not be found.")
+
+        blocked_result = _blocked_artifact_result(
+            source_path=source_path,
+            scratch_dir=None,
+            started_at=job.started_at or datetime.now(timezone.utc),
+        )
+        if blocked_result is not None:
+            fallback_plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
+            job_repository.mark_result(job, blocked_result)
+            tracked_file_repository.update_file_state_from_plan_result(job.tracked_file, fallback_plan)
+            logger.warning(
+                "dry run job skipped because target is an encodr artifact",
+                extra={"job_id": job.id, "source_path": str(source_path), "reason": blocked_result.failure_message},
+            )
+            session.flush()
+            return blocked_result
 
         if progress_callback is not None:
             progress_callback(
@@ -1170,6 +1202,30 @@ def _delete_file_if_present(path: Path | str | None) -> None:
             resolved.unlink()
     except OSError:
         return
+
+
+def _blocked_artifact_result(
+    *,
+    source_path: Path | str,
+    scratch_dir: Path | str | None,
+    started_at: datetime,
+) -> ExecutionResult | None:
+    reason = encodr_exclusion_reason(source_path, scratch_dir=scratch_dir)
+    if reason is None:
+        return None
+    now = datetime.now(timezone.utc)
+    return ExecutionResult(
+        mode="blocked",
+        status="skipped",
+        command=[],
+        output_path=None,
+        failure_message=reason,
+        failure_category="excluded_encodr_artifact",
+        verification=VerificationResult.not_required(),
+        replacement=ReplacementResult.not_required(),
+        started_at=started_at,
+        completed_at=now,
+    )
 
 
 def _apply_job_backup_policy(plan: ProcessingPlan, job: Job) -> None:

@@ -1242,7 +1242,7 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("button", { name: /edit/i })).toBeInTheDocument();
   });
 
-  it("creates batch jobs from the selected folder without changing the job API", async () => {
+  it("starts a bulk queue operation from the selected folder and shows progress", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/files/scans", body: { items: [] } },
@@ -1279,32 +1279,10 @@ describe("Encodr UI shell", () => {
       },
       {
         method: "POST",
-        path: "/api/jobs/batch",
-        body: {
-          scope: "folder",
-          total_files: 2,
-          created_count: 1,
-          blocked_count: 1,
-          items: [
-            {
-              source_path: "/media/Movies/Film One (2024).mkv",
-              status: "created",
-              message: null,
-              job: {
-                ...jobDetail(),
-                id: "job-1",
-                tracked_file_id: "file-1",
-              },
-            },
-            {
-              source_path: "/media/Movies/Film Two (2024).mkv",
-              status: "blocked",
-              message: "This file requires manual review or protected-file approval before a job can be created.",
-              job: null,
-            },
-          ],
-        },
+        path: "/api/jobs/bulk-queue",
+        body: bulkQueueOperation(),
       },
+      { method: "GET", path: "/api/jobs/bulk-queue/bulk-1", body: bulkQueueOperation() },
     ]);
 
     renderApp({ route: "/files", initialSession: makeSession() });
@@ -1316,7 +1294,7 @@ describe("Encodr UI shell", () => {
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/api/jobs/batch"),
+        expect.stringContaining("/api/jobs/bulk-queue"),
         expect.objectContaining({
           method: "POST",
           headers: expect.any(Headers),
@@ -1328,12 +1306,105 @@ describe("Encodr UI shell", () => {
       );
     });
 
+    expect(await screen.findByRole("dialog", { name: /adding to queue/i })).toBeInTheDocument();
+    expect(screen.getByRole("progressbar", { name: /bulk queue progress/i })).toBeInTheDocument();
+    expect(screen.getByText(/1 \/ 2 files queued/i)).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /done/i }));
+
     expect(await screen.findByText(/jobs created/i, { selector: "strong" })).toBeInTheDocument();
     expect(screen.getByRole("tab", { name: /jobs created/i })).toHaveAttribute("aria-selected", "true");
-    expect(screen.getByRole("link", { name: /open job/i })).toBeInTheDocument();
-    expect(screen.getByText(/^Created$/i, { selector: ".metric-label" })).toBeInTheDocument();
+    expect(screen.getByText(/^Queued$/i, { selector: ".metric-label" })).toBeInTheDocument();
+    expect(screen.getByText(/^Skipped$/i, { selector: ".metric-label" })).toBeInTheDocument();
     expect(screen.getByText(/^Blocked$/i, { selector: ".metric-label" })).toBeInTheDocument();
+    expect(screen.getByText(/^Failed$/i, { selector: ".metric-label" })).toBeInTheDocument();
     expect(screen.getByText(/manual review or protected-file approval/i)).toBeInTheDocument();
+    expect(await screen.findByRole("status")).toHaveTextContent(/queue add complete/i);
+  });
+
+  it("keeps bulk queue progress visible as a banner after the modal is closed", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      { method: "GET", path: "/api/jobs", body: { items: [], limit: 100, offset: 0 } },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" },
+      },
+      {
+        method: "POST",
+        path: "/api/files/scan",
+        body: {
+          folder_path: "/media/Movies",
+          root_path: "/media",
+          directory_count: 1,
+          direct_directory_count: 1,
+          video_file_count: 1,
+          likely_show_count: 0,
+          likely_season_count: 0,
+          likely_episode_count: 0,
+          likely_film_count: 1,
+          files: [
+            { name: "Film One (2024).mkv", path: "/media/Movies/Film One (2024).mkv", entry_type: "file", is_video: true },
+          ],
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/bulk-queue",
+        body: bulkQueueOperation({
+          status: "running",
+          stage: "sending_to_queue",
+          status_text: "Adding batch 3 of 20",
+          total_expected: 500,
+          discovered_count: 500,
+          queued_count: 37,
+          skipped_count: 2,
+          blocked_count: 1,
+          failed_count: 0,
+          current_batch: 3,
+          total_batches: 20,
+          completed_at: null,
+        }),
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/bulk-queue/bulk-1",
+        body: bulkQueueOperation({
+          status: "running",
+          stage: "sending_to_queue",
+          status_text: "Adding batch 3 of 20",
+          total_expected: 500,
+          discovered_count: 500,
+          queued_count: 37,
+          skipped_count: 2,
+          blocked_count: 1,
+          failed_count: 0,
+          current_batch: 3,
+          total_batches: 20,
+          completed_at: null,
+        }),
+      },
+    ]);
+
+    renderApp({ route: "/files", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^movies/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /create jobs/i }));
+
+    const modal = await screen.findByRole("dialog", { name: /adding to queue/i });
+    expect(modal).toBeInTheDocument();
+    expect(within(modal).getByText(/37 \/ 500 files queued/i)).toBeInTheDocument();
+    expect(within(modal).getAllByText(/adding batch 3 of 20/i).length).toBeGreaterThan(0);
+
+    await userEvent.click(screen.getByRole("button", { name: /^close$/i }));
+
+    expect(screen.queryByRole("dialog", { name: /adding to queue/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /adding to queue/i })).toHaveTextContent(/adding batch 3 of 20/i);
   });
 
   it("renders the cleaned jobs queue, keeps retry wiring intact, and hides advanced detail by default", async () => {
@@ -2959,6 +3030,43 @@ function jobDetail() {
     require_verification: true,
     keep_original_until_verified: true,
     delete_replaced_source: false,
+  };
+}
+
+function bulkQueueOperation(overrides: Record<string, unknown> = {}) {
+  return {
+    id: "bulk-1",
+    scope: "folder",
+    status: "completed",
+    stage: "completed",
+    status_text: "Completed",
+    batch_size: 25,
+    total_expected: 2,
+    discovered_count: 2,
+    queued_count: 1,
+    skipped_count: 0,
+    blocked_count: 1,
+    failed_count: 0,
+    current_batch: 1,
+    total_batches: 1,
+    error_summary: null,
+    items: [
+      {
+        source_path: "/media/Movies/Film One (2024).mkv",
+        status: "created",
+        message: "",
+      },
+      {
+        source_path: "/media/Movies/Film Two (2024).mkv",
+        status: "blocked",
+        message: "This file requires manual review or protected-file approval before a job can be created.",
+      },
+    ],
+    started_at: "2026-04-20T10:00:00Z",
+    completed_at: "2026-04-20T10:01:00Z",
+    created_at: "2026-04-20T10:00:00Z",
+    updated_at: "2026-04-20T10:01:00Z",
+    ...overrides,
   };
 }
 
