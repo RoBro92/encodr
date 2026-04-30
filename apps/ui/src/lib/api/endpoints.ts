@@ -228,8 +228,18 @@ export function clearFailedJobs(client: ApiClient): Promise<BulkJobActionRespons
   return client.request<BulkJobActionResponse>("/jobs/clear-failed", { method: "POST" });
 }
 
-export function listJobBackups(client: ApiClient): Promise<JobBackupListResponse> {
-  return client.request<JobBackupListResponse>("/jobs/backups");
+export function listJobBackups(
+  client: ApiClient,
+  query: Record<string, string | number | undefined>,
+): Promise<JobBackupListResponse> {
+  const search = new URLSearchParams();
+  Object.entries(query).forEach(([key, value]) => {
+    if (value !== undefined && value !== "") {
+      search.set(key, String(value));
+    }
+  });
+  const suffix = search.size > 0 ? `?${search.toString()}` : "";
+  return client.request<JobBackupListResponse>(`/jobs/backups${suffix}`);
 }
 
 export function deleteJobBackup(client: ApiClient, jobId: string): Promise<unknown> {

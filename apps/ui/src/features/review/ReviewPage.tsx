@@ -39,6 +39,7 @@ export function ReviewPage() {
   const [is4k, setIs4k] = useState("");
   const [recentFailuresOnly, setRecentFailuresOnly] = useState(false);
   const [decisionNote, setDecisionNote] = useState("");
+  const previousItemsRef = useRef<ReviewItemSummary[]>([]);
 
   const filters = useMemo(
     () => ({
@@ -67,14 +68,6 @@ export function ReviewPage() {
     protectMutation.error ??
     clearProtectedMutation.error;
 
-  if (itemsQuery.isLoading) {
-    return <LoadingBlock label="Loading review items" />;
-  }
-
-  if (queryError instanceof Error) {
-    return <ErrorPanel title="Unable to load review items" message={queryError.message} />;
-  }
-
   const items = itemsQuery.data?.items ?? [];
   const detail = detailQuery.data;
   const decisionRequest = decisionNote.trim() ? { note: decisionNote.trim() } : {};
@@ -85,6 +78,34 @@ export function ReviewPage() {
     protectMutation.isPending ||
     clearProtectedMutation.isPending;
   const metrics = summariseReviewItems(items);
+
+  useEffect(() => {
+    if (itemsQuery.isLoading || itemsQuery.isError) {
+      return;
+    }
+    if (!itemId) {
+      previousItemsRef.current = items;
+      return;
+    }
+    if (items.some((item) => item.id === itemId)) {
+      previousItemsRef.current = items;
+      return;
+    }
+    const previousItems = previousItemsRef.current;
+    const previousIndex = previousItems.findIndex((item) => item.id === itemId);
+    const nextItem = items[previousIndex] ?? items[previousIndex - 1] ?? items[0] ?? null;
+    setDecisionNote("");
+    navigate(nextItem ? reviewDetailRouteWithStatus(nextItem.id, status) : reviewRouteWithStatus(status), { replace: true });
+    previousItemsRef.current = items;
+  }, [itemId, items, itemsQuery.isError, itemsQuery.isLoading, navigate, status]);
+
+  if (itemsQuery.isLoading) {
+    return <LoadingBlock label="Loading review items" />;
+  }
+
+  if (queryError instanceof Error) {
+    return <ErrorPanel title="Unable to load review items" message={queryError.message} />;
+  }
 
   async function handleDecision(
     action: ReviewDecisionAction,

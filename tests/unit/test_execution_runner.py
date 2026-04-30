@@ -52,7 +52,11 @@ def test_skip_job_completes_without_ffmpeg(tmp_path: Path) -> None:
 
         refreshed = session.get(Job, job.id)
         assert result.status == "skipped"
+        assert result.failure_message is None
+        assert result.failure_category is None
         assert refreshed.status == JobStatus.SKIPPED
+        assert refreshed.failure_message is None
+        assert refreshed.failure_category is None
         assert refreshed.verification_status == DbVerificationStatus.NOT_REQUIRED
         assert refreshed.replacement_status == DbReplacementStatus.NOT_REQUIRED
 

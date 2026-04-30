@@ -429,11 +429,11 @@ export function useClearFailedJobsMutation() {
   });
 }
 
-export function useJobBackupsQuery() {
+export function useJobBackupsQuery(filters: Record<string, string | number | undefined> = {}) {
   const { apiClient, isAuthenticated } = useSession();
   return useQuery<JobBackupListResponse>({
-    queryKey: ["jobs", "backups"],
-    queryFn: () => listJobBackups(apiClient),
+    queryKey: ["jobs", "backups", filters],
+    queryFn: () => listJobBackups(apiClient, filters),
     enabled: isAuthenticated,
   });
 }
