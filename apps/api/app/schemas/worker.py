@@ -48,6 +48,10 @@ class ExecutionBackendStatusResponse(BaseModel):
     message: str
     reason_unavailable: str | None = None
     recommended_usage: str | None = None
+    selected_backend: str | None = None
+    usable_backends: list[str] = Field(default_factory=list)
+    fallback_reason: str | None = None
+    qsv_unavailable_reason: str | None = None
     device_paths: list[DevicePathStatusResponse] = Field(default_factory=list)
     details: dict[str, Any] = Field(default_factory=dict)
 

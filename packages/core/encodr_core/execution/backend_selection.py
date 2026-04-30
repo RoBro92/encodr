@@ -285,14 +285,18 @@ def _accelerated_selection(
             device_path = _first_device_path(vaapi)
             if device_path is None:
                 return None
+            qsv_reason = _qsv_unavailable_reason(probe.details)
+            selection_reason = "Using Intel iGPU / VAAPI for hardware-accelerated video encoding."
+            if qsv_reason:
+                selection_reason = f"{selection_reason} QSV unavailable: {qsv_reason}."
             return SelectedExecutionBackend(
                 requested_backend=requested_backend,
-                actual_backend="vaapi",
+                actual_backend="intel_vaapi",
                 accelerator="vaapi",
                 video_encoder=encoder,
                 command_prefix=["-vaapi_device", device_path],
                 video_filter="format=nv12,hwupload",
-                selection_reason="Using Intel VAAPI because QSV is unavailable in this runtime.",
+                selection_reason=selection_reason,
                 device_path=device_path,
             )
         return None
@@ -350,4 +354,19 @@ def _first_device_path(details: dict[str, object]) -> str | None:
     for item in device_paths:
         if isinstance(item, dict) and item.get("path"):
             return str(item["path"])
+    return None
+
+
+def _qsv_unavailable_reason(details: dict[str, object]) -> str | None:
+    direct_reason = details.get("qsv_unavailable_reason") or details.get("fallback_reason")
+    if isinstance(direct_reason, str) and direct_reason.strip():
+        return direct_reason.strip()
+
+    qsv = details.get("qsv")
+    if not isinstance(qsv, dict):
+        return None
+    for key in ("reason_unavailable", "validation_state", "message"):
+        value = qsv.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip().rstrip(".")
     return None

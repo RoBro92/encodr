@@ -214,7 +214,7 @@ export function WorkersPage() {
     : null;
   const selectedRuntimeBackend = readProbeString(configuredBackendProbe, "selected_backend");
   const usableRuntimeBackends = readProbeStringList(configuredBackendProbe, "usable_backends");
-  const backendFallbackReason = readProbeString(configuredBackendProbe, "fallback_reason");
+  const qsvUnavailableReason = readProbeString(configuredBackendProbe, "qsv_unavailable_reason") ?? readProbeString(configuredBackendProbe, "fallback_reason");
   const selectedRuntimeDevices = selectedHardwareBackendProbe?.device_paths ?? [];
 
   function openAddWorker(mode: Exclude<AddWorkerMode, "choose">) {
@@ -503,7 +503,7 @@ export function WorkersPage() {
                           description={formatSelectedBackendDiagnosticMessage(
                             formatBackendLabel(detail.preferred_backend),
                             selectedHardwareBackendProbe.status,
-                            backendFallbackReason ?? selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
+                            qsvUnavailableReason ?? selectedHardwareBackendProbe.reason_unavailable ?? selectedHardwareBackendProbe.message,
                             selectedRuntimeBackend,
                           )}
                           tone={selectedHardwareBackendProbe.status === "failed" ? "danger" : "default"}
@@ -1193,7 +1193,7 @@ function CapabilityStrip({
     return (
       <div className={`capability-strip capability-strip-${tone}`} role="note">
         <strong>{title}</strong>
-        <span>No diagnostic payload is available for the selected backend yet.</span>
+        <span>{description}</span>
       </div>
     );
   }
@@ -1369,6 +1369,11 @@ function formatSelectedBackendDiagnosticMessage(
   selectedBackend: string | null,
 ) {
   const reasonText = reason ? trimSentencePunctuation(reason) : "No specific issue reported";
+  if (status === "healthy" && selectedBackend === "intel_vaapi") {
+    return reason
+      ? `Intel VAAPI active; QSV unavailable: ${reasonText}`
+      : "Intel VAAPI active.";
+  }
   if (status === "healthy" && selectedBackend && selectedBackend !== "intel_qsv") {
     return `${backendLabel} is selected as the primary backend. ${formatBackendLabel(selectedBackend)} is usable now. Reason: ${reasonText}.`;
   }
@@ -1388,8 +1393,8 @@ function readNumber(value: unknown) {
 }
 
 function readProbeString(
-  probe: { selected_backend?: string | null; fallback_reason?: string | null; details?: Record<string, unknown> } | null | undefined,
-  key: "selected_backend" | "fallback_reason",
+  probe: { selected_backend?: string | null; fallback_reason?: string | null; qsv_unavailable_reason?: string | null; details?: Record<string, unknown> } | null | undefined,
+  key: "selected_backend" | "fallback_reason" | "qsv_unavailable_reason",
 ) {
   const direct = probe?.[key];
   if (typeof direct === "string" && direct.trim()) {
@@ -1511,9 +1516,10 @@ function formatBackendLabel(value: string | null | undefined) {
     cpu: "CPU",
     cpu_only: "CPU",
     intel_qsv: "Intel QSV",
+    intel_vaapi: "Intel iGPU / VAAPI",
     intel_igpu: "Intel iGPU",
     prefer_intel_igpu: "Intel iGPU",
-    vaapi: "VAAPI",
+    vaapi: "Intel iGPU / VAAPI",
     nvidia_gpu: "NVIDIA",
     prefer_nvidia_gpu: "NVIDIA",
     amd_gpu: "AMD",
