@@ -497,6 +497,8 @@ export function WorkersPage() {
                             ),
                             span: "full",
                           },
+                          { label: "FFmpeg path", value: formatWorkerBinaryPath(localWorkerStatus?.ffmpeg) },
+                          { label: "FFprobe path", value: formatWorkerBinaryPath(localWorkerStatus?.ffprobe) },
                           { label: "Eligibility", value: localWorkerStatus?.eligibility_summary ?? "Not reported" },
                           {
                             label: "Configured backend health",
@@ -1067,6 +1069,18 @@ function WorkerStatusIndicator({
       {isAttentionStatus(resolvedStatus) ? <StatusBadge value={resolvedStatus} /> : null}
     </span>
   );
+}
+
+function formatWorkerBinaryPath(binary: WorkerStatus["ffmpeg"] | undefined): string {
+  if (!binary) {
+    return "Not reported";
+  }
+  const configuredPath = binary.configured_path?.trim();
+  const resolvedPath = binary.resolved_path?.trim();
+  if (resolvedPath && configuredPath && resolvedPath !== configuredPath) {
+    return `${resolvedPath} (configured: ${configuredPath})`;
+  }
+  return resolvedPath || configuredPath || "Not reported";
 }
 
 function WorkerPathStatus({

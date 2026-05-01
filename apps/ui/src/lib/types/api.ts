@@ -452,6 +452,7 @@ export type DryRunJobCreateResponse = {
 
 export type BinaryStatus = {
   configured_path: string;
+  resolved_path: string | null;
   discoverable: boolean;
   exists: boolean;
   executable: boolean;
@@ -731,13 +732,13 @@ export type WorkerRuntimeSummary = {
 export type WorkerBinarySummary = {
   name: string;
   configured_path: string | null;
-  resolved_path?: string | null;
-  exists?: boolean | null;
-  executable?: boolean | null;
+  resolved_path: string | null;
+  exists: boolean | null;
+  executable: boolean | null;
   discoverable: boolean | null;
-  status?: string | null;
+  status: string | null;
   message: string | null;
-  which?: Record<string, unknown> | null;
+  which: Record<string, unknown> | null;
 };
 
 export type WorkerInventorySummary = {
