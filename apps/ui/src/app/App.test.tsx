@@ -839,7 +839,22 @@ describe("Encodr UI shell", () => {
               component: "api",
               logger: "encodr.jobs",
               message: "job created",
-              fields: { job_id: "job-1" },
+              fields: { job_id: "job-1", event: "job_created" },
+            },
+            {
+              timestamp: "2026-04-27T12:31:00Z",
+              level: "error",
+              component: "worker",
+              logger: "encodr.worker.loop",
+              message: "replacement failed",
+              fields: {
+                event: "replacement_failed",
+                job_id: "job-2",
+                errno: 13,
+                replacement_details: {
+                  operation: "move_verified_output_into_place",
+                },
+              },
             },
           ],
         },
@@ -871,6 +886,11 @@ describe("Encodr UI shell", () => {
     expect(logConsole).toHaveTextContent(/INFO/i);
     expect(logConsole).toHaveTextContent(/api/i);
     expect(logConsole).toHaveTextContent(/job created/i);
+    expect(logConsole).toHaveTextContent(/encodr\.worker\.loop/i);
+    expect(logConsole).toHaveTextContent(/replacement_failed/i);
+    expect(logConsole).toHaveTextContent(/job-2/i);
+    expect(logConsole).toHaveTextContent(/move_verified_output_into_place/i);
+    expect(logConsole).toHaveTextContent(/13/i);
   });
 
   it("refreshes stale update status when the settings updates card is shown", async () => {
@@ -1306,9 +1326,16 @@ describe("Encodr UI shell", () => {
       );
     });
 
-    expect(await screen.findByRole("dialog", { name: /adding to queue/i })).toBeInTheDocument();
+    const modal = await screen.findByRole("dialog", { name: /adding to queue/i });
+    const stageList = within(modal).getByRole("list", { name: /bulk queue stages/i });
+    expect(stageList).toHaveTextContent(/Scanning selection/i);
+    expect(stageList).toHaveTextContent(/Itemising files/i);
+    expect(stageList).toHaveTextContent(/Sending to queue/i);
+    expect(stageList).toHaveTextContent(/Completed/i);
+    expect(within(stageList).getAllByRole("listitem")).toHaveLength(4);
     expect(screen.getByRole("progressbar", { name: /bulk queue progress/i })).toBeInTheDocument();
     expect(screen.getByText(/1 \/ 2 files queued/i)).toBeInTheDocument();
+    expect(within(modal).getByText(/1 queued, 0 skipped, 1 blocked, 0 failed/i)).toBeInTheDocument();
     await userEvent.click(screen.getByRole("button", { name: /done/i }));
 
     expect(await screen.findByText(/jobs created/i, { selector: "strong" })).toBeInTheDocument();
@@ -1321,8 +1348,8 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/queue add complete/i);
   });
 
-  it("keeps bulk queue progress visible as a banner after the modal is closed", async () => {
-    mockFetchRoutes([
+  it("keeps bulk queue progress visible in the sidebar after the modal is closed", async () => {
+    const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/files/scans", body: { items: [] } },
       { method: "GET", path: "/api/files/watchers", body: { items: [] } },
@@ -1404,7 +1431,15 @@ describe("Encodr UI shell", () => {
     await userEvent.click(screen.getByRole("button", { name: /^close$/i }));
 
     expect(screen.queryByRole("dialog", { name: /adding to queue/i })).not.toBeInTheDocument();
-    expect(screen.getByRole("button", { name: /adding to queue/i })).toHaveTextContent(/adding batch 3 of 20/i);
+    const progressIndicator = screen.getByRole("button", { name: /adding to queue/i });
+    expect(progressIndicator).toHaveTextContent(/adding batch 3 of 20/i);
+    expect(within(progressIndicator).getByRole("progressbar", { name: /bulk queue progress/i })).toBeInTheDocument();
+    expect(
+      fetchMock.mock.calls.some(([url]) => String(url).includes("/api/jobs/bulk-queue/bulk-1/cancel")),
+    ).toBe(false);
+
+    await userEvent.click(progressIndicator);
+    expect(await screen.findByRole("dialog", { name: /adding to queue/i })).toBeInTheDocument();
   });
 
   it("renders the cleaned jobs queue, keeps retry wiring intact, and hides advanced detail by default", async () => {
@@ -3023,6 +3058,8 @@ function jobDetail() {
     video_space_saved_bytes: null,
     non_video_space_saved_bytes: null,
     compression_reduction_percent: null,
+    output_growth_percent: null,
+    output_growth_guard_percent: null,
     audio_tracks_removed_count: 0,
     subtitle_tracks_removed_count: 0,
     plan_reason_codes: [],

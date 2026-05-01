@@ -691,7 +691,6 @@ class ReviewService:
         updated.video.preserve_original = True
         updated.video.handling = VideoHandling.PRESERVE
         updated.video.max_allowed_video_reduction_percent = None
-        updated.video.output_larger_than_input_review_percent = None
         updated.reasons = [
             PlanReason(
                 code="operator_rejected_video_transcode",

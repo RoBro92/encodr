@@ -20,6 +20,7 @@ from encodr_core.config import ConfigBundle
 from encodr_core.media import encodr_exclusion_reason
 from encodr_db.models import BulkQueueOperation
 from encodr_db.repositories import BulkQueueOperationRepository
+from encodr_shared import redact_secrets
 
 logger = logging.getLogger("encodr.bulk_queue")
 
@@ -96,6 +97,15 @@ class BulkQueueService:
                 operation = self._get_operation(session, operation_id)
                 BulkQueueOperationRepository(session).mark_running(operation, status_text="Scanning selection")
                 session.commit()
+                logger.info(
+                    "bulk queue operation started",
+                    extra={
+                        "event": "bulk_queue_operation_started",
+                        "operation_id": operation_id,
+                        "scope": operation.scope,
+                        "batch_size": operation.batch_size,
+                    },
+                )
 
             selection = self._resolve_selection(operation_id)
             state["skipped"] = len(selection.skipped_items)
@@ -188,7 +198,14 @@ class BulkQueueService:
                 state=state,
             )
         except Exception as error:  # noqa: BLE001
-            logger.exception("bulk queue operation failed", extra={"operation_id": operation_id})
+            logger.exception(
+                "bulk queue operation failed",
+                extra={
+                    "event": "bulk_queue_operation_failed",
+                    "operation_id": operation_id,
+                    "error": _safe_message(str(error)),
+                },
+            )
             try:
                 self._finish_operation(
                     operation_id,
@@ -199,7 +216,10 @@ class BulkQueueService:
                     error_summary=str(error),
                 )
             except Exception:  # noqa: BLE001
-                logger.exception("failed to persist bulk queue failure", extra={"operation_id": operation_id})
+                logger.exception(
+                    "failed to persist bulk queue failure",
+                    extra={"event": "bulk_queue_failure_persist_failed", "operation_id": operation_id},
+                )
 
     def _resolve_selection(self, operation_id: str) -> BulkQueueSelection:
         payload = self._operation_payload(operation_id)
@@ -288,18 +308,33 @@ class BulkQueueService:
                 }
             except ApiServiceError as error:
                 session.rollback()
+                logger.warning(
+                    "bulk queue item rejected",
+                    extra={
+                        "event": "bulk_queue_batch_failed",
+                        "source_path": source_path.as_posix(),
+                        "error": _safe_message(str(error)),
+                    },
+                )
                 return {
                     "source_path": source_path.as_posix(),
                     "status": "failed",
-                    "message": str(error),
+                    "message": _safe_message(str(error)),
                 }
             except Exception as error:  # noqa: BLE001
                 session.rollback()
-                logger.exception("bulk queue item failed", extra={"source_path": source_path.as_posix()})
+                logger.exception(
+                    "bulk queue item failed",
+                    extra={
+                        "event": "bulk_queue_batch_failed",
+                        "source_path": source_path.as_posix(),
+                        "error": _safe_message(str(error)),
+                    },
+                )
                 return {
                     "source_path": source_path.as_posix(),
                     "status": "failed",
-                    "message": str(error),
+                    "message": _safe_message(str(error)),
                 }
 
     def _operation_payload(self, operation_id: str) -> dict[str, Any]:
@@ -335,6 +370,7 @@ class BulkQueueService:
         with self.session_factory() as session:
             operation = self._get_operation(session, operation_id)
             repository = BulkQueueOperationRepository(session)
+            safe_error_summary = _safe_message(error_summary) if error_summary else None
             repository.update_progress(
                 operation,
                 queued_count=int(state.get("queued", 0)),
@@ -354,9 +390,22 @@ class BulkQueueService:
                     "blocked_count": int(state.get("blocked", 0)),
                     "failed_count": int(state.get("failed", 0)),
                 },
-                error_summary=error_summary,
+                error_summary=safe_error_summary,
             )
             session.commit()
+            logger.info(
+                "bulk queue operation finished",
+                extra={
+                    "event": f"bulk_queue_operation_{status}",
+                    "operation_id": operation_id,
+                    "status": status,
+                    "queued_count": int(state.get("queued", 0)),
+                    "skipped_count": int(state.get("skipped", 0)),
+                    "blocked_count": int(state.get("blocked", 0)),
+                    "failed_count": int(state.get("failed", 0)),
+                    "error_summary": safe_error_summary,
+                },
+            )
 
     @staticmethod
     def _get_operation(session: Session, operation_id: str) -> BulkQueueOperation:
@@ -391,6 +440,13 @@ class BulkQueueExecutor:
         finally:
             with self._lock:
                 self._running_operation_ids.discard(operation_id)
+
+
+def _safe_message(message: str, *, limit: int = 500) -> str:
+    cleaned = redact_secrets(message.strip())
+    if len(cleaned) <= limit:
+        return cleaned
+    return f"{cleaned[:limit - 1]}..."
 
 
 def _normalise_operation_payload(payload: Any, *, batch_size: int) -> dict[str, Any]:

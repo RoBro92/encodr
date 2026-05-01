@@ -760,15 +760,48 @@ function DiagnosticLogList({ items, loading }: { items: DiagnosticLogEvent[]; lo
       {!loading
         ? items.map((item, index) => (
             <div key={`${item.timestamp}-${item.component}-${index}`} className={`settings-log-row settings-log-row-${item.level}`}>
-              <time dateTime={item.timestamp}>{formatDiagnosticTimestamp(item.timestamp)}</time>
-              <strong>{formatDiagnosticLevel(item.level)}</strong>
-              <em>{item.component}</em>
-              <span>{item.message}</span>
+              <div className="settings-log-row-main">
+                <time dateTime={item.timestamp}>{formatDiagnosticTimestamp(item.timestamp)}</time>
+                <strong>{formatDiagnosticLevel(item.level)}</strong>
+                <em>{item.component}</em>
+                <span>{item.message}</span>
+              </div>
+              <div className="settings-log-row-meta">
+                <span>{item.logger}</span>
+                <DiagnosticFieldList fields={item.fields} />
+              </div>
             </div>
           ))
         : null}
     </div>
   );
+}
+
+function DiagnosticFieldList({ fields }: { fields: Record<string, unknown> }) {
+  const entries = Object.entries(fields);
+  if (entries.length === 0) {
+    return null;
+  }
+  return (
+    <dl className="settings-log-fields">
+      {entries.map(([key, value]) => (
+        <div key={key}>
+          <dt>{key}</dt>
+          <dd>{formatDiagnosticFieldValue(value)}</dd>
+        </div>
+      ))}
+    </dl>
+  );
+}
+
+function formatDiagnosticFieldValue(value: unknown) {
+  if (value == null) {
+    return "null";
+  }
+  if (typeof value === "string" || typeof value === "number" || typeof value === "boolean") {
+    return String(value);
+  }
+  return JSON.stringify(value, null, 2);
 }
 
 function formatDiagnosticLevel(value: string) {

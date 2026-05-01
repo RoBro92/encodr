@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { useSession } from "../features/auth/AuthProvider";
+import { BulkQueueProgressIndicator, BulkQueueProgressModal, BulkQueueToast, useBulkQueueProgress } from "../features/bulk-queue/BulkQueueProgress";
 import { LogoHorizontal } from "./Logo";
 import { useCheckUpdateStatusMutation, useRuntimeStatusQuery, useUpdateStatusQuery } from "../lib/api/hooks";
 import { APP_ROUTES } from "../lib/utils/routes";
@@ -34,6 +35,7 @@ export function AppShell() {
   const navigate = useNavigate();
   const { logout, user } = useSession();
   const runtimeQuery = useRuntimeStatusQuery();
+  const bulkQueue = useBulkQueueProgress();
   const updateQuery = useUpdateStatusQuery();
   const checkUpdateMutation = useCheckUpdateStatusMutation();
   const [dismissedVersion, setDismissedVersion] = useState<string | null>(null);
@@ -187,6 +189,9 @@ export function AppShell() {
             </NavLink>
           ))}
         </nav>
+        {bulkQueue.operation && !bulkQueue.modalOpen ? (
+          <BulkQueueProgressIndicator operation={bulkQueue.operation} onOpen={bulkQueue.openModal} />
+        ) : null}
         <div className="sidebar-footer">
           <div className="sidebar-user">
             <span className="sidebar-avatar" aria-hidden="true">
@@ -287,6 +292,15 @@ export function AppShell() {
           </section>
         </div>
       ) : null}
+      {bulkQueue.modalOpen && bulkQueue.operation ? (
+        <BulkQueueProgressModal
+          operation={bulkQueue.operation}
+          cancelling={bulkQueue.cancelPending}
+          onClose={bulkQueue.closeModal}
+          onCancel={bulkQueue.cancel}
+        />
+      ) : null}
+      {bulkQueue.toast ? <BulkQueueToast toast={bulkQueue.toast} onDismiss={bulkQueue.clearToast} /> : null}
     </div>
   );
 }

@@ -17,8 +17,9 @@ SECRET_KEY_PATTERN = re.compile(
     re.IGNORECASE,
 )
 SECRET_VALUE_PATTERN = re.compile(
-    r"(?i)(password|passwd|secret|token|api[_-]?key|authorization|pairing)(['\"]?\s*[:=]\s*['\"]?)[^'\"\s,}]+"
+    r"(?i)(password|passwd|secret|token|api[_-]?key|authorization|pairing)(['\"]?\s*[:=]\s*['\"]?)(?!(?:bearer|basic)\b)[^'\"\s,}]+"
 )
+AUTH_HEADER_PATTERN = re.compile(r"(?i)(authorization\s*[:=]\s*)(bearer|basic)\s+[^'\"\s,}]+")
 DSN_CREDENTIAL_PATTERN = re.compile(r"([a-z][a-z0-9+.-]*://)([^:/@\s]+):([^@\s]+)@", re.IGNORECASE)
 PATH_PATTERN = re.compile(
     r"(?<![\w.-])/(?:[^\n\r\"'{}]+?)(?=\s+(?:password|passwd|secret|token|api[_-]?key|authorization|pairing)\b|[,}\]\n\r]|$)",
@@ -239,7 +240,8 @@ def redact_mapping(value: Any) -> Any:
 
 
 def redact_secrets(value: str) -> str:
-    cleaned = SECRET_VALUE_PATTERN.sub(r"\1\2[REDACTED]", value)
+    cleaned = AUTH_HEADER_PATTERN.sub(r"\1\2 [REDACTED]", value)
+    cleaned = SECRET_VALUE_PATTERN.sub(r"\1\2[REDACTED]", cleaned)
     return DSN_CREDENTIAL_PATTERN.sub(r"\1[REDACTED]:[REDACTED]@", cleaned)
 
 

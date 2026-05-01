@@ -263,6 +263,8 @@ class JobSummaryResponse(BaseModel):
     video_space_saved_bytes: int | None = None
     non_video_space_saved_bytes: int | None = None
     compression_reduction_percent: int | None = None
+    output_growth_percent: float | None = None
+    output_growth_guard_percent: int | None = None
     audio_tracks_removed_count: int = 0
     subtitle_tracks_removed_count: int = 0
     plan_reason_codes: list[str] = Field(default_factory=list)
@@ -339,6 +341,8 @@ class JobSummaryResponse(BaseModel):
             video_space_saved_bytes=job.video_space_saved_bytes,
             non_video_space_saved_bytes=job.non_video_space_saved_bytes,
             compression_reduction_percent=job.compression_reduction_percent,
+            output_growth_percent=job_output_growth_percent(job),
+            output_growth_guard_percent=job_output_growth_guard_percent(job),
             audio_tracks_removed_count=job_removed_audio_tracks(job),
             subtitle_tracks_removed_count=job_removed_subtitle_tracks(job),
             plan_reason_codes=job_plan_reason_codes(job),
@@ -533,6 +537,23 @@ def job_skipped_reason(job: Job) -> str | None:
 def dry_run_requires_review(job: Job) -> bool:
     payload = job_dry_run_analysis_payload(job)
     return bool(payload.requires_review) if payload is not None else False
+
+
+def job_output_growth_percent(job: Job) -> float | None:
+    if job.input_size_bytes is None or job.output_size_bytes is None or job.input_size_bytes <= 0:
+        return None
+    return round(((job.output_size_bytes - job.input_size_bytes) / job.input_size_bytes) * 100.0, 1)
+
+
+def job_output_growth_guard_percent(job: Job) -> int | None:
+    plan_payload = getattr(getattr(job, "plan_snapshot", None), "payload", None)
+    if not isinstance(plan_payload, dict):
+        return None
+    video_payload = plan_payload.get("video")
+    if not isinstance(video_payload, dict):
+        return None
+    value = video_payload.get("output_larger_than_input_review_percent")
+    return int(value) if isinstance(value, int) else None
 
 
 def job_dry_run_analysis_payload(job: Job) -> DryRunAnalysisResponse | None:

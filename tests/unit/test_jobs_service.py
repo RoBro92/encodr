@@ -42,3 +42,21 @@ def test_restore_backup_checks_conflicts_before_moving_replacement(
     assert replacement_path.read_text(encoding="utf-8") == "replacement"
     assert backup_path.read_text(encoding="utf-8") == "backup"
     assert restored_replacement_path.exists() is False
+
+
+def test_strip_only_review_plan_preserves_output_growth_guard(tmp_path: Path, repo_root: Path) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Animated Episode.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    media = media_at_path(parse_fixture("tv_episode.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.plan.video.output_larger_than_input_review_percent = 7
+        with import_api_module("app.services.review") as review_module:
+            strip_plan = review_module.ReviewService._strip_only_plan(persisted.plan)
+
+    assert strip_plan.video.transcode_required is False
+    assert strip_plan.video.max_allowed_video_reduction_percent is None
+    assert strip_plan.video.output_larger_than_input_review_percent == 7

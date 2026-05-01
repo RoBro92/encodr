@@ -26,6 +26,7 @@ from encodr_core.verification import OutputVerifier, VerificationResult, Verific
 from encodr_db import Base
 from encodr_db.models import ComplianceState, FileLifecycleState, Job, JobStatus, ReplacementStatus as DbReplacementStatus, VerificationStatus as DbVerificationStatus
 from encodr_db.repositories import JobRepository, PlanSnapshotRepository, ProbeSnapshotRepository, TrackedFileRepository
+import encodr_db.runtime.worker as worker_runtime
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "ffprobe"
 REPO_ROOT = Path(__file__).resolve().parents[2]
@@ -411,6 +412,56 @@ def test_output_larger_than_input_guard_sends_result_to_review(tmp_path: Path) -
         assert source_path.read_text(encoding="utf-8") == "original"
 
 
+def test_output_larger_guard_uses_source_file_size_when_probe_metrics_are_missing(tmp_path: Path, monkeypatch) -> None:
+    logged_warnings: list[dict[str, object]] = []
+
+    def capture_warning(message: str, *args, **kwargs) -> None:
+        logged_warnings.append({"message": message, **dict(kwargs.get("extra") or {})})
+
+    monkeypatch.setattr(worker_runtime.logger, "warning", capture_warning)
+
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Animated Episode.mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_bytes(b"i" * 1000)
+        staged_path = tmp_path / "scratch" / "animated-output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("tv_episode.json"), source_path)
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        plan.video.output_larger_than_input_review_percent = 5
+
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path, contents=b"o" * 1860),
+            verifier=StaticVerifier.passed(),
+            replacement_service=ReplacementService(),
+        )
+        JobRepository(session).mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed_job = session.get(Job, job.id)
+        assert result.status == "manual_review"
+        assert result.failure_category == "output_larger_than_input"
+        assert "Output grew by 86.0%" in (result.failure_message or "")
+        assert result.input_size_bytes == 1000
+        assert result.output_size_bytes == 1860
+        assert refreshed_job.status == JobStatus.MANUAL_REVIEW
+        assert staged_path.exists()
+        assert any(
+            record.get("event") == "output_growth_guard_triggered"
+            and record.get("output_growth_guard_percent") == 5
+            for record in logged_warnings
+        )
+
+
 def test_non_video_savings_do_not_trip_compression_safety(tmp_path: Path) -> None:
     with database_session() as session:
         bundle = load_config_bundle(project_root=REPO_ROOT)
@@ -756,12 +807,16 @@ class StaticReplacementService(ReplacementService):
 
 
 class StagedRunner(ExecutionRunner):
-    def __init__(self, *, output_path: Path) -> None:
+    def __init__(self, *, output_path: Path, contents: str | bytes = "staged output") -> None:
         self.output_path = output_path
+        self.contents = contents
 
     def execute_plan(self, *args, **kwargs):  # type: ignore[no-untyped-def]
         self.output_path.parent.mkdir(parents=True, exist_ok=True)
-        self.output_path.write_text("staged output", encoding="utf-8")
+        if isinstance(self.contents, bytes):
+            self.output_path.write_bytes(self.contents)
+        else:
+            self.output_path.write_text(self.contents, encoding="utf-8")
         return ExecutionResult(
             mode="remux",
             status="staged",

@@ -306,6 +306,8 @@ export type JobSummary = {
   video_space_saved_bytes: number | null;
   non_video_space_saved_bytes: number | null;
   compression_reduction_percent: number | null;
+  output_growth_percent: number | null;
+  output_growth_guard_percent: number | null;
   audio_tracks_removed_count: number;
   subtitle_tracks_removed_count: number;
   plan_reason_codes: string[];
