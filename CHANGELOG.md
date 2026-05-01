@@ -1,5 +1,43 @@
 # Changelog
 
+## 0.4.2 - 2026-05-01
+
+This hotfix restores updates for installs that moved to the 0.4.1 hardening release and then found the API container would not become healthy.
+
+- fixed API startup when preserved diagnostic log directories from older installs are not writable by the new non-root API user
+- repaired updater startup handling so preserved `/data` and scratch bind mounts are made writable for the non-root API and worker containers before Docker Compose starts them
+- trimmed update/install sync output so repo-only files such as docs, tests, CI workflow files, and root developer metadata are not copied into `/opt/encodr`
+- kept the non-root container hardening from 0.4.1 in place
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - `bash -n install.sh`
+  - `bash -n encodr`
+  - `bash -n infra/scripts/*.sh`
+
+## 0.4.1 - 2026-05-01
+
+This release hardens Encodr for pre-production installs after the 0.4.0 release, with safer worker result handling, more reliable queue behavior, and clearer runtime reporting.
+
+- tightened remote worker result path validation so worker-reported files are mapped back to trusted server paths before Encodr stores, deletes, restores, or cleans them up
+- hardened API and worker container defaults by running services with non-root users and stricter runtime privileges
+- improved startup and shutdown handling so background orchestration is owned by the API lifecycle and test runs do not leave worker threads behind
+- made several concurrent operations more deterministic, including refresh-token rotation, first-admin bootstrap, worker job claims, bulk queue startup, and backup restore conflicts
+- improved backup and setup-state handling so restore conflicts are checked before file mutation and corrupt setup state is surfaced more clearly
+- aligned backend/runtime metadata shared by API, worker, and UI so worker diagnostics show more consistent binary and backend information
+- improved UI/API type coverage for worker runtime fields without changing the operator workflow
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - `bash -n install.sh`
+  - `bash -n encodr`
+  - `bash -n infra/scripts/*.sh`
+  - GitHub CI for backend, UI, and sanity checks
+
 ## 0.4.0 - 2026-04-30
 
 This release improves day-to-day operation around queues, backups, reviews, dashboard navigation, and worker diagnostics.

@@ -666,9 +666,64 @@ def ensure_local_storage_mounts(project_root: Path) -> tuple[Path, Path]:
 def compose_env(project_root: Path) -> dict[str, str]:
     env = os.environ.copy()
     media_root, temp_root = ensure_local_storage_mounts(project_root)
-    env.setdefault("ENCODR_MEDIA_HOST_PATH", str(media_root))
-    env.setdefault("ENCODR_TEMP_HOST_PATH", str(temp_root))
+    runtime_uid, runtime_gid = runtime_container_ids(project_root, env)
+    env.setdefault("ENCODR_RUNTIME_UID", str(runtime_uid))
+    env.setdefault("ENCODR_RUNTIME_GID", str(runtime_gid))
+    env.setdefault("ENCODR_MEDIA_HOST_PATH", read_env_value(project_root / ".env", "ENCODR_MEDIA_HOST_PATH") or str(media_root))
+    env.setdefault("ENCODR_TEMP_HOST_PATH", read_env_value(project_root / ".env", "ENCODR_TEMP_HOST_PATH") or str(temp_root))
+    repair_runtime_mount_permissions(project_root, env=env, uid=runtime_uid, gid=runtime_gid)
     return env
+
+
+def runtime_container_ids(project_root: Path, env: dict[str, str]) -> tuple[int, int]:
+    env_path = project_root / ".env"
+    uid = parse_positive_int(env.get("ENCODR_RUNTIME_UID") or read_env_value(env_path, "ENCODR_RUNTIME_UID"), 10001)
+    gid = parse_positive_int(env.get("ENCODR_RUNTIME_GID") or read_env_value(env_path, "ENCODR_RUNTIME_GID"), 10001)
+    return uid, gid
+
+
+def parse_positive_int(value: str | None, default: int) -> int:
+    if value is None:
+        return default
+    try:
+        parsed = int(value)
+    except ValueError:
+        return default
+    return parsed if parsed > 0 else default
+
+
+def repair_runtime_mount_permissions(project_root: Path, *, env: dict[str, str], uid: int, gid: int) -> None:
+    if getattr(os, "geteuid", lambda: -1)() != 0:
+        return
+
+    runtime_root = project_root / ".runtime"
+    candidate_roots = [
+        runtime_root / "data",
+        Path(env["ENCODR_TEMP_HOST_PATH"]).expanduser(),
+    ]
+    media_path = Path(env["ENCODR_MEDIA_HOST_PATH"]).expanduser()
+    try:
+        media_path.relative_to(runtime_root)
+    except ValueError:
+        pass
+    else:
+        candidate_roots.append(media_path)
+
+    for root in candidate_roots:
+        try:
+            root.mkdir(parents=True, exist_ok=True)
+        except OSError:
+            continue
+        repair_path_owner(root, uid=uid, gid=gid)
+        for child in root.rglob("*"):
+            repair_path_owner(child, uid=uid, gid=gid)
+
+
+def repair_path_owner(path: Path, *, uid: int, gid: int) -> None:
+    try:
+        os.chown(path, uid, gid, follow_symlinks=False)
+    except OSError:
+        return
 
 
 def ensure_runtime_compose_override(project_root: Path) -> None:
@@ -1014,7 +1069,24 @@ def run_updated_doctor(project_root: Path) -> int:
 
 
 def sync_release_tree(*, source_root: Path, target_root: Path) -> None:
-    excluded_names = {".git", ".env", ".runtime", "postgres-data", "redis-data", "scratch", "__pycache__", "node_modules"}
+    excluded_names = {
+        ".dockerignore",
+        ".git",
+        ".github",
+        ".env",
+        ".runtime",
+        "CHANGELOG.md",
+        "Makefile",
+        "README.md",
+        "docs",
+        "node_modules",
+        "postgres-data",
+        "pytest.ini",
+        "redis-data",
+        "scratch",
+        "tests",
+        "__pycache__",
+    }
     preserved_config_files = {
         target_root / "config" / "app.yaml",
         target_root / "config" / "policy.yaml",
