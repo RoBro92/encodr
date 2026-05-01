@@ -3,7 +3,6 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import logging
 from pathlib import Path
-import shutil
 from typing import Callable
 
 from sqlalchemy.exc import IntegrityError
@@ -28,6 +27,7 @@ from encodr_db.models import (
     PlanSnapshot,
     RETRYABLE_JOB_STATUSES,
     TrackedFile,
+    User,
     WorkerType,
 )
 from encodr_db.repositories import JobRepository, ManualReviewDecisionRepository, TrackedFileRepository, WorkerRepository
@@ -276,7 +276,7 @@ class JobsService:
         session.flush()
         return job
 
-    def restore_backup(self, session: Session, *, job_id: str) -> Job:
+    def restore_backup(self, session: Session, *, job_id: str, restored_by_user: User | None = None) -> Job:
         job = self.get_job(session, job_id=job_id)
         tracked_files = TrackedFileRepository(session)
         tracked_files.lock_for_update(job.tracked_file_id)
@@ -293,28 +293,43 @@ class JobsService:
             job.final_output_path or job.tracked_file.source_path,
             label="final_output_path",
         )
-        restored_replacement: Path | None = None
-        if replacement_path.exists():
-            restored_replacement = replacement_path.with_name(
-                f"{replacement_path.stem}.encodr-restored-replacement{replacement_path.suffix}"
-            )
-            restored_replacement = self._media_path(
-                restored_replacement,
-                label="restored_replacement_path",
-            )
-            if restored_replacement.exists():
-                raise ApiConflictError("A previous restored replacement file already exists.")
         if source_path.exists() and source_path != replacement_path:
             raise ApiConflictError("The original path is occupied and cannot be restored safely.")
-        if restored_replacement is not None:
-            shutil.move(replacement_path.as_posix(), restored_replacement.as_posix())
-        backup_path = self._backup_path_for_job(job)
-        shutil.move(backup_path.as_posix(), source_path.as_posix())
-        job.backup_restored_at = datetime.now(timezone.utc)
+        if source_path == replacement_path:
+            backup_path.replace(source_path)
+        else:
+            backup_path.rename(source_path)
+            if replacement_path.exists():
+                try:
+                    replacement_path.unlink()
+                except OSError:
+                    logger.warning(
+                        "backup restored but replacement output could not be deleted",
+                        extra={
+                            "job_id": job.id,
+                            "replacement_path": replacement_path.as_posix(),
+                        },
+                    )
+        restored_at = datetime.now(timezone.utc)
+        job.backup_restored_at = restored_at
         job.tracked_file.lifecycle_state = FileLifecycleState.MANUAL_REVIEW
         job.tracked_file.compliance_state = ComplianceState.MANUAL_REVIEW
         job.tracked_file.last_processed_policy_version = None
         job.tracked_file.last_processed_profile_name = None
+        if restored_by_user is not None:
+            ManualReviewDecisionRepository(session).add_decision(
+                tracked_file_id=job.tracked_file_id,
+                created_by_user=restored_by_user,
+                decision_type=ManualReviewDecisionType.HELD,
+                plan_snapshot_id=job.plan_snapshot_id,
+                job_id=job.id,
+                note="Restored from backup; review whether to skip or reprocess.",
+                details={
+                    "backup_path": backup_path.as_posix(),
+                    "restored_source_path": source_path.as_posix(),
+                    "restored_at": restored_at.isoformat(),
+                },
+            )
         logger.warning("backup restored and file returned to manual review", extra={"job_id": job.id, "backup_path": backup_path.as_posix()})
         session.flush()
         return job

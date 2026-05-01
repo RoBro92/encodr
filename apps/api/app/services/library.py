@@ -122,14 +122,18 @@ class LibraryService:
         active_root = self.root_for_path(current) if not allow_external else current
         directories: list[Path] = []
         video_files: list[Path] = []
+        backup_files: list[Path] = []
         for item in current.rglob("*"):
             if item.name.startswith("."):
                 continue
             if item.is_dir():
                 directories.append(item)
                 continue
-            if item.is_file() and self.is_processable_video_file(item):
-                video_files.append(item)
+            if item.is_file():
+                if self.is_backup_file(item):
+                    backup_files.append(item)
+                elif self.is_processable_video_file(item):
+                    video_files.append(item)
 
         direct_children = [child for child in current.iterdir() if child.is_dir() and not child.name.startswith(".")]
         likely_seasons = sum(1 for directory in directories if SEASON_PATTERN.search(directory.name))
@@ -151,6 +155,16 @@ class LibraryService:
             }
             for file_path in sorted(video_files, key=lambda item: item.as_posix().lower())
         ]
+        backup_items = [
+            {
+                "name": file_path.name,
+                "path": file_path.as_posix(),
+                "entry_type": "backup",
+                "is_video": True,
+                "size_bytes": file_path.stat().st_size,
+            }
+            for file_path in sorted(backup_files, key=lambda item: item.as_posix().lower())
+        ]
 
         return {
             "folder_path": current.as_posix(),
@@ -159,11 +173,13 @@ class LibraryService:
             "directory_count": len(directories),
             "direct_directory_count": len(direct_children),
             "video_file_count": len(video_files),
+            "backup_file_count": len(backup_files),
             "likely_show_count": likely_shows,
             "likely_season_count": likely_seasons,
             "likely_episode_count": likely_episodes,
             "likely_film_count": likely_films,
             "files": file_items,
+            "backup_files": backup_items,
         }
 
     def resolve_selection(
@@ -194,6 +210,9 @@ class LibraryService:
 
     def is_processable_video_file(self, path: Path) -> bool:
         return path.suffix.lower() in VIDEO_EXTENSIONS and self.exclusion_reason(path) is None
+
+    def is_backup_file(self, path: Path) -> bool:
+        return path.suffix.lower() in VIDEO_EXTENSIONS and path.stem.lower().endswith(".encodr-backup")
 
     def exclusion_reason(self, path: Path | str) -> str | None:
         return encodr_exclusion_reason(path, scratch_dir=self.config_bundle.app.scratch_dir)

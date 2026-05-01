@@ -44,6 +44,44 @@ def test_restore_backup_checks_conflicts_before_moving_replacement(
     assert restored_replacement_path.exists() is False
 
 
+def test_restore_backup_keeps_replacement_when_backup_rename_fails(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Restore Film.mkv"
+    replacement_path = tmp_path / "Restore Film.mp4"
+    backup_path = tmp_path / "Restore Film.encodr-backup.mkv"
+    replacement_path.write_text("replacement", encoding="utf-8")
+    backup_path.write_text("backup", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+    original_rename = Path.rename
+
+    def failing_backup_rename(path: Path, target: Path) -> Path:
+        if path == backup_path:
+            raise OSError("rename failed")
+        return original_rename(path, target)
+
+    monkeypatch.setattr(Path, "rename", failing_backup_rename)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.COMPLETED
+        persisted.job.final_output_path = replacement_path.as_posix()
+        persisted.job.original_backup_path = backup_path.as_posix()
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            with pytest.raises(OSError):
+                jobs_module.JobsService().restore_backup(session, job_id=persisted.job.id)
+
+    assert source_path.exists() is False
+    assert replacement_path.read_text(encoding="utf-8") == "replacement"
+    assert backup_path.read_text(encoding="utf-8") == "backup"
+
+
 def test_strip_only_review_plan_preserves_output_growth_guard(tmp_path: Path, repo_root: Path) -> None:
     _engine, session_factory = create_schema_session_factory()
     bundle = load_config_bundle(project_root=repo_root)

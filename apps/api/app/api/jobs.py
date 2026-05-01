@@ -237,9 +237,12 @@ def restore_job_backup(
     config_bundle: ConfigBundle = Depends(get_config_bundle),
     current_user: User = Depends(require_admin_user),
 ) -> JobBackupResponse:
-    del current_user
     try:
-        job = JobsService(config_bundle=config_bundle).restore_backup(session, job_id=job_id)
+        job = JobsService(config_bundle=config_bundle).restore_backup(
+            session,
+            job_id=job_id,
+            restored_by_user=current_user,
+        )
         session.commit()
         return JobBackupResponse.from_model(job)
     except ApiServiceError as error:

@@ -67,6 +67,7 @@ class FolderScanSummaryResponse(BaseModel):
     directory_count: int
     direct_directory_count: int
     video_file_count: int
+    backup_file_count: int = 0
     likely_show_count: int
     likely_season_count: int
     likely_episode_count: int

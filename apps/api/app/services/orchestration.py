@@ -82,11 +82,13 @@ class OrchestrationService:
             directory_count=int(summary["directory_count"]),
             direct_directory_count=int(summary["direct_directory_count"]),
             video_file_count=int(summary["video_file_count"]),
+            backup_file_count=int(summary.get("backup_file_count", 0)),
             likely_show_count=int(summary["likely_show_count"]),
             likely_season_count=int(summary["likely_season_count"]),
             likely_episode_count=int(summary["likely_episode_count"]),
             likely_film_count=int(summary["likely_film_count"]),
             files_payload=list(summary["files"]),
+            backup_files_payload=list(summary.get("backup_files", [])),
         )
         tracked_files = TrackedFileRepository(session)
         for file_payload in summary["files"]:
@@ -103,7 +105,28 @@ class OrchestrationService:
                 last_observed_size=observed_size,
                 last_observed_modified_time=observed_modified_at,
             )
-        return self._scan_record_payload(record)
+        if source_kind == "manual":
+            jobs = JobRepository(session)
+            for backup_payload in summary.get("backup_files", []):
+                backup_path = Path(str(backup_payload["path"]))
+                source = _source_path_for_backup(backup_path)
+                final_output_path = source if source.exists() else None
+                try:
+                    stat_result = source.stat() if source.exists() else backup_path.stat()
+                    observed_modified_at = datetime.fromtimestamp(stat_result.st_mtime, tz=timezone.utc)
+                    observed_size = stat_result.st_size
+                except OSError:
+                    observed_modified_at = None
+                    observed_size = int(backup_payload["size_bytes"]) if backup_payload.get("size_bytes") is not None else None
+                jobs.reconcile_discovered_backup(
+                    source_path=source,
+                    backup_path=backup_path,
+                    final_output_path=final_output_path,
+                    observed_size=observed_size,
+                    observed_modified_at=observed_modified_at,
+                )
+        payload = self._scan_record_payload(record)
+        return payload
 
     def list_watched_jobs(self, session: Session) -> list[dict[str, object]]:
         repository = WatchedJobRepository(session)
@@ -305,6 +328,7 @@ class OrchestrationService:
             "directory_count": record.directory_count,
             "direct_directory_count": record.direct_directory_count,
             "video_file_count": record.video_file_count,
+            "backup_file_count": record.backup_file_count,
             "likely_show_count": record.likely_show_count,
             "likely_season_count": record.likely_season_count,
             "likely_episode_count": record.likely_episode_count,
@@ -335,6 +359,14 @@ class OrchestrationService:
             "created_at": watched.created_at,
             "updated_at": watched.updated_at,
         }
+
+
+def _source_path_for_backup(backup_path: Path) -> Path:
+    name = backup_path.name
+    marker = f".encodr-backup{backup_path.suffix}"
+    if not name.lower().endswith(marker.lower()):
+        return backup_path
+    return backup_path.with_name(f"{name[:-len(marker)]}{backup_path.suffix}")
 
 
 class BackgroundOrchestrationLoop:
