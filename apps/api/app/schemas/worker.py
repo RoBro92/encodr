@@ -32,6 +32,9 @@ class DevicePathStatusResponse(BaseModel):
     readable: bool
     writable: bool
     is_character_device: bool
+    uid: int | None = None
+    gid: int | None = None
+    mode: str | None = None
     status: str
     message: str
     vendor_id: str | None = None

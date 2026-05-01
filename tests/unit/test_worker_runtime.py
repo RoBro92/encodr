@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -114,6 +115,41 @@ def test_worker_runtime_serialisation_golden_payloads() -> None:
         "message": "Binary is discoverable and executable.",
         "which": {"command": "which vainfo", "returncode": 0, "stdout": "/usr/bin/vainfo", "stderr": None},
     }
+
+
+def test_probe_device_node_reports_owner_group_mode_and_readability(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    real_exists = Path.exists
+    real_stat = Path.stat
+
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.Path.exists",
+        lambda self: self.as_posix() == "/dev/dri/renderD128" or real_exists(self),
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.Path.is_char_device",
+        lambda self: self.as_posix() == "/dev/dri/renderD128",
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.os.access",
+        lambda path, mode: Path(path).as_posix() == "/dev/dri/renderD128",
+    )
+
+    def fake_stat(self: Path) -> SimpleNamespace:
+        if self.as_posix() == "/dev/dri/renderD128":
+            return SimpleNamespace(st_uid=0, st_gid=993, st_mode=0o20660)
+        return real_stat(self)
+
+    monkeypatch.setattr("encodr_shared.worker_runtime.Path.stat", fake_stat)
+
+    payload = probe_device_node("/dev/dri/renderD128")
+
+    assert payload["uid"] == 0
+    assert payload["gid"] == 993
+    assert payload["mode"] == "0660"
+    assert payload["readable"] is True
+    assert payload["status"] == "healthy"
 
 
 def test_probe_execution_backends_reports_cpu_and_detected_gpu_paths(monkeypatch: pytest.MonkeyPatch) -> None:
