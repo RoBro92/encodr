@@ -1,9 +1,10 @@
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 
-from sqlalchemy import Select, and_, desc, func, or_, select
+from sqlalchemy import Select, and_, desc, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, aliased
 
 from encodr_core.execution import ExecutionResult
@@ -56,15 +57,10 @@ class TrackedFileRepository:
         tracked_file = self.get_by_path(resolved_path)
 
         if tracked_file is None:
-            tracked_file = TrackedFile(
-                source_path=resolved_path.as_posix(),
-                source_filename=resolved_path.name,
-                source_extension=resolved_path.suffix.lower().lstrip(".") or None,
-                source_directory=resolved_path.parent.as_posix(),
-                lifecycle_state=FileLifecycleState.DISCOVERED,
-                compliance_state=ComplianceState.UNKNOWN,
-            )
-            self.session.add(tracked_file)
+            self._insert_path_if_missing(resolved_path)
+            tracked_file = self.get_by_path(resolved_path)
+            if tracked_file is None:
+                raise RuntimeError("Tracked file upsert did not create or find a row.")
 
         tracked_file.source_filename = resolved_path.name
         tracked_file.source_extension = resolved_path.suffix.lower().lstrip(".") or None
@@ -80,6 +76,52 @@ class TrackedFileRepository:
 
         self.session.flush()
         return tracked_file
+
+    def lock_for_update(self, tracked_file_id: str) -> None:
+        self.session.execute(
+            update(TrackedFile)
+            .where(TrackedFile.id == tracked_file_id)
+            .values(updated_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
+        self.session.flush()
+
+    def _insert_path_if_missing(self, resolved_path: Path) -> None:
+        values = {
+            "source_path": resolved_path.as_posix(),
+            "source_filename": resolved_path.name,
+            "source_extension": resolved_path.suffix.lower().lstrip(".") or None,
+            "source_directory": resolved_path.parent.as_posix(),
+            "lifecycle_state": FileLifecycleState.DISCOVERED,
+            "compliance_state": ComplianceState.UNKNOWN,
+        }
+        dialect_name = self.session.get_bind().dialect.name
+        if dialect_name == "sqlite":
+            from sqlalchemy.dialects.sqlite import insert as sqlite_insert
+
+            self.session.execute(
+                sqlite_insert(TrackedFile)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=["source_path"])
+            )
+            return
+        if dialect_name == "postgresql":
+            from sqlalchemy.dialects.postgresql import insert as postgresql_insert
+
+            self.session.execute(
+                postgresql_insert(TrackedFile)
+                .values(**values)
+                .on_conflict_do_nothing(index_elements=["source_path"])
+            )
+            return
+
+        try:
+            with self.session.begin_nested():
+                self.session.add(TrackedFile(**values))
+                self.session.flush()
+        except IntegrityError:
+            if self.get_by_path(resolved_path) is None:
+                raise
 
     def get_by_path(self, source_path: Path | str) -> TrackedFile | None:
         query = select(TrackedFile).where(TrackedFile.source_path == Path(source_path).as_posix())

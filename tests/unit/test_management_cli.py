@@ -912,6 +912,7 @@ def test_install_script_help_works_when_piped_into_bash(repo_root: Path) -> None
         text=True,
         capture_output=True,
         cwd=repo_root,
+        timeout=15,
     )
 
     assert result.returncode == 0
@@ -932,6 +933,7 @@ def test_install_script_uses_remote_mode_when_script_path_is_unavailable(
         text=True,
         capture_output=True,
         cwd=repo_root,
+        timeout=15,
     )
 
     assert result.returncode == 0
@@ -1166,4 +1168,5 @@ def run_install_shell(repo_root: Path, shell_body: str, *, input_text: str = "")
         capture_output=True,
         env=env,
         cwd=repo_root,
+        timeout=15,
     )

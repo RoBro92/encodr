@@ -41,7 +41,9 @@ from encodr_db.runtime.dispatch import job_allows_worker
 from encodr_shared import (
     collect_runtime_telemetry,
     backend_probe_matches_preference,
+    clean_runtime_summary_payload,
     discover_runtime_devices,
+    hardware_hints_from_backend_probes,
     load_execution_preferences,
     probe_binary,
     probe_directory,
@@ -209,13 +211,7 @@ def build_local_worker_capability_report(
     execution_backends: list[str] = []
     if ffmpeg["status"] == "healthy":
         execution_backends.extend(["remux", "transcode"])
-    hardware_hints = [
-        item["backend"]
-        for item in hardware_probes
-        if item["backend"] != "cpu" and item["usable_by_ffmpeg"]
-    ]
-    if not hardware_hints:
-        hardware_hints.append("cpu_only")
+    hardware_hints = hardware_hints_from_backend_probes(hardware_probes)
     recommended_concurrency, recommendation_reason = recommend_worker_concurrency(
         cpu_count=os.cpu_count(),
         hardware_hints=hardware_hints,
@@ -277,7 +273,7 @@ def build_local_worker_capability_report(
         "capability_source": LOCAL_WORKER_CAPABILITY_SOURCE,
         "capability_checked_at": checked_at.isoformat(),
     }
-    runtime_summary = {
+    runtime_summary = clean_runtime_summary_payload({
         "queue": config_bundle.workers.local.queue,
         "scratch_dir": str(worker.scratch_path if worker is not None and worker.scratch_path else config_bundle.workers.local.scratch_dir),
         "scratch_status": scratch_path,
@@ -314,7 +310,7 @@ def build_local_worker_capability_report(
         "transcode_backend_usable": transcode_backend_usable,
         "capability_source": LOCAL_WORKER_CAPABILITY_SOURCE,
         "capability_checked_at": checked_at.isoformat(),
-    }
+    })
     return {
         "capability_summary": capability_summary,
         "runtime_summary": runtime_summary,

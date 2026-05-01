@@ -3,6 +3,9 @@ from __future__ import annotations
 from pathlib import Path
 
 import pytest
+from pydantic import ValidationError
+
+from tests.helpers.api import import_api_module
 
 
 pytestmark = [pytest.mark.unit]
@@ -40,3 +43,12 @@ def test_active_job_uniqueness_migration_guards_existing_duplicates(repo_root: P
     assert "RuntimeError" in migration
     assert "UPDATE jobs" not in migration
     assert "DELETE FROM jobs" not in migration
+
+
+def test_schedule_window_rejects_malformed_time() -> None:
+    with import_api_module("app.schemas.schedules") as schedules:
+        with pytest.raises(ValidationError):
+            schedules.ScheduleWindowRequest(days=["mon"], start_time="xx:yy", end_time="12:00")
+
+        with pytest.raises(ValidationError):
+            schedules.ScheduleWindowRequest(days=["mon"], start_time="23:00", end_time="24:00")

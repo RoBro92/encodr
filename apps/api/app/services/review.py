@@ -5,6 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.schemas.files import TrackedFileSummaryResponse
@@ -19,6 +20,13 @@ from app.schemas.review import (
 )
 from app.services.audit import AuditService
 from app.services.errors import ApiConflictError, ApiNotFoundError, ApiValidationError
+from app.services.path_safety import (
+    configured_path_roots,
+    validate_backup_path,
+    validate_final_output_path,
+    validate_output_path,
+)
+from encodr_core.config import ConfigBundle
 from encodr_db.models import (
     AuditEventType,
     AuditOutcome,
@@ -77,8 +85,10 @@ class ReviewService:
     def __init__(
         self,
         *,
+        config_bundle: ConfigBundle | None = None,
         audit_service: AuditService | None = None,
     ) -> None:
+        self.config_bundle = config_bundle
         self.audit_service = audit_service or AuditService()
 
     def list_items(
@@ -537,6 +547,8 @@ class ReviewService:
         if item.latest_plan is None or item.latest_probe is None:
             raise ApiConflictError("No complete plan exists for this review item.")
         repository = JobRepository(session)
+        TrackedFileRepository(session).lock_for_update(item.tracked_file.id)
+        session.refresh(item.tracked_file)
         if repository.has_active_job_for_tracked_file(item.tracked_file.id):
             raise ApiConflictError("An active job already exists for this tracked file.")
 
@@ -546,16 +558,22 @@ class ReviewService:
             if mode == "approve"
             else self._strip_only_plan(source_plan)
         )
-        plan_snapshot = PlanSnapshotRepository(session).add_plan_snapshot(
-            item.tracked_file,
-            item.latest_probe,
-            executable_plan,
-        )
-        job = repository.create_job_from_plan(
-            item.tracked_file,
-            plan_snapshot,
-            backup_policy=item.latest_job.backup_policy if item.latest_job is not None else "keep",
-        )
+        try:
+            with session.begin_nested():
+                plan_snapshot = PlanSnapshotRepository(session).add_plan_snapshot(
+                    item.tracked_file,
+                    item.latest_probe,
+                    executable_plan,
+                )
+                job = repository.create_job_from_plan(
+                    item.tracked_file,
+                    plan_snapshot,
+                    backup_policy=item.latest_job.backup_policy if item.latest_job is not None else "keep",
+                )
+        except IntegrityError as error:
+            if repository.has_active_job_for_tracked_file(item.tracked_file.id):
+                raise ApiConflictError("An active job already exists for this tracked file.") from error
+            raise
         return job, plan_snapshot
 
     def _complete_post_encode_approval(
@@ -569,20 +587,33 @@ class ReviewService:
             return None
         if job.output_path is None:
             return None
-        staged_output = Path(job.output_path)
+        staged_output = self._staged_output_path(job.output_path)
         if not staged_output.exists():
             return None
         if job.replacement_status == DbReplacementStatus.SUCCEEDED:
             return job
 
         plan = ProcessingPlan.model_validate(item.latest_plan.payload)
+        source_path = self._media_path(item.tracked_file.source_path, label="source_path")
+        if source_path is None:
+            raise ApiConflictError("The reviewed file does not have a valid source path.")
         replacement = ReplacementService().place_verified_output(
-            source_path=item.tracked_file.source_path,
+            source_path=source_path,
             staged_output_path=staged_output,
             plan=plan,
         )
         if replacement.status != "succeeded":
             raise ApiConflictError(replacement.failure_message or "Verified output placement failed.")
+        final_output_path = self._media_path(
+            replacement.final_output_path,
+            label="replacement.final_output_path",
+        )
+        if final_output_path is None:
+            raise ApiConflictError("Verified output placement did not report a final output path.")
+        original_backup_path = self._backup_path(
+            replacement.original_backup_path,
+            label="replacement.original_backup_path",
+        )
         verification = (
             VerificationResult.model_validate(job.verification_payload)
             if job.verification_payload
@@ -594,8 +625,8 @@ class ReviewService:
             status="completed",
             command=job.execution_command or [],
             output_path=staged_output,
-            final_output_path=replacement.final_output_path,
-            original_backup_path=replacement.original_backup_path,
+            final_output_path=final_output_path,
+            original_backup_path=original_backup_path,
             input_size_bytes=job.input_size_bytes,
             output_size_bytes=job.output_size_bytes,
             space_saved_bytes=job.space_saved_bytes,
@@ -612,7 +643,12 @@ class ReviewService:
             backend_fallback_used=job.backend_fallback_used,
             backend_selection_reason=job.backend_selection_reason,
             verification=verification,
-            replacement=replacement,
+            replacement=replacement.model_copy(
+                update={
+                    "final_output_path": final_output_path,
+                    "original_backup_path": original_backup_path,
+                }
+            ),
             started_at=job.started_at or completed_at,
             completed_at=completed_at,
         )
@@ -667,19 +703,56 @@ class ReviewService:
         ]
         return updated
 
-    @staticmethod
-    def _delete_staged_output_if_present(item: ReviewItemContext) -> None:
+    def _delete_staged_output_if_present(self, item: ReviewItemContext) -> None:
         job = item.latest_job
         if job is None or job.output_path is None:
             return
         if job.status != JobStatus.MANUAL_REVIEW or job.replacement_status == DbReplacementStatus.SUCCEEDED:
             return
         try:
-            Path(job.output_path).unlink()
+            self._staged_output_path(job.output_path).unlink()
+        except ApiValidationError:
+            return
         except FileNotFoundError:
             return
         except OSError:
             return
+
+    def _staged_output_path(self, path: Path | str | None) -> Path:
+        if self.config_bundle is None:
+            if path is None:
+                raise ApiValidationError("output_path is required.")
+            return Path(path)
+        safe_path = validate_output_path(
+            path,
+            configured_path_roots(self.config_bundle),
+            label="output_path",
+        )
+        if safe_path is None:
+            raise ApiValidationError("output_path is required.")
+        return safe_path
+
+    def _media_path(self, path: Path | str | None, *, label: str) -> Path | None:
+        if path is None:
+            return None
+        if self.config_bundle is None:
+            return Path(path)
+        return validate_final_output_path(
+            path,
+            configured_path_roots(self.config_bundle),
+            label=label,
+        )
+
+    def _backup_path(self, path: Path | str | None, *, label: str) -> Path | None:
+        if path is None:
+            return None
+        if self.config_bundle is None:
+            return Path(path)
+        return validate_backup_path(
+            path,
+            configured_path_roots(self.config_bundle),
+            label=label,
+        )
 
     @staticmethod
     def _split_review_reasons(

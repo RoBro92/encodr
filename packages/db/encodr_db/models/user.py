@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import datetime
 from typing import TYPE_CHECKING
 
-from sqlalchemy import Boolean, DateTime, Index, String
+from sqlalchemy import Boolean, DateTime, Index, String, text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin
@@ -20,6 +20,13 @@ class User(Base, IdMixin, TimestampMixin):
     __tablename__ = "users"
     __table_args__ = (
         Index("ix_users_username", "username"),
+        Index(
+            "uq_users_single_bootstrap_admin",
+            "is_bootstrap_admin",
+            unique=True,
+            postgresql_where=text("is_bootstrap_admin IS TRUE"),
+            sqlite_where=text("is_bootstrap_admin = 1"),
+        ),
     )
 
     username: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)

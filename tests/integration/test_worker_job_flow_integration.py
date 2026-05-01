@@ -60,6 +60,45 @@ def test_worker_job_flow_completes_with_real_db_and_replacement(
         assert source_path.read_text(encoding="utf-8") == "staged output"
 
 
+def test_local_worker_result_preserves_configured_local_paths(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    layout = create_filesystem_layout(tmp_path)
+    database_url = f"sqlite+pysqlite:///{(tmp_path / 'worker-local-paths.sqlite').as_posix()}"
+    _, session_factory = create_migrated_session_factory(repo_root=repo_root, database_url=database_url)
+    bundle = load_config_bundle(project_root=repo_root)
+    bundle.app.scratch_dir = layout.scratch_dir
+    bundle.workers.local.scratch_dir = layout.scratch_dir
+    bundle.workers.local.media_mounts = [layout.source_dir]
+
+    source_path = layout.create_source_file("Movies/Local Path Example.mkv", contents="original")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    staged_path = layout.scratch_dir / "local-path-output.mkv"
+
+    with session_factory() as session:
+        create_job(session, bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    loop = LocalWorkerLoop(
+        session_factory,
+        bundle,
+        execution_service=WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+        ),
+        poll_interval_seconds=0.01,
+    )
+
+    assert loop.run_once() is True
+    with session_factory() as session:
+        job = session.query(Job).one()
+        assert job.status == JobStatus.COMPLETED
+        assert job.output_path == staged_path.as_posix()
+        assert job.final_output_path == source_path.as_posix()
+        assert job.original_backup_path == source_path.with_name("Local Path Example.encodr-backup.mkv").as_posix()
+
+
 def test_worker_job_flow_fails_on_verification_and_preserves_original(
     tmp_path: Path,
     repo_root: Path,
@@ -89,7 +128,7 @@ def test_worker_job_flow_fails_on_verification_and_preserves_original(
 
     assert loop.run_once() is True
     with session_factory() as session:
-        jobs = session.query(Job).order_by(Job.created_at.asc()).all()
+        jobs = session.query(Job).order_by(Job.created_at.asc(), Job.attempt_count.asc()).all()
         assert len(jobs) == 2
         assert jobs[0].status == JobStatus.FAILED
         assert jobs[1].status == JobStatus.SCHEDULED

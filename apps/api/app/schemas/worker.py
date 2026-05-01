@@ -168,10 +168,12 @@ class WorkerRuntimeSummaryResponse(BaseModel):
     scratch_dir: str | None = None
     scratch_status: dict[str, Any] | None = None
     media_mounts: list[str] = Field(default_factory=list)
+    media_paths: list[dict[str, Any]] = Field(default_factory=list)
     path_mappings: list[PathMappingResponse] = Field(default_factory=list)
     preferred_backend: str | None = None
     allow_cpu_fallback: bool | None = None
     max_concurrent_jobs: int | None = None
+    schedule_windows: list[ScheduleWindowResponse] = Field(default_factory=list)
     current_job_id: str | None = None
     current_backend: str | None = None
     selected_backend: str | None = None
@@ -187,7 +189,17 @@ class WorkerRuntimeSummaryResponse(BaseModel):
     current_progress_updated_at: datetime | None = None
     telemetry: dict[str, Any] | None = None
     last_completed_job_id: str | None = None
-    schedule_windows: list[ScheduleWindowResponse] = Field(default_factory=list)
+    ffmpeg: dict[str, Any] | None = None
+    ffprobe: dict[str, Any] | None = None
+    execution_backends: list[str] = Field(default_factory=list)
+    hardware_acceleration: list[str] = Field(default_factory=list)
+    hardware_probes: list[dict[str, Any]] = Field(default_factory=list)
+    runtime_device_paths: list[dict[str, Any]] = Field(default_factory=list)
+    eligible: bool | None = None
+    eligibility_summary: str | None = None
+    transcode_backend_usable: bool | None = None
+    capability_source: str | None = None
+    capability_checked_at: datetime | None = None
 
 
 class WorkerBinarySummaryResponse(BaseModel):

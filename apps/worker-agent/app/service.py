@@ -19,7 +19,7 @@ from app.client import WorkerAgentHttpError, WorkerApiClient
 from app.config import WorkerAgentSettings
 from app.execution import RemoteExecutionService
 from encodr_core.execution import ExecutionProgressUpdate
-from encodr_shared import collect_runtime_telemetry
+from encodr_shared import clean_runtime_summary_payload, coerce_backend_preference, collect_runtime_telemetry
 
 
 @dataclass(frozen=True, slots=True)
@@ -391,7 +391,7 @@ class WorkerAgentService:
         response_preferences = payload.get("execution_preferences")
         if isinstance(response_preferences, dict):
             return {
-                "preferred_backend": str(
+                "preferred_backend": coerce_backend_preference(
                     response_preferences.get("preferred_backend")
                     or preferred_backend
                     or self.settings.preferred_backend
@@ -405,7 +405,7 @@ class WorkerAgentService:
                 ),
             }
         return {
-            "preferred_backend": preferred_backend or self.settings.preferred_backend,
+            "preferred_backend": coerce_backend_preference(preferred_backend or self.settings.preferred_backend),
             "allow_cpu_fallback": self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback,
         }
 
@@ -483,8 +483,10 @@ class WorkerAgentService:
             runtime_configuration=runtime_configuration or self.load_runtime_configuration(),
             include_backend_diagnostics=False,
         )
-        return base_runtime | {
-            "preferred_backend": preferred_backend or str(base_runtime.get("preferred_backend") or self.settings.preferred_backend),
+        return clean_runtime_summary_payload(base_runtime | {
+            "preferred_backend": coerce_backend_preference(
+                preferred_backend or str(base_runtime.get("preferred_backend") or self.settings.preferred_backend)
+            ),
             "allow_cpu_fallback": self.settings.allow_cpu_fallback if allow_cpu_fallback is None else allow_cpu_fallback,
             "current_job_id": job_id,
             "current_backend": current_backend,
@@ -493,7 +495,7 @@ class WorkerAgentService:
             "current_progress_updated_at": now.isoformat() if job_id is not None else None,
             "last_completed_job_id": last_completed_job_id,
             "telemetry": collect_runtime_telemetry(current_backend=current_backend),
-        }
+        })
 
     @staticmethod
     def _scratch_dir_for_runtime(runtime_configuration: dict[str, object]) -> str | None:

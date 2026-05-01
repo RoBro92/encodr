@@ -127,3 +127,4 @@ Run the command on the worker host to remove the local service and files.
 - Protected files and manual-review items still require explicit operator action.
 - Remote workers need reliable network access to the API and shared storage.
 - Windows is the most documented remote target; Linux and macOS bootstrap exists, but real-host validation should still be done before relying on them.
+- The API, local worker compatibility entrypoint, and remote worker-agent still package their runtime code under a top-level `app` module inside separate deployment artifacts. Renaming those packages is deferred because it would touch Docker entrypoints, generated bootstrap commands, service installers, and compatibility imports in one change; import-isolation tests guard the current layout until a coordinated package migration is scheduled.

@@ -31,6 +31,25 @@ class JobStatus(StrEnum):
     MANUAL_REVIEW = "manual_review"
 
 
+ACTIVE_JOB_STATUSES = (JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.RUNNING)
+TERMINAL_JOB_STATUSES = (
+    JobStatus.COMPLETED,
+    JobStatus.FAILED,
+    JobStatus.INTERRUPTED,
+    JobStatus.CANCELLED,
+    JobStatus.SKIPPED,
+    JobStatus.MANUAL_REVIEW,
+)
+SUCCESSFUL_JOB_STATUSES = (JobStatus.COMPLETED, JobStatus.SKIPPED)
+RETRYABLE_JOB_STATUSES = (
+    JobStatus.FAILED,
+    JobStatus.MANUAL_REVIEW,
+    JobStatus.SKIPPED,
+    JobStatus.INTERRUPTED,
+    JobStatus.CANCELLED,
+)
+
+
 class JobKind(StrEnum):
     EXECUTION = "execution"
     DRY_RUN = "dry_run"

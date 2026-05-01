@@ -11,4 +11,7 @@ RUN --mount=type=cache,target=/root/.npm \
 COPY VERSION /app/VERSION
 COPY apps/ui /app
 
+RUN chown -R node:node /app
+
+USER node
 CMD ["npm", "run", "dev", "--", "--host", "0.0.0.0", "--port", "5173"]

@@ -167,7 +167,9 @@ class OrchestrationService:
     def run_once(self) -> OrchestrationSummary:
         summary = OrchestrationSummary()
         with self.session_factory() as session:
-            summary.expired_backups += len(JobsService().cleanup_expired_backups(session))
+            summary.expired_backups += len(
+                JobsService(config_bundle=self.config_bundle).cleanup_expired_backups(session)
+            )
             summary.promoted_jobs += self._refresh_scheduled_jobs(session)
             watcher_summary = self._refresh_watched_jobs(session)
             summary.scanned_watchers += watcher_summary.scanned_watchers
@@ -348,8 +350,9 @@ class BackgroundOrchestrationLoop:
         self._stop_event = threading.Event()
 
     def start(self) -> None:
-        if self._thread is not None:
+        if self._thread is not None and self._thread.is_alive():
             return
+        self._stop_event.clear()
         self._thread = threading.Thread(target=self.run_forever, name="encodr-orchestration", daemon=True)
         self._thread.start()
 
@@ -365,6 +368,10 @@ class BackgroundOrchestrationLoop:
         self._stop_event.set()
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
+            if self._thread.is_alive():
+                logger.warning("orchestration loop did not stop within timeout")
+                return
+        self._thread = None
 
 
 def _parse_datetime(value: Any) -> datetime:

@@ -54,7 +54,11 @@ class ScanRecordRepository:
         return self.session.get(ScanRecord, record_id)
 
     def list_recent(self, *, limit: int = 20) -> list[ScanRecord]:
-        query = select(ScanRecord).order_by(desc(ScanRecord.scanned_at)).limit(limit)
+        query = (
+            select(ScanRecord)
+            .order_by(desc(ScanRecord.scanned_at), desc(ScanRecord.created_at), desc(ScanRecord.id))
+            .limit(limit)
+        )
         return list(self.session.scalars(query))
 
     def mark_stale(self, record: ScanRecord, *, stale: bool) -> ScanRecord:

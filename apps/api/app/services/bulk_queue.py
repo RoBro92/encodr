@@ -8,6 +8,7 @@ from pathlib import Path
 import threading
 from typing import Any
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.services.errors import ApiConflictError, ApiServiceError, ApiValidationError
@@ -61,14 +62,25 @@ class BulkQueueService:
             return existing, False
         active = repository.get_active()
         if active is not None:
+            if active.selection_hash == selection_hash:
+                return active, False
             raise ApiConflictError("Another bulk queue operation is already running.")
         scope = _selection_scope(operation_payload["selection"])
-        operation = repository.create_operation(
-            selection_hash=selection_hash,
-            scope=scope,
-            payload=operation_payload,
-            batch_size=batch_size,
-        )
+        try:
+            with session.begin_nested():
+                operation = repository.create_operation(
+                    selection_hash=selection_hash,
+                    scope=scope,
+                    payload=operation_payload,
+                    batch_size=batch_size,
+                )
+        except IntegrityError as error:
+            existing = repository.get_active_by_selection_hash(selection_hash)
+            if existing is not None:
+                return existing, False
+            if repository.get_active() is not None:
+                raise ApiConflictError("Another bulk queue operation is already running.") from error
+            raise
         return operation, True
 
     def process_operation(self, operation_id: str) -> None:

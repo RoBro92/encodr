@@ -2,14 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
 from math import floor
+from pathlib import Path
 
 from sqlalchemy import Select, and_, asc, case, desc, func, or_, select, update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from encodr_core.execution import normalise_backend_preference
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
 from encodr_shared.scheduling import next_schedule_opening, schedule_windows_allow_now, schedule_windows_summary
 from encodr_db.models import (
+    ACTIVE_JOB_STATUSES,
     ComplianceState,
     FileLifecycleState,
     Job,
@@ -17,6 +20,8 @@ from encodr_db.models import (
     JobStatus,
     PlanSnapshot,
     ReplacementStatus,
+    SUCCESSFUL_JOB_STATUSES,
+    TERMINAL_JOB_STATUSES,
     TrackedFile,
     VerificationStatus,
     Worker,
@@ -109,7 +114,7 @@ class JobRepository:
                 joinedload(Job.tracked_file),
                 joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
             )
-            .order_by(asc(Job.created_at))
+            .order_by(asc(Job.created_at), asc(Job.id))
             .limit(limit)
         )
         return list(self.session.scalars(query))
@@ -134,6 +139,7 @@ class JobRepository:
             .order_by(
                 desc(Job.assigned_worker_id == worker.id),
                 asc(Job.created_at),
+                asc(Job.id),
             )
             .limit(limit)
         )
@@ -164,16 +170,10 @@ class JobRepository:
         max_running_assignments: int = 1,
     ) -> Job | None:
         now = datetime.now(timezone.utc)
-        running_jobs = Job.__table__.alias("running_jobs")
-        running_count = (
-            select(func.count(running_jobs.c.id))
-            .where(
-                running_jobs.c.assigned_worker_id == worker.id,
-                running_jobs.c.status == JobStatus.RUNNING,
-                running_jobs.c.cleared_at.is_(None),
-            )
-            .scalar_subquery()
-        )
+        self._lock_worker_capacity(worker.id)
+        if self.count_active_assignments_for_worker(worker.id) >= max(1, int(max_running_assignments)):
+            self.session.flush()
+            return None
         values = {
             "status": JobStatus.RUNNING,
             "assigned_worker_id": worker.id,
@@ -198,7 +198,6 @@ class JobRepository:
                 Job.status == JobStatus.PENDING,
                 Job.cleared_at.is_(None),
                 or_(Job.assigned_worker_id.is_(None), Job.assigned_worker_id == worker.id),
-                running_count < max(1, int(max_running_assignments)),
             )
             .values(**values)
             .execution_options(synchronize_session=False)
@@ -216,6 +215,15 @@ class JobRepository:
         self.session.flush()
         return job
 
+    def _lock_worker_capacity(self, worker_id: str) -> None:
+        self.session.execute(
+            update(Worker)
+            .where(Worker.id == worker_id)
+            .values(updated_at=datetime.now(timezone.utc))
+            .execution_options(synchronize_session=False)
+        )
+        self.session.flush()
+
     def list_jobs_for_scheduling(self, *, limit: int = 200) -> list[Job]:
         query = (
             select(Job)
@@ -227,7 +235,7 @@ class JobRepository:
                 joinedload(Job.tracked_file),
                 joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
             )
-            .order_by(asc(Job.created_at))
+            .order_by(asc(Job.created_at), asc(Job.id))
             .limit(limit)
         )
         return list(self.session.scalars(query))
@@ -237,7 +245,7 @@ class JobRepository:
             select(Job)
             .where(Job.status == JobStatus.RUNNING)
             .options(joinedload(Job.assigned_worker), joinedload(Job.tracked_file))
-            .order_by(asc(Job.started_at))
+            .order_by(asc(Job.started_at), asc(Job.created_at), asc(Job.id))
             .limit(limit)
         )
         return list(self.session.scalars(query))
@@ -261,7 +269,7 @@ class JobRepository:
                 joinedload(Job.tracked_file),
                 joinedload(Job.plan_snapshot).joinedload(PlanSnapshot.probe_snapshot),
             )
-            .order_by(desc(Job.created_at))
+            .order_by(desc(Job.created_at), desc(Job.id))
             .limit(1)
         )
         return self.session.scalar(query)
@@ -428,21 +436,29 @@ class JobRepository:
         if job.attempt_count <= self.MAX_AUTOMATED_RETRIES:
             next_attempt_count = job.attempt_count + 1
             scheduled_for_at = result.completed_at + self.automatic_retry_delay(next_attempt_count)
-            return self.create_job_from_plan(
-                job.tracked_file,
-                job.plan_snapshot,
-                attempt_count=next_attempt_count,
-                preferred_worker_id=job.preferred_worker_id,
-                pinned_worker_id=job.pinned_worker_id,
-                preferred_backend_override=job.preferred_backend_override,
-                schedule_windows=job.schedule_windows,
-                watched_job_id=job.watched_job_id,
-                job_kind=job.job_kind,
-                analysis_payload=job.analysis_payload,
-                ignore_worker_schedule=job.ignore_worker_schedule,
-                scheduled_for_at=scheduled_for_at,
-                backup_policy=job.backup_policy,
-            )
+            try:
+                with self.session.begin_nested():
+                    if self.has_active_job_for_tracked_file(job.tracked_file_id):
+                        return None
+                    return self.create_job_from_plan(
+                        job.tracked_file,
+                        job.plan_snapshot,
+                        attempt_count=next_attempt_count,
+                        preferred_worker_id=job.preferred_worker_id,
+                        pinned_worker_id=job.pinned_worker_id,
+                        preferred_backend_override=job.preferred_backend_override,
+                        schedule_windows=job.schedule_windows,
+                        watched_job_id=job.watched_job_id,
+                        job_kind=job.job_kind,
+                        analysis_payload=job.analysis_payload,
+                        ignore_worker_schedule=job.ignore_worker_schedule,
+                        scheduled_for_at=scheduled_for_at,
+                        backup_policy=job.backup_policy,
+                    )
+            except IntegrityError:
+                if self.has_active_job_for_tracked_file(job.tracked_file_id):
+                    return None
+                raise
 
         self.route_to_manual_review(
             job,
@@ -574,7 +590,7 @@ class JobRepository:
         query: Select[tuple[Job]] = (
             select(Job)
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
-            .order_by(desc(Job.created_at))
+            .order_by(desc(Job.created_at), desc(Job.id))
         )
         if status is not None:
             query = query.where(Job.status == status)
@@ -598,22 +614,13 @@ class JobRepository:
         recent_terminal_since: datetime | None,
         limit: int = 100,
     ) -> list[Job]:
-        active_statuses = [JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.RUNNING]
-        terminal_statuses = [
-            JobStatus.COMPLETED,
-            JobStatus.FAILED,
-            JobStatus.INTERRUPTED,
-            JobStatus.CANCELLED,
-            JobStatus.MANUAL_REVIEW,
-            JobStatus.SKIPPED,
-        ]
         criteria = [
-            Job.status.in_(active_statuses),
+            Job.status.in_(ACTIVE_JOB_STATUSES),
         ]
         if recent_terminal_since is not None:
             criteria.append(
                 and_(
-                    Job.status.in_(terminal_statuses),
+                    Job.status.in_(TERMINAL_JOB_STATUSES),
                     or_(
                         Job.updated_at >= recent_terminal_since,
                         Job.progress_updated_at >= recent_terminal_since,
@@ -626,8 +633,10 @@ class JobRepository:
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
             .where(Job.cleared_at.is_(None), or_(*criteria))
             .order_by(
-                case((Job.status.in_(active_statuses), 0), else_=1).asc(),
+                case((Job.status.in_(ACTIVE_JOB_STATUSES), 0), else_=1).asc(),
                 desc(Job.updated_at),
+                desc(Job.created_at),
+                desc(Job.id),
             )
             .limit(limit)
         )
@@ -636,7 +645,7 @@ class JobRepository:
     def has_active_job_for_tracked_file(self, tracked_file_id: str) -> bool:
         query = select(Job.id).where(
             Job.tracked_file_id == tracked_file_id,
-            Job.status.in_([JobStatus.PENDING, JobStatus.SCHEDULED, JobStatus.RUNNING]),
+            Job.status.in_(ACTIVE_JOB_STATUSES),
             Job.cleared_at.is_(None),
         ).limit(1)
         return self.session.scalar(query) is not None
@@ -675,7 +684,7 @@ class JobRepository:
     def latest_completed_at(self) -> datetime | None:
         return self.session.scalar(
             select(func.max(Job.completed_at)).where(
-                Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED]),
+                Job.status.in_(SUCCESSFUL_JOB_STATUSES),
                 Job.cleared_at.is_(None),
             )
         )
@@ -700,7 +709,7 @@ class JobRepository:
                 ),
             )
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
-            .order_by(asc(Job.created_at))
+            .order_by(asc(Job.created_at), asc(Job.id))
         )
         jobs = list(self.session.scalars(query))
         for job in jobs:
@@ -720,7 +729,7 @@ class JobRepository:
                 Job.status.in_([JobStatus.FAILED, JobStatus.INTERRUPTED, JobStatus.CANCELLED, JobStatus.SKIPPED]),
             )
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
-            .order_by(desc(Job.updated_at))
+            .order_by(desc(Job.updated_at), desc(Job.created_at), desc(Job.id))
         )
         jobs = list(self.session.scalars(query))
         for job in jobs:
@@ -744,7 +753,12 @@ class JobRepository:
                 Job.backup_restored_at.is_(None),
             )
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
-            .order_by(desc(Job.completed_at), desc(Job.updated_at))
+            .order_by(
+                desc(Job.completed_at),
+                desc(Job.updated_at),
+                desc(Job.created_at),
+                desc(Job.id),
+            )
         )
         query = _apply_backup_search(query, search)
         if include_missing:
@@ -754,21 +768,34 @@ class JobRepository:
                 query = query.limit(limit)
             return list(self.session.scalars(query))
 
-        jobs = list(self.session.scalars(query))
-        from pathlib import Path
+        target_count = None if limit is None else max(0, limit)
+        if target_count == 0:
+            return []
 
-        existing_jobs = [
-            job for job in jobs
-            if job.original_backup_path and Path(job.original_backup_path).exists()
-        ]
-        start = max(0, offset or 0)
-        if limit is None:
-            return existing_jobs[start:]
-        return existing_jobs[start:start + max(0, limit)]
+        collected: list[Job] = []
+        remaining_existing_to_skip = max(0, offset or 0)
+        query_offset = 0
+        batch_size = _backup_listing_batch_size(limit)
+        while True:
+            candidates = list(self.session.scalars(query.offset(query_offset).limit(batch_size)))
+            if not candidates:
+                return collected
+            for job in candidates:
+                if not job.original_backup_path or not Path(job.original_backup_path).exists():
+                    continue
+                if remaining_existing_to_skip > 0:
+                    remaining_existing_to_skip -= 1
+                    continue
+                collected.append(job)
+                if target_count is not None and len(collected) >= target_count:
+                    return collected
+            if len(candidates) < batch_size:
+                return collected
+            query_offset += batch_size
 
     def count_backup_jobs(self, *, search: str | None = None) -> int:
         query = (
-            select(Job)
+            select(Job.original_backup_path)
             .outerjoin(Job.tracked_file)
             .where(
                 Job.original_backup_path.is_not(None),
@@ -777,17 +804,17 @@ class JobRepository:
             )
         )
         query = _apply_backup_search(query, search)
-        jobs = list(self.session.scalars(query))
-        from pathlib import Path
-
         return sum(
-            1 for job in jobs
-            if job.original_backup_path and Path(job.original_backup_path).exists()
+            1 for backup_path in self.session.scalars(query)
+            if backup_path and Path(backup_path).exists()
         )
 
-    def cleanup_expired_backups(self, *, now: datetime | None = None) -> list[Job]:
-        from pathlib import Path
-
+    def cleanup_expired_backups(
+        self,
+        *,
+        now: datetime | None = None,
+        path_validator=None,
+    ) -> list[Job]:
         effective_now = _normalise_datetime(now or datetime.now(timezone.utc))
         query = (
             select(Job)
@@ -802,11 +829,20 @@ class JobRepository:
                 Job.backup_restored_at.is_(None),
             )
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
-            .order_by(asc(Job.backup_retention_until), asc(Job.updated_at))
+            .order_by(
+                asc(Job.backup_retention_until),
+                asc(Job.updated_at),
+                asc(Job.created_at),
+                asc(Job.id),
+            )
         )
         deleted: list[Job] = []
         for job in self.session.scalars(query):
             backup_path = Path(str(job.original_backup_path))
+            if path_validator is not None:
+                backup_path = path_validator(backup_path, job)
+                if backup_path is None:
+                    continue
             if not backup_path.exists() or backup_path.is_dir():
                 continue
             backup_path.unlink()
@@ -826,18 +862,7 @@ class JobRepository:
         query: Select[tuple[Job]] = (
             select(Job)
             .options(joinedload(Job.tracked_file))
-            .where(
-                Job.status.in_(
-                    [
-                        JobStatus.COMPLETED,
-                        JobStatus.FAILED,
-                        JobStatus.INTERRUPTED,
-                        JobStatus.CANCELLED,
-                        JobStatus.MANUAL_REVIEW,
-                        JobStatus.SKIPPED,
-                    ]
-                )
-            )
+            .where(Job.status.in_(TERMINAL_JOB_STATUSES))
         )
         if worker_id is not None:
             query = query.where(Job.last_worker_id == worker_id)
@@ -845,7 +870,12 @@ class JobRepository:
             query = query.where(Job.worker_name == worker_name)
         else:
             return []
-        query = query.order_by(desc(Job.completed_at), desc(Job.updated_at)).limit(limit)
+        query = query.order_by(
+            desc(Job.completed_at),
+            desc(Job.updated_at),
+            desc(Job.created_at),
+            desc(Job.id),
+        ).limit(limit)
         return list(self.session.scalars(query))
 
 
@@ -861,6 +891,12 @@ def _apply_backup_search(query: Select, search: str | None) -> Select:
             func.lower(TrackedFile.source_filename).like(pattern),
         )
     )
+
+
+def _backup_listing_batch_size(limit: int | None) -> int:
+    if limit is None:
+        return 250
+    return max(25, min(250, int(limit)))
 
 
 def truncate_log(value: str | None, limit: int = 8000) -> str | None:

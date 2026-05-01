@@ -2,6 +2,9 @@
 
 FROM python:3.12-slim
 
+ARG ENCODR_UID=10001
+ARG ENCODR_GID=10001
+
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1
 
@@ -12,6 +15,9 @@ RUN apt-get update \
     && for package in libvpl2 libmfx1; do if apt-cache show "$package" >/dev/null 2>&1; then packages="$packages $package"; fi; done \
     && apt-get install -y --no-install-recommends $packages \
     && rm -rf /var/lib/apt/lists/*
+
+RUN groupadd --gid "${ENCODR_GID}" encodr \
+    && useradd --uid "${ENCODR_UID}" --gid encodr --create-home --home-dir /home/encodr --shell /usr/sbin/nologin encodr
 
 WORKDIR /app
 
@@ -29,6 +35,10 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         -e /app/packages/shared \
         -e /app/apps/worker
 
+RUN mkdir -p /data /temp /media \
+    && chown -R encodr:encodr /app /data /temp /media /home/encodr
+
+USER encodr
 WORKDIR /app/apps/worker
 
 CMD ["python", "-m", "app.main"]

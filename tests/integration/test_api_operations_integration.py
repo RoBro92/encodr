@@ -222,7 +222,7 @@ def test_retry_endpoint_creates_new_job_record(
     assert new_job["attempt_count"] == 2
 
     with session_factory() as session:
-        jobs = session.query(Job).order_by(Job.created_at.asc()).all()
+        jobs = session.query(Job).order_by(Job.created_at.asc(), Job.attempt_count.asc()).all()
         assert len(jobs) == 2
         assert jobs[0].status == JobStatus.FAILED
         assert jobs[1].status == JobStatus.PENDING

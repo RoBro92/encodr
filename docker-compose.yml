@@ -4,6 +4,9 @@ services:
     build:
       context: .
       dockerfile: infra/docker/api.Dockerfile
+      args:
+        ENCODR_UID: ${ENCODR_RUNTIME_UID:-10001}
+        ENCODR_GID: ${ENCODR_RUNTIME_GID:-10001}
     env_file:
       - .env
     environment:
@@ -17,6 +20,10 @@ services:
       - ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp
       - ./.runtime/data:/data
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       postgres:
         condition: service_healthy
@@ -34,6 +41,9 @@ services:
     build:
       context: .
       dockerfile: infra/docker/worker.Dockerfile
+      args:
+        ENCODR_UID: ${ENCODR_RUNTIME_UID:-10001}
+        ENCODR_GID: ${ENCODR_RUNTIME_GID:-10001}
     env_file:
       - .env
     environment:
@@ -45,6 +55,10 @@ services:
       - ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp
       - ./.runtime/data:/data
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       api:
         condition: service_healthy
@@ -56,6 +70,9 @@ services:
     build:
       context: .
       dockerfile: infra/docker/worker-agent.Dockerfile
+      args:
+        ENCODR_UID: ${ENCODR_RUNTIME_UID:-10001}
+        ENCODR_GID: ${ENCODR_RUNTIME_GID:-10001}
     env_file:
       - .env
     environment:
@@ -70,6 +87,10 @@ services:
       - ./config:/config:ro
       - ${ENCODR_TEMP_HOST_PATH:-/temp}:/temp
       - ${ENCODR_MEDIA_HOST_PATH:-/media}:/media
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
     depends_on:
       api:
         condition: service_healthy
@@ -89,6 +110,10 @@ services:
     depends_on:
       api:
         condition: service_healthy
+    security_opt:
+      - no-new-privileges:true
+    cap_drop:
+      - ALL
 
   postgres:
     restart: unless-stopped
