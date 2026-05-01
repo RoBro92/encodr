@@ -14,6 +14,9 @@ TEMP_BACKUPS=()
 
 restore_local_config() {
   local backup original
+  if [[ ${#TEMP_BACKUPS[@]} -eq 0 ]]; then
+    return
+  fi
   for backup in "${TEMP_BACKUPS[@]}"; do
     original="${backup%.release-check.bak}"
     mv "${backup}" "${original}"
