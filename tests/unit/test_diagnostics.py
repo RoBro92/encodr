@@ -21,6 +21,8 @@ def test_diagnostic_redaction_removes_secrets() -> None:
     )
     assert redact_secrets("Authorization: Bearer live-token-123") == "Authorization: Bearer [REDACTED]"
     assert redact_secrets("authorization=Basic abc123") == "authorization=Basic [REDACTED]"
+    assert redact_secrets('"authorization":"Bearer live-token-123"') == '"authorization":"Bearer [REDACTED]"'
+    assert redact_secrets('authorization="Basic abc123"') == 'authorization="Basic [REDACTED]"'
     assert redact_mapping({"pairing_token": "abc123", "nested": {"password": "secret"}}) == {
         "pairing_token": "[REDACTED]",
         "nested": {"password": "[REDACTED]"},
