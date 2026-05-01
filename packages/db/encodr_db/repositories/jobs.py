@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, joinedload
 
 from encodr_core.execution import normalise_backend_preference
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult
+from encodr_core.planning.enums import ConfidenceLevel, PlanAction
 from encodr_shared.scheduling import next_schedule_opening, schedule_windows_allow_now, schedule_windows_summary
 from encodr_db.models import (
     ACTIVE_JOB_STATUSES,
@@ -19,6 +20,7 @@ from encodr_db.models import (
     JobKind,
     JobStatus,
     PlanSnapshot,
+    ProbeSnapshot,
     ReplacementStatus,
     SUCCESSFUL_JOB_STATUSES,
     TERMINAL_JOB_STATUSES,
@@ -809,6 +811,125 @@ class JobRepository:
             if backup_path and Path(backup_path).exists()
         )
 
+    def reconcile_discovered_backup(
+        self,
+        *,
+        source_path: Path,
+        backup_path: Path,
+        final_output_path: Path | None = None,
+        observed_size: int | None = None,
+        observed_modified_at: datetime | None = None,
+        discovered_at: datetime | None = None,
+    ) -> Job:
+        backup_posix = backup_path.as_posix()
+        existing = self.session.scalar(
+            select(Job)
+            .where(
+                Job.original_backup_path == backup_posix,
+                Job.backup_deleted_at.is_(None),
+                Job.backup_restored_at.is_(None),
+            )
+            .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
+            .order_by(desc(Job.completed_at), desc(Job.updated_at))
+            .limit(1)
+        )
+        if existing is not None:
+            return existing
+
+        effective_now = _normalise_datetime(discovered_at or datetime.now(timezone.utc))
+        tracked_file = self.session.scalar(
+            select(TrackedFile).where(TrackedFile.source_path == source_path.as_posix()).limit(1)
+        )
+        if tracked_file is None:
+            tracked_file = TrackedFile(
+                source_path=source_path.as_posix(),
+                source_filename=source_path.name,
+                source_extension=source_path.suffix.lower().lstrip(".") or None,
+                source_directory=source_path.parent.as_posix(),
+                lifecycle_state=FileLifecycleState.COMPLETED,
+                compliance_state=ComplianceState.COMPLIANT,
+            )
+            self.session.add(tracked_file)
+        tracked_file.source_filename = source_path.name
+        tracked_file.source_extension = source_path.suffix.lower().lstrip(".") or None
+        tracked_file.source_directory = source_path.parent.as_posix()
+        if observed_size is not None:
+            tracked_file.last_observed_size = observed_size
+        if observed_modified_at is not None:
+            tracked_file.last_observed_modified_time = observed_modified_at
+
+        probe_snapshot = ProbeSnapshot(
+            tracked_file=tracked_file,
+            schema_version=1,
+            payload={
+                "source": "discovered_backup",
+                "file_path": source_path.as_posix(),
+                "backup_path": backup_posix,
+            },
+        )
+        self.session.add(probe_snapshot)
+        self.session.flush()
+
+        plan_snapshot = PlanSnapshot(
+            tracked_file_id=tracked_file.id,
+            probe_snapshot_id=probe_snapshot.id,
+            action=PlanAction.SKIP,
+            confidence=ConfidenceLevel.LOW,
+            policy_version=0,
+            profile_name=None,
+            is_already_compliant=True,
+            should_treat_as_protected=False,
+            reasons=[
+                {
+                    "code": "discovered_historic_backup",
+                    "message": "Historic backup discovered during library scan.",
+                }
+            ],
+            warnings=[],
+            selected_streams={
+                "video_stream_indices": [],
+                "audio_stream_indices": [],
+                "subtitle_stream_indices": [],
+                "attachment_stream_indices": [],
+                "data_stream_indices": [],
+                "unknown_stream_indices": [],
+            },
+            payload=_discovered_backup_plan_payload(source_path),
+        )
+        self.session.add(plan_snapshot)
+        self.session.flush()
+
+        job = Job(
+            tracked_file_id=tracked_file.id,
+            plan_snapshot_id=plan_snapshot.id,
+            job_kind=JobKind.EXECUTION,
+            status=JobStatus.COMPLETED,
+            attempt_count=1,
+            completed_at=effective_now,
+            progress_stage="discovered_backup",
+            progress_percent=100,
+            progress_updated_at=effective_now,
+            input_size_bytes=observed_size,
+            analysis_payload={"source": "discovered_backup"},
+            verification_status=VerificationStatus.NOT_REQUIRED,
+            replacement_status=ReplacementStatus.SUCCEEDED,
+            replacement_payload={
+                "status": "succeeded",
+                "final_output_path": final_output_path.as_posix() if final_output_path is not None else source_path.as_posix(),
+                "original_backup_path": backup_posix,
+            },
+            final_output_path=final_output_path.as_posix() if final_output_path is not None else source_path.as_posix(),
+            original_backup_path=backup_posix,
+            replace_in_place=True,
+            require_verification=False,
+            keep_original_until_verified=False,
+            delete_replaced_source=False,
+            backup_policy="discovered",
+        )
+        self.session.add(job)
+        self.session.flush()
+        return job
+
     def cleanup_expired_backups(
         self,
         *,
@@ -971,6 +1092,100 @@ def calculate_space_saved(
     if input_size_bytes is None or output_size_bytes is None:
         return None
     return input_size_bytes - output_size_bytes
+
+
+def _discovered_backup_plan_payload(source_path: Path) -> dict[str, object]:
+    source_extension = source_path.suffix.lower().lstrip(".") or None
+    target_container = source_extension if source_extension in {"mkv", "mp4"} else "mkv"
+    return {
+        "action": "skip",
+        "summary": {
+            "action": "skip",
+            "confidence": "low",
+            "is_already_compliant": True,
+            "should_treat_as_protected": False,
+        },
+        "policy_context": {
+            "policy_name": "discovered_backup",
+            "policy_version": 0,
+            "selected_profile_name": None,
+            "selected_profile_description": None,
+            "matched_path_prefix": None,
+            "source_path": source_path.as_posix(),
+        },
+        "selected_streams": {
+            "video_stream_indices": [],
+            "audio_stream_indices": [],
+            "subtitle_stream_indices": [],
+            "attachment_stream_indices": [],
+            "data_stream_indices": [],
+            "unknown_stream_indices": [],
+        },
+        "audio": {
+            "selected_stream_indices": [],
+            "dropped_stream_indices": [],
+            "required_language_codes": [],
+            "primary_stream_index": None,
+            "preserved_atmos_stream_indices": [],
+            "preserved_surround_stream_indices": [],
+            "commentary_removed_stream_indices": [],
+            "available_preferred_language_stream_indices": [],
+            "missing_required_audio": False,
+        },
+        "subtitles": {
+            "selected_stream_indices": [],
+            "dropped_stream_indices": [],
+            "required_language_codes": [],
+            "required_forced_language_codes": [],
+            "forced_stream_indices": [],
+            "main_stream_index": None,
+            "hearing_impaired_stream_indices": [],
+            "ambiguous_forced_stream_indices": [],
+        },
+        "video": {
+            "primary_stream_index": None,
+            "handling": "preserve",
+            "preserve_original": True,
+            "target_codec": None,
+            "transcode_required": False,
+            "quality_mode": None,
+            "quality_crf": None,
+            "source_bitrate_bps": None,
+            "low_bitrate_skip_threshold_bps": None,
+            "minimum_output_bitrate_bps": None,
+            "max_allowed_video_reduction_percent": None,
+            "output_larger_than_input_review_percent": None,
+        },
+        "container": {
+            "source_extension": source_extension,
+            "target_container": target_container,
+            "handling": "preserve",
+            "change_required": False,
+        },
+        "rename": {
+            "enabled": False,
+            "template_kind": None,
+            "template_source": "disabled",
+            "template_value": None,
+        },
+        "replace": {
+            "in_place": True,
+            "require_verification": False,
+            "keep_original_until_verified": False,
+            "delete_replaced_source": False,
+        },
+        "reasons": [
+            {
+                "code": "discovered_historic_backup",
+                "message": "Historic backup discovered during library scan.",
+                "metadata": {},
+            }
+        ],
+        "warnings": [],
+        "confidence": "low",
+        "is_already_compliant": True,
+        "should_treat_as_protected": False,
+    }
 
 
 def _normalise_datetime(value: datetime) -> datetime:

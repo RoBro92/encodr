@@ -27,6 +27,8 @@ class ScanRecordRepository:
         likely_episode_count: int,
         likely_film_count: int,
         files_payload: list[dict],
+        backup_file_count: int = 0,
+        backup_files_payload: list[dict] | None = None,
         stale: bool = False,
         scanned_at: datetime | None = None,
     ) -> ScanRecord:
@@ -40,11 +42,13 @@ class ScanRecordRepository:
             directory_count=directory_count,
             direct_directory_count=direct_directory_count,
             video_file_count=video_file_count,
+            backup_file_count=backup_file_count,
             likely_show_count=likely_show_count,
             likely_season_count=likely_season_count,
             likely_episode_count=likely_episode_count,
             likely_film_count=likely_film_count,
             files_payload=files_payload,
+            backup_files_payload=backup_files_payload or [],
         )
         self.session.add(record)
         self.session.flush()

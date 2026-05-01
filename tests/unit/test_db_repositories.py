@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from encodr_core.config import load_config_bundle
 from encodr_core.execution import ExecutionResult
-from encodr_core.planning import PlanAction, build_processing_plan
+from encodr_core.planning import PlanAction, ProcessingPlan, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
 from encodr_core.replacement.service import ReplacementResult
 from encodr_core.verification.models import VerificationResult
@@ -390,6 +390,8 @@ def test_scan_records_are_listed_newest_first() -> None:
             likely_episode_count=0,
             likely_film_count=2,
             files_payload=[{"path": "/media/Movies/New/New.mkv"}],
+            backup_file_count=1,
+            backup_files_payload=[{"path": "/media/Movies/New/New.encodr-backup.mkv"}],
             scanned_at=datetime(2026, 4, 22, 10, 0, tzinfo=timezone.utc),
         )
 
@@ -399,6 +401,8 @@ def test_scan_records_are_listed_newest_first() -> None:
         assert [item.id for item in recent[:2]] == [newer.id, older.id]
         assert reopened is not None
         assert reopened.files_payload[0]["path"] == "/media/Movies/Old.mkv"
+        assert newer.backup_file_count == 1
+        assert newer.backup_files_payload[0]["path"] == "/media/Movies/New/New.encodr-backup.mkv"
 
 
 def test_watched_job_state_tracks_last_scan_and_known_paths() -> None:
@@ -691,6 +695,28 @@ def test_backup_listing_supports_search_pagination_and_total_after_missing_files
         assert len(filtered) == 1
         assert filtered[0].tracked_file.source_filename == "Film 14.mkv"
         assert missing_filtered == []
+
+
+def test_reconciled_backup_uses_valid_plan_payload(tmp_path: Path) -> None:
+    with database_session() as session:
+        jobs = JobRepository(session)
+        source_path = tmp_path / "Historic Film.mkv"
+        backup_path = tmp_path / "Historic Film.encodr-backup.mkv"
+        backup_path.write_text("backup", encoding="utf-8")
+
+        job = jobs.reconcile_discovered_backup(
+            source_path=source_path,
+            backup_path=backup_path,
+            final_output_path=None,
+            observed_size=backup_path.stat().st_size,
+            observed_modified_at=datetime(2026, 5, 1, 12, 0, tzinfo=timezone.utc),
+        )
+
+        plan = ProcessingPlan.model_validate(job.plan_snapshot.payload)
+
+        assert plan.action == PlanAction.SKIP
+        assert plan.policy_context.source_path == source_path
+        assert plan.replace.in_place is True
 
 
 def test_backup_listing_checks_only_until_requested_page_is_full(

@@ -8,8 +8,8 @@ from types import SimpleNamespace
 import pytest
 
 from encodr_core.config import load_config_bundle
-from encodr_db.models import BulkQueueOperation, FileLifecycleState, Job, JobKind, JobStatus, PlanSnapshot, ProbeSnapshot, TrackedFile
-from encodr_db.repositories import TrackedFileRepository, WorkerRepository
+from encodr_db.models import BulkQueueOperation, FileLifecycleState, Job, JobKind, JobStatus, ManualReviewDecisionType, PlanSnapshot, ProbeSnapshot, TrackedFile
+from encodr_db.repositories import ManualReviewDecisionRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime import WorkerExecutionService
 from encodr_core.verification import OutputVerifier
 from encodr_shared.scheduling import DAY_ORDER
@@ -914,6 +914,14 @@ def test_scan_excludes_encodr_backup_and_temp_artifacts(
 
     media_path = layout.create_source_file("Movies/Processable Film (2024).mkv", contents="film")
     backup_path = layout.create_source_file("Movies/Processable Film (2024).encodr-backup.mkv", contents="backup")
+    backup_named_copy_path = layout.create_source_file(
+        "Movies/Processable Film (2024).encodr-backup-copy.mkv",
+        contents="copy",
+    )
+    ambiguous_backup_name_path = layout.create_source_file(
+        "Movies/Processable Film (2024).encodr-backup.v2.mkv",
+        contents="ambiguous",
+    )
     temp_path = layout.create_source_file("Movies/Processable Film (2024).tmp.mkv", contents="temp")
 
     response = context.client.post(
@@ -925,16 +933,148 @@ def test_scan_excludes_encodr_backup_and_temp_artifacts(
     assert response.status_code == 200
     payload = response.json()
     scanned_paths = {item["path"] for item in payload["files"]}
-    assert payload["video_file_count"] == 1
+    assert payload["video_file_count"] == 2
+    assert payload["backup_file_count"] == 1
     assert media_path.as_posix() in scanned_paths
+    assert backup_named_copy_path.as_posix() in scanned_paths
     assert backup_path.as_posix() not in scanned_paths
+    assert ambiguous_backup_name_path.as_posix() not in scanned_paths
     assert temp_path.as_posix() not in scanned_paths
 
     with session_factory() as session:
         tracked_paths = {item.source_path for item in session.query(TrackedFile).all()}
         assert media_path.as_posix() in tracked_paths
+        assert backup_named_copy_path.as_posix() in tracked_paths
         assert backup_path.as_posix() not in tracked_paths
+        assert ambiguous_backup_name_path.as_posix() not in tracked_paths
         assert temp_path.as_posix() not in tracked_paths
+
+
+def test_scan_reconciles_historic_backup_files_into_backup_log(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    media_path = layout.create_source_file("Movies/Historic Film (2024).mkv", contents="replacement")
+    backup_path = layout.create_source_file("Movies/Historic Film (2024).encodr-backup.mkv", contents="backup")
+
+    response = context.client.post(
+        "/api/files/scan",
+        json={"source_path": (layout.source_dir / "Movies").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 200
+    payload = response.json()
+    scanned_paths = {item["path"] for item in payload["files"]}
+    assert payload["video_file_count"] == 1
+    assert payload["backup_file_count"] == 1
+    assert media_path.as_posix() in scanned_paths
+    assert backup_path.as_posix() not in scanned_paths
+
+    scan_response = context.client.get(f"/api/files/scans/{payload['scan_id']}", headers=auth.headers)
+    assert scan_response.status_code == 200
+    assert scan_response.json()["backup_file_count"] == 1
+
+    scans_response = context.client.get("/api/files/scans", headers=auth.headers)
+    assert scans_response.status_code == 200
+    assert scans_response.json()["items"][0]["backup_file_count"] == 1
+
+    backups_response = context.client.get(
+        "/api/jobs/backups",
+        params={"search": "Historic Film", "limit": 15, "offset": 0},
+        headers=auth.headers,
+    )
+
+    assert backups_response.status_code == 200
+    backups_payload = backups_response.json()
+    assert backups_payload["total"] == 1
+    assert backups_payload["items"][0]["backup_path"] == backup_path.as_posix()
+    assert backups_payload["items"][0]["source_path"] == media_path.as_posix()
+    assert backups_payload["items"][0]["backup_policy"] == "discovered"
+
+
+def test_scan_infers_source_path_from_trailing_backup_marker(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    media_path = layout.create_source_file("Movies/Historic.encodr-backup Cut (2024).mkv", contents="replacement")
+    backup_path = layout.create_source_file(
+        "Movies/Historic.encodr-backup Cut (2024).encodr-backup.mkv",
+        contents="backup",
+    )
+
+    response = context.client.post(
+        "/api/files/scan",
+        json={"source_path": (layout.source_dir / "Movies").as_posix()},
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 200
+
+    backups_response = context.client.get(
+        "/api/jobs/backups",
+        params={"search": "Historic", "limit": 15, "offset": 0},
+        headers=auth.headers,
+    )
+
+    assert backups_response.status_code == 200
+    backups_payload = backups_response.json()
+    assert backups_payload["total"] == 1
+    assert backups_payload["items"][0]["backup_path"] == backup_path.as_posix()
+    assert backups_payload["items"][0]["source_path"] == media_path.as_posix()
+
+
+def test_restore_discovered_backup_returns_file_to_manual_review_with_note(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    current_path = layout.create_source_file("Movies/Restore Film (2024).mkv", contents="replacement")
+    backup_path = layout.create_source_file("Movies/Restore Film (2024).encodr-backup.mkv", contents="backup")
+    scan_response = context.client.post(
+        "/api/files/scan",
+        json={"source_path": (layout.source_dir / "Movies").as_posix()},
+        headers=auth.headers,
+    )
+    assert scan_response.status_code == 200
+    backups_response = context.client.get(
+        "/api/jobs/backups",
+        params={"search": "Restore Film"},
+        headers=auth.headers,
+    )
+    assert backups_response.status_code == 200
+    backup_item = backups_response.json()["items"][0]
+
+    restore_response = context.client.post(
+        f"/api/jobs/{backup_item['job_id']}/backup/restore",
+        headers=auth.headers,
+    )
+
+    assert restore_response.status_code == 200
+    assert current_path.read_text(encoding="utf-8") == "backup"
+    assert backup_path.exists() is False
+
+    with session_factory() as session:
+        tracked_file = session.get(TrackedFile, backup_item["tracked_file_id"])
+        assert tracked_file is not None
+        assert tracked_file.lifecycle_state == FileLifecycleState.MANUAL_REVIEW
+        assert tracked_file.compliance_state.value == "manual_review"
+        latest = ManualReviewDecisionRepository(session).get_latest_for_tracked_file(tracked_file.id)
+        assert latest is not None
+        assert latest.decision_type == ManualReviewDecisionType.HELD
+        assert latest.note is not None
+        assert "Restored from backup" in latest.note
 
 
 def test_direct_job_creation_rejects_encodr_backup_target(

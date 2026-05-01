@@ -31,11 +31,13 @@ class ScanRecord(Base, IdMixin, TimestampMixin):
     directory_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     direct_directory_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     video_file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
+    backup_file_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     likely_show_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     likely_season_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     likely_episode_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     likely_film_count: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     files_payload: Mapped[list[dict]] = mapped_column(json_type(), nullable=False, default=list)
+    backup_files_payload: Mapped[list[dict]] = mapped_column(json_type(), nullable=False, default=list)
 
     watched_job: Mapped["WatchedJobDefinition | None"] = relationship(
         back_populates="scan_records",
