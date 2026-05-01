@@ -59,8 +59,10 @@ def _raise_service_error(error: ApiServiceError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
 
 
-def get_review_service() -> ReviewService:
-    return ReviewService()
+def get_review_service(
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
+) -> ReviewService:
+    return ReviewService(config_bundle=config_bundle)
 
 
 def get_plans_service(
@@ -196,10 +198,11 @@ def list_job_backups(
     limit: int | None = 15,
     offset: int = 0,
     session: Session = Depends(get_session),
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
     current_user: User = Depends(require_admin_user),
 ) -> JobBackupListResponse:
     del current_user
-    jobs_service = JobsService()
+    jobs_service = JobsService(config_bundle=config_bundle)
     jobs = jobs_service.list_backups(session, search=search, limit=limit, offset=offset)
     total = jobs_service.count_backups(session, search=search)
     return JobBackupListResponse(
@@ -214,11 +217,12 @@ def list_job_backups(
 def delete_job_backup(
     job_id: str,
     session: Session = Depends(get_session),
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
     current_user: User = Depends(require_admin_user),
 ) -> JobBackupResponse:
     del current_user
     try:
-        job = JobsService().delete_backup(session, job_id=job_id)
+        job = JobsService(config_bundle=config_bundle).delete_backup(session, job_id=job_id)
         session.commit()
         return JobBackupResponse.from_model(job)
     except ApiServiceError as error:
@@ -230,11 +234,12 @@ def delete_job_backup(
 def restore_job_backup(
     job_id: str,
     session: Session = Depends(get_session),
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
     current_user: User = Depends(require_admin_user),
 ) -> JobBackupResponse:
     del current_user
     try:
-        job = JobsService().restore_backup(session, job_id=job_id)
+        job = JobsService(config_bundle=config_bundle).restore_backup(session, job_id=job_id)
         session.commit()
         return JobBackupResponse.from_model(job)
     except ApiServiceError as error:

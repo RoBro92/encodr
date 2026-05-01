@@ -4,6 +4,11 @@ from pathlib import Path
 
 import pytest
 
+from encodr_shared import (
+    backend_preference_label,
+    coerce_backend_preference,
+    hardware_hints_from_backend_probes,
+)
 from encodr_shared.worker_runtime import (
     BinaryProbe,
     HardwareProbe,
@@ -18,6 +23,27 @@ from encodr_shared.worker_runtime import (
 
 
 pytestmark = [pytest.mark.unit]
+
+
+def test_backend_preference_aliases_labels_and_hints_are_shared() -> None:
+    assert coerce_backend_preference("cpu") == "cpu_only"
+    assert coerce_backend_preference("nvidia_gpu") == "prefer_nvidia_gpu"
+    assert coerce_backend_preference("auto") == "intel_auto"
+    assert coerce_backend_preference("not-a-backend") == "cpu_only"
+    assert backend_preference_label("intel_qsv") == "Intel QSV"
+
+    hints = hardware_hints_from_backend_probes(
+        [
+            {
+                "backend": "intel_igpu",
+                "usable_by_ffmpeg": True,
+                "details": {"usable_backends": ["intel_qsv", "intel_vaapi"]},
+            },
+            {"backend": "cpu", "usable_by_ffmpeg": True, "details": {}},
+        ]
+    )
+
+    assert hints == ["intel_igpu", "intel_qsv", "intel_vaapi"]
 
 
 def test_worker_runtime_serialisation_golden_payloads() -> None:

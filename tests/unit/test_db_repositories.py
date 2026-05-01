@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
+import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session
 
@@ -14,6 +15,7 @@ from encodr_core.replacement.service import ReplacementResult
 from encodr_core.verification.models import VerificationResult
 from encodr_shared.scheduling import schedule_windows_allow_now
 from encodr_db import Base
+import encodr_db.repositories.jobs as jobs_module
 from encodr_db.models import (
     ComplianceState,
     FileLifecycleState,
@@ -689,6 +691,48 @@ def test_backup_listing_supports_search_pagination_and_total_after_missing_files
         assert len(filtered) == 1
         assert filtered[0].tracked_file.source_filename == "Film 14.mkv"
         assert missing_filtered == []
+
+
+def test_backup_listing_checks_only_until_requested_page_is_full(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        base_media = parse_fixture("film_1080p.json")
+
+        for index in range(30):
+            source_path = tmp_path / f"Paged Film {index:02d}.mkv"
+            backup_path = tmp_path / f"Paged Film {index:02d}.encodr-backup.mkv"
+            backup_path.write_text("original", encoding="utf-8")
+            media = media_at_path(base_media, source_path)
+            tracked_file = tracked_files.upsert_by_path(source_path.as_posix(), media_file=media)
+            probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+            plan = build_processing_plan(media, bundle, source_path=source_path.as_posix())
+            plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+            job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+            job.status = JobStatus.COMPLETED
+            job.completed_at = datetime(2026, 4, 22, 13, index, tzinfo=timezone.utc)
+            job.original_backup_path = backup_path.as_posix()
+
+        checked_paths: list[Path] = []
+        original_exists = jobs_module.Path.exists
+
+        def counted_exists(path: Path) -> bool:
+            if path.name.endswith(".encodr-backup.mkv"):
+                checked_paths.append(path)
+            return original_exists(path)
+
+        monkeypatch.setattr(jobs_module.Path, "exists", counted_exists)
+
+        page = jobs.list_backup_jobs(limit=10, offset=0)
+
+        assert len(page) == 10
+        assert len(checked_paths) == 10
 
 
 def test_expired_backup_cleanup_deletes_retained_backup(tmp_path: Path) -> None:

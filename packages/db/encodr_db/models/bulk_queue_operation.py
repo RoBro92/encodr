@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import DateTime, Index, Integer, String, Text
+from sqlalchemy import DateTime, Index, Integer, String, Text, text
 from sqlalchemy.orm import Mapped, mapped_column
 
 from encodr_db.models.base import Base, IdMixin, TimestampMixin, json_type
@@ -13,6 +13,13 @@ class BulkQueueOperation(Base, IdMixin, TimestampMixin):
     __table_args__ = (
         Index("ix_bulk_queue_operations_status_updated_at", "status", "updated_at"),
         Index("ix_bulk_queue_operations_selection_hash", "selection_hash"),
+        Index(
+            "uq_bulk_queue_operations_one_active",
+            text("1"),
+            unique=True,
+            postgresql_where=text("status IN ('pending', 'running', 'cancelling')"),
+            sqlite_where=text("status IN ('pending', 'running', 'cancelling')"),
+        ),
     )
 
     selection_hash: Mapped[str] = mapped_column(String(64), nullable=False)

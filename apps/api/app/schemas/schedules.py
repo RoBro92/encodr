@@ -23,6 +23,17 @@ class ScheduleWindowRequest(BaseModel):
             raise ValueError("At least one day must be selected.")
         return cleaned
 
+    @field_validator("start_time", "end_time")
+    @classmethod
+    def validate_time(cls, value: str) -> str:
+        if len(value) != 5 or value[2] != ":" or not value[:2].isdigit() or not value[3:].isdigit():
+            raise ValueError("Schedule times must use HH:MM format.")
+        hour = int(value[:2])
+        minute = int(value[3:])
+        if hour < 0 or hour > 23 or minute < 0 or minute > 59:
+            raise ValueError("Schedule times must use HH:MM format.")
+        return value
+
 
 class ScheduleWindowResponse(BaseModel):
     days: list[str]

@@ -8,6 +8,13 @@ import shutil
 import subprocess
 from typing import Any
 
+from encodr_shared.backend_preferences import (
+    INTEL_BACKEND_PREFERENCES,
+    backend_preference_key,
+    backend_preference_keys,
+    normalise_backend_preference_key,
+)
+
 
 @dataclass(frozen=True, slots=True)
 class BinaryProbe:
@@ -30,64 +37,32 @@ class HardwareProbe:
     details: dict[str, object]
 
 
-BACKEND_PREFERENCE_KEYS = {
-    "cpu": "cpu_only",
-    "intel_igpu": "prefer_intel_igpu",
-    "nvidia_gpu": "prefer_nvidia_gpu",
-    "amd_gpu": "prefer_amd_gpu",
-}
-
-BACKEND_ADDITIONAL_PREFERENCE_KEYS = {
-    "cpu": ["cpu"],
-    "intel_igpu": ["intel_auto", "intel_qsv", "intel_vaapi", "qsv", "vaapi", "auto"],
-    "nvidia_gpu": ["nvidia_gpu"],
-    "amd_gpu": ["amd_gpu"],
-}
-
-BACKEND_PREFERENCE_ALIASES = {
-    "cpu_only": "cpu",
-    "cpu": "cpu",
-    "prefer_intel_igpu": "intel_auto",
-    "intel_igpu": "intel_auto",
-    "intel_auto": "intel_auto",
-    "auto": "intel_auto",
-    "qsv": "intel_qsv",
-    "intel_qsv": "intel_qsv",
-    "vaapi": "intel_vaapi",
-    "intel_vaapi": "intel_vaapi",
-    "prefer_nvidia_gpu": "nvidia_gpu",
-    "nvidia_gpu": "nvidia_gpu",
-    "prefer_amd_gpu": "amd_gpu",
-    "amd_gpu": "amd_gpu",
-}
-
-
-def backend_preference_key(backend: str) -> str:
-    return BACKEND_PREFERENCE_KEYS.get(backend, backend)
-
-
-def backend_preference_keys(backend: str) -> list[str]:
-    primary = backend_preference_key(backend)
-    aliases = BACKEND_ADDITIONAL_PREFERENCE_KEYS.get(backend, [])
-    return list(dict.fromkeys([primary, *aliases]))
-
-
-def normalise_backend_preference_key(value: str | None) -> str:
-    cleaned = str(value or "cpu_only").strip()
-    return BACKEND_PREFERENCE_ALIASES.get(cleaned, "cpu")
-
-
-def serialise_backend_probe(probe: HardwareProbe) -> dict[str, object]:
-    details = probe.details or {}
+def serialise_backend_probe(probe: HardwareProbe | dict[str, object] | object) -> dict[str, object]:
+    if isinstance(probe, dict):
+        backend = str(probe.get("backend") or "")
+        details = probe.get("details", {})
+        details = details if isinstance(details, dict) else {}
+        detected = bool(probe.get("detected", probe.get("usable_by_ffmpeg", False)))
+        usable = bool(probe.get("usable_by_ffmpeg", probe.get("usable", False)))
+        status = str(probe.get("status") or ("healthy" if usable else "failed"))
+        message = str(probe.get("message") or "")
+    else:
+        backend = str(getattr(probe, "backend", "") or "")
+        details = getattr(probe, "details", {}) or {}
+        details = details if isinstance(details, dict) else {}
+        usable = bool(getattr(probe, "usable", False))
+        detected = bool(getattr(probe, "detected", usable))
+        status = str(getattr(probe, "status", "healthy" if usable else "failed"))
+        message = str(getattr(probe, "message", ""))
     return {
-        "backend": probe.backend,
-        "preference_key": backend_preference_key(probe.backend),
-        "preference_keys": backend_preference_keys(probe.backend),
-        "detected": probe.detected,
-        "usable_by_ffmpeg": probe.usable,
-        "ffmpeg_path_verified": bool(details.get("ffmpeg_path_verified", probe.usable)),
-        "status": probe.status,
-        "message": probe.message,
+        "backend": backend,
+        "preference_key": backend_preference_key(backend),
+        "preference_keys": backend_preference_keys(backend),
+        "detected": detected,
+        "usable_by_ffmpeg": usable,
+        "ffmpeg_path_verified": bool(details.get("ffmpeg_path_verified", usable)),
+        "status": status,
+        "message": message,
         "reason_unavailable": details.get("reason_unavailable"),
         "recommended_usage": details.get("recommended_usage"),
         "selected_backend": details.get("selected_backend"),
@@ -129,7 +104,7 @@ def backend_probe_matches_preference(probe: HardwareProbe | dict[str, object], p
     backend = str(payload.get("backend") or "")
     if requested in keys or normalised in keys or requested == backend or normalised == backend:
         return True
-    if backend == "intel_igpu" and normalised in {"intel_auto", "intel_qsv", "intel_vaapi"}:
+    if backend == "intel_igpu" and normalised in INTEL_BACKEND_PREFERENCES:
         return True
     return False
 
@@ -158,7 +133,7 @@ def resolve_backend_runtime_status(
             message="CPU execution is selected." if cpu_usable else "CPU execution is unavailable.",
         )
 
-    if mode in {"intel_auto", "intel_qsv", "intel_vaapi"}:
+    if mode in INTEL_BACKEND_PREFERENCES:
         return _resolve_intel_runtime_status(
             requested=requested,
             normalised=mode,

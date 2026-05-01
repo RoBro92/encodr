@@ -4,25 +4,12 @@ import os
 from pathlib import Path
 
 from encodr_core.config.base import ConfigModel
-from encodr_shared.worker_runtime import normalise_backend_preference_key, probe_execution_backends
-
-
-PREFERENCE_TO_BACKEND = {
-    "cpu_only": "cpu",
-    "prefer_intel_igpu": "intel_auto",
-    "intel_igpu": "intel_auto",
-    "intel_auto": "intel_auto",
-    "auto": "intel_auto",
-    "qsv": "intel_qsv",
-    "intel_qsv": "intel_qsv",
-    "vaapi": "intel_vaapi",
-    "intel_vaapi": "intel_vaapi",
-    "prefer_nvidia_gpu": "nvidia_gpu",
-    "prefer_amd_gpu": "amd_gpu",
-    "cpu": "cpu",
-    "nvidia_gpu": "nvidia_gpu",
-    "amd_gpu": "amd_gpu",
-}
+from encodr_shared.backend_preferences import (
+    INTEL_BACKEND_PREFERENCES,
+    normalise_backend_preference_key,
+    probe_backend_for_preference,
+)
+from encodr_shared.worker_runtime import probe_execution_backends
 
 CPU_ENCODERS = {
     "h264": "libx264",
@@ -125,7 +112,7 @@ def select_execution_backend(
         return _cpu_selection(requested_backend=requested_backend, codec=codec)
 
     probes = {probe.backend: probe for probe in probe_execution_backends(ffmpeg_path)}
-    probe_key = "intel_igpu" if requested_backend in {"intel_auto", "intel_qsv", "intel_vaapi"} else requested_backend
+    probe_key = probe_backend_for_preference(requested_backend)
     requested_probe = probes.get(probe_key)
 
     selection = _accelerated_selection(
@@ -249,7 +236,7 @@ def _accelerated_selection(
     if probe is None or not probe.usable:
         return None
 
-    if requested_backend in {"intel_auto", "intel_qsv", "intel_vaapi"}:
+    if requested_backend in INTEL_BACKEND_PREFERENCES:
         qsv = (probe.details.get("qsv") or {}) if isinstance(probe.details, dict) else {}
         vaapi = (probe.details.get("vaapi") or {}) if isinstance(probe.details, dict) else {}
         if requested_backend in {"intel_auto", "intel_qsv"} and qsv.get("usable"):
@@ -372,7 +359,7 @@ def _qsv_unavailable_reason(details: dict[str, object]) -> str | None:
 def _selection_failure_reason(requested_backend: str, probe) -> str | None:
     if probe is None:
         return None
-    if requested_backend in {"intel_auto", "intel_qsv", "intel_vaapi"} and isinstance(probe.details, dict):
+    if requested_backend in INTEL_BACKEND_PREFERENCES and isinstance(probe.details, dict):
         qsv = probe.details.get("qsv") if isinstance(probe.details.get("qsv"), dict) else {}
         vaapi = probe.details.get("vaapi") if isinstance(probe.details.get("vaapi"), dict) else {}
         if requested_backend == "intel_qsv":

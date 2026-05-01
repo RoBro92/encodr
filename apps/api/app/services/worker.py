@@ -16,7 +16,17 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.schemas.worker import HealthStatus
 from app.services.audit import AuditService
-from app.services.errors import ApiAuthenticationError, ApiConflictError, ApiNotFoundError
+from app.services.errors import ApiAuthenticationError, ApiConflictError, ApiNotFoundError, ApiValidationError
+from app.services.path_safety import (
+    configured_path_roots,
+    path_roots_with_extra_scratch_roots,
+    remap_worker_path_to_server_path,
+    remap_worker_payload_paths,
+    validate_backup_path,
+    validate_final_output_path,
+    validate_output_path,
+    validate_replacement_payload_paths,
+)
 from app.services.setup import SetupStateService
 from encodr_core.config import ConfigBundle
 from encodr_core.execution import ExecutionProgressUpdate, ExecutionResult, normalise_backend_preference
@@ -44,8 +54,11 @@ from encodr_db.runtime import (
 )
 from encodr_shared import (
     collect_runtime_telemetry,
+    clean_runtime_summary_payload,
+    coerce_backend_preference,
     ensure_mapping_marker,
-    mapping_for_server_path,
+    hardware_hints_from_backend_probes,
+    merge_runtime_summary_preferences,
     normalise_path_mappings,
     read_version,
     recommend_worker_concurrency,
@@ -60,6 +73,7 @@ from encodr_shared.worker_runtime import (
     probe_directory,
     probe_execution_backends,
     resolve_backend_runtime_status,
+    serialise_backend_probe,
 )
 
 
@@ -112,7 +126,7 @@ class WorkerService:
             for path in self.config_bundle.workers.local.media_mounts
         ]
         execution_backend_probes = [
-            self._serialise_backend_probe(item)
+            serialise_backend_probe(item)
             for item in probe_execution_backends(self.config_bundle.app.media.ffmpeg_path)
         ]
         runtime_device_paths = discover_runtime_devices()
@@ -616,10 +630,10 @@ class WorkerService:
 
         issued_at = datetime.now(timezone.utc)
         worker_token = self.worker_token_service.generate_worker_token()
-        preferred_backend = (
+        preferred_backend = coerce_backend_preference(
             paired_worker.preferred_backend
             if paired_worker is not None and paired_worker.preferred_backend
-            else str((runtime_summary or {}).get("preferred_backend") or "cpu_only")
+            else (runtime_summary or {}).get("preferred_backend")
         )
         allow_cpu_fallback = (
             paired_worker.allow_cpu_fallback
@@ -712,15 +726,7 @@ class WorkerService:
             health_status=self._to_worker_health(health_status),
             health_summary=health_summary,
             capability_payload=capability_summary,
-            runtime_payload=self._merge_runtime_summary_preferences(
-                preferred_backend=worker.preferred_backend,
-                allow_cpu_fallback=worker.allow_cpu_fallback,
-                max_concurrent_jobs=worker.max_concurrent_jobs,
-                schedule_windows=worker.schedule_windows,
-                scratch_path=worker.scratch_path,
-                path_mappings=worker.path_mappings,
-                runtime_summary=runtime_summary,
-            ),
+            runtime_payload=self._runtime_payload_for_worker(worker, runtime_summary=runtime_summary),
             binary_payload={"binaries": binary_summary or []} if binary_summary is not None else None,
             host_metadata=host_summary,
         )
@@ -876,6 +882,10 @@ class WorkerService:
             raise ApiConflictError("Only running jobs can be completed.")
 
         result = ExecutionResult.model_validate(result_payload)
+        try:
+            result = self._normalise_remote_execution_result_paths(worker=worker, result=result)
+        except ApiValidationError as error:
+            result = self._failed_untrusted_remote_result(job=job, result=result, message=str(error))
         if job.cancellation_requested_at is not None and result.status not in {"cancelled", "failed"}:
             if not self._result_completed_replacement(result):
                 result = ExecutionResult(
@@ -917,21 +927,114 @@ class WorkerService:
             repository.apply_automatic_retry_policy(job, result)
 
         if runtime_summary is not None:
-            worker.runtime_payload = self._merge_runtime_summary_preferences(
-                preferred_backend=worker.preferred_backend,
-                allow_cpu_fallback=worker.allow_cpu_fallback,
-                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
-                schedule_windows=worker.schedule_windows,
-                scratch_path=worker.scratch_path,
-                path_mappings=worker.path_mappings,
-                runtime_summary=runtime_summary,
-            )
+            worker.runtime_payload = self._runtime_payload_for_worker(worker, runtime_summary=runtime_summary)
 
         return {
             "job_id": job.id,
             "final_status": job.status.value,
             "completed_at": job.completed_at,
         }
+
+    def _normalise_remote_execution_result_paths(
+        self,
+        *,
+        worker: Worker,
+        result: ExecutionResult,
+    ) -> ExecutionResult:
+        roots = configured_path_roots(self.config_bundle)
+        if worker.scratch_path:
+            roots = path_roots_with_extra_scratch_roots(roots, [worker.scratch_path])
+        mappings = worker.path_mappings or []
+        output_path = validate_output_path(
+            remap_worker_path_to_server_path(result.output_path, mappings),
+            roots,
+            label="output_path",
+        )
+        final_output_path = validate_final_output_path(
+            remap_worker_path_to_server_path(result.final_output_path, mappings),
+            roots,
+            label="final_output_path",
+        )
+        original_backup_path = validate_backup_path(
+            remap_worker_path_to_server_path(result.original_backup_path, mappings),
+            roots,
+            label="original_backup_path",
+        )
+
+        replacement = result.replacement
+        if replacement is not None:
+            replacement_details = remap_worker_payload_paths(replacement.details, mappings)
+            replacement_details = validate_replacement_payload_paths(
+                replacement_details,
+                roots,
+                label="replacement.details",
+            )
+            replacement = replacement.model_copy(
+                update={
+                    "final_output_path": validate_final_output_path(
+                        remap_worker_path_to_server_path(replacement.final_output_path, mappings),
+                        roots,
+                        label="replacement.final_output_path",
+                    ),
+                    "original_backup_path": validate_backup_path(
+                        remap_worker_path_to_server_path(replacement.original_backup_path, mappings),
+                        roots,
+                        label="replacement.original_backup_path",
+                    ),
+                    "details": replacement_details,
+                }
+            )
+
+        return result.model_copy(
+            update={
+                "output_path": output_path,
+                "final_output_path": final_output_path,
+                "original_backup_path": original_backup_path,
+                "replacement": replacement,
+            }
+        )
+
+    @staticmethod
+    def _failed_untrusted_remote_result(
+        *,
+        job: Job,
+        result: ExecutionResult,
+        message: str,
+    ) -> ExecutionResult:
+        completed_at = datetime.now(timezone.utc)
+        return ExecutionResult(
+            mode="failed",
+            status="failed",
+            command=result.command,
+            output_path=None,
+            final_output_path=None,
+            original_backup_path=None,
+            input_size_bytes=result.input_size_bytes,
+            output_size_bytes=None,
+            space_saved_bytes=None,
+            video_input_size_bytes=result.video_input_size_bytes,
+            video_output_size_bytes=None,
+            video_space_saved_bytes=None,
+            source_video_bitrate_bps=result.source_video_bitrate_bps,
+            output_video_bitrate_bps=None,
+            non_video_space_saved_bytes=None,
+            compression_reduction_percent=None,
+            exit_code=result.exit_code,
+            stdout=result.stdout,
+            stderr=result.stderr,
+            failure_message=f"Remote worker result rejected: {message}",
+            failure_category="untrusted_worker_result_path",
+            requested_backend=result.requested_backend,
+            actual_backend=result.actual_backend,
+            actual_accelerator=result.actual_accelerator,
+            backend_fallback_used=result.backend_fallback_used,
+            backend_selection_reason=result.backend_selection_reason,
+            analysis_payload=result.analysis_payload,
+            verification=None,
+            replacement=None,
+            started_at=result.started_at or job.started_at or completed_at,
+            completed_at=completed_at,
+        )
 
     @staticmethod
     def _result_completed_replacement(result: ExecutionResult) -> bool:
@@ -994,15 +1097,7 @@ class WorkerService:
             repository.apply_automatic_retry_policy(job, result)
 
         if runtime_summary is not None:
-            worker.runtime_payload = self._merge_runtime_summary_preferences(
-                preferred_backend=worker.preferred_backend,
-                allow_cpu_fallback=worker.allow_cpu_fallback,
-                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
-                schedule_windows=worker.schedule_windows,
-                scratch_path=worker.scratch_path,
-                path_mappings=worker.path_mappings,
-                runtime_summary=runtime_summary,
-            )
+            worker.runtime_payload = self._runtime_payload_for_worker(worker, runtime_summary=runtime_summary)
 
         return {
             "job_id": job.id,
@@ -1043,15 +1138,7 @@ class WorkerService:
             ),
         )
         if runtime_summary is not None:
-            worker.runtime_payload = self._merge_runtime_summary_preferences(
-                preferred_backend=worker.preferred_backend,
-                allow_cpu_fallback=worker.allow_cpu_fallback,
-                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
-                schedule_windows=worker.schedule_windows,
-                scratch_path=worker.scratch_path,
-                path_mappings=worker.path_mappings,
-                runtime_summary=runtime_summary,
-            )
+            worker.runtime_payload = self._runtime_payload_for_worker(worker, runtime_summary=runtime_summary)
         return {
             "job_id": job.id,
             "updated_at": job.progress_updated_at or datetime.now(timezone.utc),
@@ -1737,13 +1824,7 @@ class WorkerService:
 
     def _local_capability_summary(self) -> dict[str, object]:
         runtime_probes = self._local_runtime_probes()
-        hardware_hints = [
-            item["backend"]
-            for item in runtime_probes["hardware_probes"]
-            if item["backend"] != "cpu" and item["usable_by_ffmpeg"]
-        ]
-        if not hardware_hints:
-            hardware_hints.append("cpu_only")
+        hardware_hints = hardware_hints_from_backend_probes(runtime_probes["hardware_probes"])
         recommended_concurrency, recommendation_reason = recommend_worker_concurrency(
             cpu_count=os.cpu_count(),
             hardware_hints=hardware_hints,
@@ -1761,28 +1842,6 @@ class WorkerService:
             "recommended_concurrency": recommended_concurrency,
             "recommended_concurrency_reason": recommendation_reason,
             "tags": ["local"],
-        }
-
-    @staticmethod
-    def _serialise_backend_probe(probe) -> dict[str, object]:
-        preference_key = {
-            "cpu": "cpu_only",
-            "intel_igpu": "prefer_intel_igpu",
-            "nvidia_gpu": "prefer_nvidia_gpu",
-            "amd_gpu": "prefer_amd_gpu",
-        }.get(probe.backend, probe.backend)
-        return {
-            "backend": probe.backend,
-            "preference_key": preference_key,
-            "detected": probe.detected,
-            "usable_by_ffmpeg": probe.usable,
-            "ffmpeg_path_verified": bool(probe.details.get("ffmpeg_path_verified", probe.usable)),
-            "status": probe.status,
-            "message": probe.message,
-            "reason_unavailable": probe.details.get("reason_unavailable"),
-            "recommended_usage": probe.details.get("recommended_usage"),
-            "device_paths": probe.details.get("device_paths", []),
-            "details": probe.details,
         }
 
     @staticmethod
@@ -1829,33 +1888,18 @@ class WorkerService:
 
     @staticmethod
     def _clean_runtime_summary(payload: dict | None) -> dict[str, object]:
-        payload = payload or {}
-        return {
-            "queue": payload.get("queue"),
-            "scratch_dir": payload.get("scratch_dir"),
-            "scratch_status": payload.get("scratch_status"),
-            "media_mounts": payload.get("media_mounts", []),
-            "path_mappings": payload.get("path_mappings", []),
-            "preferred_backend": payload.get("preferred_backend"),
-            "allow_cpu_fallback": payload.get("allow_cpu_fallback"),
-            "max_concurrent_jobs": payload.get("max_concurrent_jobs"),
-            "current_job_id": payload.get("current_job_id"),
-            "current_backend": payload.get("current_backend"),
-            "selected_backend": payload.get("selected_backend"),
-            "backend_fallback_used": payload.get("backend_fallback_used"),
-            "backend_fallback_reason": payload.get("backend_fallback_reason"),
-            "qsv_usable": payload.get("qsv_usable"),
-            "qsv_unavailable_reason": payload.get("qsv_unavailable_reason"),
-            "vaapi_usable": payload.get("vaapi_usable"),
-            "vaapi_unavailable_reason": payload.get("vaapi_unavailable_reason"),
-            "backend_diagnostic": payload.get("backend_diagnostic"),
-            "current_stage": payload.get("current_stage"),
-            "current_progress_percent": payload.get("current_progress_percent"),
-            "current_progress_updated_at": payload.get("current_progress_updated_at"),
-            "telemetry": payload.get("telemetry"),
-            "last_completed_job_id": payload.get("last_completed_job_id"),
-            "schedule_windows": payload.get("schedule_windows", []),
-        }
+        return clean_runtime_summary_payload(payload)
+
+    def _runtime_payload_for_worker(self, worker: Worker, *, runtime_summary: dict | None) -> dict[str, object]:
+        return self._merge_runtime_summary_preferences(
+            preferred_backend=worker.preferred_backend,
+            allow_cpu_fallback=worker.allow_cpu_fallback,
+            max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
+            schedule_windows=worker.schedule_windows,
+            scratch_path=worker.scratch_path,
+            path_mappings=worker.path_mappings,
+            runtime_summary=runtime_summary,
+        )
 
     def _merge_runtime_summary_preferences(
         self,
@@ -1868,26 +1912,21 @@ class WorkerService:
         path_mappings: list[dict] | None,
         runtime_summary: dict | None,
     ) -> dict | None:
-        merged = copy.deepcopy(runtime_summary or {})
-        if scratch_path:
-            merged["scratch_dir"] = scratch_path
-            if merged.get("scratch_status") is None:
-                merged["scratch_status"] = {
-                    "path": scratch_path,
-                    "status": "unknown",
-                    "message": "Scratch validation has not been reported by the worker yet.",
-                }
-        merged["path_mappings"] = self._validated_path_mappings(
+        runtime_payload = copy.deepcopy(runtime_summary or {})
+        validated_path_mappings = self._validated_path_mappings(
             path_mappings,
-            remote_runtime_payload=merged.get("path_mappings"),
+            remote_runtime_payload=runtime_payload.get("path_mappings"),
             validate_locally=False,
         )
-        return merged | {
-            "preferred_backend": preferred_backend,
-            "allow_cpu_fallback": allow_cpu_fallback,
-            "max_concurrent_jobs": max_concurrent_jobs,
-            "schedule_windows": schedule_windows or [],
-        }
+        return merge_runtime_summary_preferences(
+            runtime_payload,
+            preferred_backend=preferred_backend,
+            allow_cpu_fallback=allow_cpu_fallback,
+            max_concurrent_jobs=max_concurrent_jobs,
+            schedule_windows=schedule_windows,
+            scratch_path=scratch_path,
+            path_mappings=validated_path_mappings,
+        )
 
     def _resolve_remote_source_path(self, worker: Worker, source_path: str) -> str | None:
         if worker.path_mappings:
@@ -1911,17 +1950,7 @@ class WorkerService:
         return source_path
 
     def _runtime_configuration_for_worker(self, worker: Worker) -> dict[str, object]:
-        return self._clean_runtime_summary(
-            self._merge_runtime_summary_preferences(
-                preferred_backend=worker.preferred_backend,
-                allow_cpu_fallback=worker.allow_cpu_fallback,
-                max_concurrent_jobs=max(1, int(worker.max_concurrent_jobs or 1)),
-                schedule_windows=worker.schedule_windows,
-                scratch_path=worker.scratch_path,
-                path_mappings=worker.path_mappings,
-                runtime_summary=worker.runtime_payload,
-            )
-        )
+        return self._clean_runtime_summary(self._runtime_payload_for_worker(worker, runtime_summary=worker.runtime_payload))
 
     def _validated_path_mappings(
         self,

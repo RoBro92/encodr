@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 
 from fastapi import Request
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
 from app.core.auth import (
@@ -35,23 +36,23 @@ class AuthService:
     ) -> User:
         users = UserRepository(session)
         if users.any_users_exist():
-            self.audit_service.record_event(
-                session,
-                event_type=AuditEventType.BOOTSTRAP_ADMIN_BLOCKED,
-                outcome=AuditOutcome.FAILURE,
-                request=request,
-                username=username,
-                details={"reason": "users_already_exist"},
-            )
+            self._record_bootstrap_blocked(session, request=request, username=username)
             raise BootstrapDisabledError("Bootstrap admin creation is disabled once a user exists.")
 
-        user = users.create_user(
-            username=username,
-            password_hash=self.password_hasher.hash_password(password),
-            role=UserRole.ADMIN,
-            is_active=True,
-            is_bootstrap_admin=True,
-        )
+        try:
+            with session.begin_nested():
+                user = users.create_user(
+                    username=username,
+                    password_hash=self.password_hasher.hash_password(password),
+                    role=UserRole.ADMIN,
+                    is_active=True,
+                    is_bootstrap_admin=True,
+                )
+        except IntegrityError as error:
+            if users.any_users_exist():
+                self._record_bootstrap_blocked(session, request=request, username=username)
+                raise BootstrapDisabledError("Bootstrap admin creation is disabled once a user exists.") from error
+            raise
         self.audit_service.record_event(
             session,
             event_type=AuditEventType.BOOTSTRAP_ADMIN_CREATED,
@@ -135,7 +136,7 @@ class AuthService:
     ) -> AuthTokenResponse:
         refresh_tokens = RefreshTokenRepository(session)
         token_hash = self.token_service.hash_refresh_token(refresh_token)
-        token_record = refresh_tokens.get_active_by_token_hash(token_hash)
+        token_record = refresh_tokens.consume_active_token(token_hash, reason="rotated")
         if token_record is None:
             self.audit_service.record_event(
                 session,
@@ -147,20 +148,18 @@ class AuthService:
             raise InvalidTokenError("The refresh token is invalid or expired.")
 
         user = token_record.user
-        if not user.is_active:
+        if user is None or not user.is_active:
             refresh_tokens.revoke_token(token_record, reason="user_inactive")
             self.audit_service.record_event(
                 session,
                 event_type=AuditEventType.TOKEN_REFRESH,
                 outcome=AuditOutcome.FAILURE,
                 request=request,
-                user=user,
+                user=user if user is not None else None,
                 details={"reason": "inactive_user"},
             )
             raise InactiveUserError("The user account is inactive.")
 
-        refresh_tokens.mark_used(token_record)
-        refresh_tokens.revoke_token(token_record, reason="rotated")
         response = self._issue_tokens(session, user=user, request=request)
         self.audit_service.record_event(
             session,
@@ -170,6 +169,22 @@ class AuthService:
             user=user,
         )
         return response
+
+    def _record_bootstrap_blocked(
+        self,
+        session: Session,
+        *,
+        request: Request,
+        username: str,
+    ) -> None:
+        self.audit_service.record_event(
+            session,
+            event_type=AuditEventType.BOOTSTRAP_ADMIN_BLOCKED,
+            outcome=AuditOutcome.FAILURE,
+            request=request,
+            username=username,
+            details={"reason": "users_already_exist"},
+        )
 
     def _issue_tokens(
         self,

@@ -6,18 +6,15 @@ from typing import Any
 from sqlalchemy import select
 from sqlalchemy.orm import Session, joinedload
 
-from encodr_db.models import Job, JobStatus, TelemetryAggregation
+from encodr_db.models import (
+    Job,
+    JobStatus,
+    SUCCESSFUL_JOB_STATUSES,
+    TERMINAL_JOB_STATUSES,
+    TelemetryAggregation,
+)
 
 GLOBAL_AGGREGATION_KEY = "global"
-COMPLETED_STATUSES = {JobStatus.COMPLETED, JobStatus.SKIPPED}
-TERMINAL_STATUSES = {
-    JobStatus.COMPLETED,
-    JobStatus.FAILED,
-    JobStatus.INTERRUPTED,
-    JobStatus.CANCELLED,
-    JobStatus.SKIPPED,
-    JobStatus.MANUAL_REVIEW,
-}
 
 
 class TelemetryAggregationRepository:
@@ -55,7 +52,7 @@ class TelemetryAggregationRepository:
         previous_status: JobStatus | None,
     ) -> TelemetryAggregation:
         aggregation = self.session.get(TelemetryAggregation, GLOBAL_AGGREGATION_KEY)
-        if aggregation is None or previous_status in TERMINAL_STATUSES:
+        if aggregation is None or previous_status in TERMINAL_JOB_STATUSES:
             return self.rebuild_global()
 
         self._add_job(aggregation, job)
@@ -83,7 +80,7 @@ class TelemetryAggregationRepository:
             aggregation.total_output_size_bytes += int(job.output_size_bytes or 0)
             aggregation.total_space_saved_bytes += int(job.space_saved_bytes or 0)
 
-        if job.status not in COMPLETED_STATUSES or job.completed_at is None:
+        if job.status not in SUCCESSFUL_JOB_STATUSES or job.completed_at is None:
             return
 
         aggregation.processed_file_count += 1

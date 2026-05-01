@@ -112,6 +112,7 @@ def probe_packet_sizes_by_stream(
     file_path: Path | str,
     *,
     ffprobe_path: Path | str,
+    timeout_seconds: int = 60,
 ) -> dict[int, int]:
     command = [
         str(ffprobe_path),
@@ -123,12 +124,16 @@ def probe_packet_sizes_by_stream(
         "csv=p=0",
         str(file_path),
     ]
-    result = subprocess.run(
-        command,
-        capture_output=True,
-        text=True,
-        check=False,
-    )
+    try:
+        result = subprocess.run(
+            command,
+            capture_output=True,
+            text=True,
+            check=False,
+            timeout=timeout_seconds,
+        )
+    except (OSError, subprocess.SubprocessError):
+        return {}
     if result.returncode != 0:
         return {}
 

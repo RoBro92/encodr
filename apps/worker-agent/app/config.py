@@ -4,6 +4,8 @@ import os
 from dataclasses import dataclass
 from pathlib import Path
 
+from encodr_shared import DEFAULT_BACKEND_PREFERENCE, coerce_backend_preference
+
 
 @dataclass(frozen=True, slots=True)
 class WorkerAgentSettings:
@@ -62,7 +64,9 @@ def load_settings(environ: dict[str, str] | None = None) -> WorkerAgentSettings:
         ),
         ffmpeg_path=env.get("ENCODR_WORKER_AGENT_FFMPEG_PATH", "ffmpeg"),
         ffprobe_path=env.get("ENCODR_WORKER_AGENT_FFPROBE_PATH", "ffprobe"),
-        preferred_backend=(env.get("ENCODR_WORKER_AGENT_PREFERRED_BACKEND", "cpu").strip() or "cpu"),
+        preferred_backend=coerce_backend_preference(
+            env.get("ENCODR_WORKER_AGENT_PREFERRED_BACKEND", DEFAULT_BACKEND_PREFERENCE)
+        ),
         allow_cpu_fallback=env.get("ENCODR_WORKER_AGENT_ALLOW_CPU_FALLBACK", "true").strip().lower()
         not in {"0", "false", "no", "off"},
     )

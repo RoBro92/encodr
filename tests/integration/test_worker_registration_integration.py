@@ -437,6 +437,152 @@ def test_remote_worker_can_request_claim_and_submit_job_result(
         assert saved_job.last_worker_id == worker.id
 
 
+def test_remote_worker_result_with_untrusted_paths_fails_without_persisting_paths(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Unsafe Path.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        create_job(session, context.bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    registration = context.client.post("/api/worker/register", json=registration_payload("valid-secret"))
+    worker_token = registration.json()["worker_token"]
+    job_id = claim_next_remote_job(context, worker_token)
+
+    result = ExecutionResult(
+        mode="remux",
+        status="completed",
+        command=["ffmpeg", "-i", source_path.as_posix(), "/etc/passwd"],
+        output_path=Path("/etc/passwd"),
+        final_output_path=Path("/etc/passwd"),
+        original_backup_path=Path("/etc/shadow"),
+        output_size_bytes=123,
+        exit_code=0,
+        stdout="ok",
+        stderr="",
+        replacement=ReplacementResult(
+            status=ReplacementStatus.SUCCEEDED,
+            final_output_path=Path("/etc/passwd"),
+            original_backup_path=Path("/etc/shadow"),
+            details={"staged_output_path": "/etc/passwd"},
+        ),
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+    )
+    result_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/result",
+        json={"result_payload": result.model_dump(mode="json"), "runtime_summary": None},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+
+    assert result_response.status_code == 200
+    assert result_response.json()["final_status"] == "failed"
+    with session_factory() as session:
+        saved_job = session.get(Job, job_id)
+        assert saved_job is not None
+        assert saved_job.status == JobStatus.FAILED
+        assert saved_job.failure_category == "untrusted_worker_result_path"
+        assert saved_job.output_path is None
+        assert saved_job.final_output_path is None
+        assert saved_job.original_backup_path is None
+        assert saved_job.replacement_payload is None
+
+
+def test_remote_worker_result_paths_are_inverse_mapped_before_persistence(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+
+    source_path = context.bundle.workers.local.media_mounts[0] / "Movies" / "Remote Mapped Path.mkv"
+    source_path.parent.mkdir(parents=True, exist_ok=True)
+    source_path.write_text("replaced", encoding="utf-8")
+    backup_path = source_path.with_name("Remote Mapped Path.encodr-backup.mkv")
+    backup_path.write_text("original", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        create_job(session, context.bundle, media, source_path=source_path.as_posix())
+        session.commit()
+
+    registration_request = registration_payload("valid-secret")
+    registration_request["runtime_summary"]["path_mappings"] = [
+        {
+            "server_path": context.bundle.workers.local.media_mounts[0].as_posix(),
+            "worker_path": "/worker-media",
+        }
+    ]
+    registration = context.client.post("/api/worker/register", json=registration_request)
+    worker_token = registration.json()["worker_token"]
+
+    request_response = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert request_response.status_code == 200
+    request_payload = request_response.json()
+    assert request_payload["job"]["source_path"] == "/worker-media/Movies/Remote Mapped Path.mkv"
+    job_id = request_payload["job"]["job_id"]
+    assert context.client.post(
+        f"/api/worker/jobs/{job_id}/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    ).status_code == 200
+
+    worker_final_path = Path("/worker-media/Movies/Remote Mapped Path.mkv")
+    worker_backup_path = Path("/worker-media/Movies/Remote Mapped Path.encodr-backup.mkv")
+    result = ExecutionResult(
+        mode="remux",
+        status="completed",
+        command=["ffmpeg", "-i", str(worker_final_path), str(worker_final_path)],
+        output_path=worker_final_path,
+        final_output_path=worker_final_path,
+        original_backup_path=worker_backup_path,
+        output_size_bytes=source_path.stat().st_size,
+        exit_code=0,
+        stdout="ok",
+        stderr="",
+        replacement=ReplacementResult(
+            status=ReplacementStatus.SUCCEEDED,
+            final_output_path=worker_final_path,
+            original_backup_path=worker_backup_path,
+            details={
+                "final_output_path": worker_final_path.as_posix(),
+                "staged_output_path": "/srv/scratch/remote-mapped-path.tmp.mkv",
+            },
+        ),
+        started_at=datetime.now(timezone.utc),
+        completed_at=datetime.now(timezone.utc),
+    )
+    result_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/result",
+        json={"result_payload": result.model_dump(mode="json"), "runtime_summary": None},
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+
+    assert result_response.status_code == 200
+    assert result_response.json()["final_status"] == "completed"
+    with session_factory() as session:
+        saved_job = session.get(Job, job_id)
+        assert saved_job is not None
+        assert saved_job.status == JobStatus.COMPLETED
+        assert saved_job.output_path == source_path.as_posix()
+        assert saved_job.final_output_path == source_path.as_posix()
+        assert saved_job.original_backup_path == backup_path.as_posix()
+        assert saved_job.replacement_payload["final_output_path"] == source_path.as_posix()
+        assert saved_job.replacement_payload["original_backup_path"] == backup_path.as_posix()
+        assert saved_job.replacement_payload["details"]["final_output_path"] == source_path.as_posix()
+        assert saved_job.replacement_payload["details"]["staged_output_path"] == "/srv/scratch/remote-mapped-path.tmp.mkv"
+
+
 def test_remote_worker_cancellation_before_replacement_finishes_cancelled_without_processing(
     tmp_path: Path,
     repo_root: Path,
@@ -757,14 +903,15 @@ def test_worker_agent_service_can_execute_remote_job_against_api_context(
 
     class FakeExecutionService:
         def execute(self, *, job_id: str, plan_payload: dict, media_payload: dict) -> ExecutionResult:
-            del plan_payload, media_payload
+            del plan_payload
+            output_path = Path(media_payload["file_path"])
             return ExecutionResult(
                 mode="remux",
                 status="completed",
                 command=["ffmpeg", "-i", "input.mkv", "output.mkv"],
-                output_path=Path("/media/output.mkv"),
-                final_output_path=Path("/media/output.mkv"),
-                original_backup_path=Path("/media/output.encodr-backup.mkv"),
+                output_path=output_path,
+                final_output_path=output_path,
+                original_backup_path=output_path.with_name(f"{output_path.stem}.encodr-backup{output_path.suffix}"),
                 output_size_bytes=123,
                 exit_code=0,
                 stdout="ok",
@@ -860,6 +1007,25 @@ def registration_payload(secret: str) -> dict:
         "health_status": "healthy",
         "health_summary": "Ready for future remote dispatch groundwork.",
     }
+
+
+def claim_next_remote_job(context, worker_token: str) -> str:
+    request_response = context.client.post(
+        "/api/worker/jobs/request",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert request_response.status_code == 200
+    request_payload = request_response.json()
+    assert request_payload["status"] == "assigned"
+    job_id = request_payload["job"]["job_id"]
+
+    claim_response = context.client.post(
+        f"/api/worker/jobs/{job_id}/claim",
+        headers={"Authorization": f"Bearer {worker_token}"},
+    )
+    assert claim_response.status_code == 200
+    assert claim_response.json()["status"] == "claimed"
+    return job_id
 
 
 def build_context(

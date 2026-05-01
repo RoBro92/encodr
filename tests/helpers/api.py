@@ -78,6 +78,7 @@ def create_test_api_context(
                 config_bundle=bundle,
                 session_factory=session_factory,
                 worker_execution_service=worker_execution_service,
+                start_background_services=False,
             )
             client = TestClient(app)
     finally:

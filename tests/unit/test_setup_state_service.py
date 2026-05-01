@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import json
 from pathlib import Path
+
+import pytest
 
 from encodr_core.config import load_config_bundle
 
@@ -80,6 +83,78 @@ def test_execution_preferences_default_and_persist(tmp_path: Path) -> None:
         "allow_cpu_fallback": False,
     }
     assert service.get_execution_preferences() == updated
+
+
+def test_execution_preferences_coerce_runtime_aliases(tmp_path: Path) -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+
+    with import_api_module("app.services.setup") as setup_module:
+        service = setup_module.SetupStateService(config_bundle=bundle)
+
+    service.state_path = tmp_path / "setup-state.json"
+    service.state_path.write_text(
+        """
+        {
+          "execution_preferences": {
+            "preferred_backend": "cpu",
+            "allow_cpu_fallback": false
+          }
+        }
+        """,
+        encoding="utf-8",
+    )
+
+    assert service.get_execution_preferences() == {
+        "preferred_backend": "cpu_only",
+        "allow_cpu_fallback": False,
+    }
+
+
+def test_corrupt_setup_state_is_reported_backed_up_and_reset(tmp_path: Path) -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+
+    with import_api_module("app.services.setup") as setup_module:
+        service = setup_module.SetupStateService(config_bundle=bundle)
+
+    service.state_path = tmp_path / "setup-state.json"
+    service.state_path.write_text("{not-json", encoding="utf-8")
+
+    with pytest.raises(setup_module.ApiValidationError) as error:
+        service.get_state()
+
+    assert "corrupt" in str(error.value).lower()
+    assert "defaults were restored" in str(error.value)
+    backups = list(tmp_path.glob("setup-state.corrupt-*.json"))
+    assert len(backups) == 1
+    assert backups[0].read_text(encoding="utf-8") == "{not-json"
+    restored_payload = json.loads(service.state_path.read_text(encoding="utf-8"))
+    assert restored_payload == service._empty_payload()  # type: ignore[attr-defined]
+    assert service.get_state() == {"movies_root": None, "tv_root": None}
+
+
+def test_setup_state_write_uses_atomic_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+
+    with import_api_module("app.services.setup") as setup_module:
+        service = setup_module.SetupStateService(config_bundle=bundle)
+
+    service.state_path = tmp_path / "setup-state.json"
+
+    def fail_direct_write(*_args: object, **_kwargs: object) -> None:
+        raise AssertionError("setup state writes must use atomic replacement")
+
+    monkeypatch.setattr(Path, "write_text", fail_direct_write)
+
+    service.update_execution_preferences(
+        preferred_backend="prefer_intel_igpu",
+        allow_cpu_fallback=False,
+    )
+
+    assert service.get_execution_preferences() == {
+        "preferred_backend": "prefer_intel_igpu",
+        "allow_cpu_fallback": False,
+    }
+    assert list(tmp_path.glob(".setup-state.json.*.tmp")) == []
 
 
 def test_processing_rules_quality_preset_persists_with_values(tmp_path: Path) -> None:

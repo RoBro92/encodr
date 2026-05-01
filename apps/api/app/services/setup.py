@@ -1,9 +1,13 @@
 from __future__ import annotations
 
+from datetime import datetime, timezone
 import json
+import os
 import re
+import shutil
+import tempfile
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, NoReturn, TypedDict
 
 from app.services.errors import ApiValidationError
 from encodr_core.config import ConfigBundle
@@ -18,6 +22,11 @@ from encodr_core.config.base import (
 from encodr_core.config.policy import AudioRules, SubtitleRules, VideoRules
 from encodr_core.config.profiles import ProfileConfig
 from encodr_core.planning.rules import merge_optional_model, merge_video_rules
+from encodr_shared import (
+    DEFAULT_BACKEND_PREFERENCE,
+    SUPPORTED_BACKEND_PREFERENCES,
+    coerce_backend_preference,
+)
 
 LANGUAGE_CODE_RE = re.compile(r"^[a-z]{3}$")
 
@@ -32,15 +41,7 @@ ExecutionBackendPreference = Literal[
     "prefer_amd_gpu",
 ]
 QualityPreset = Literal["high_quality", "balanced", "efficient", "custom"]
-SUPPORTED_EXECUTION_BACKENDS = {
-    "cpu_only",
-    "prefer_intel_igpu",
-    "intel_auto",
-    "intel_qsv",
-    "intel_vaapi",
-    "prefer_nvidia_gpu",
-    "prefer_amd_gpu",
-}
+SUPPORTED_EXECUTION_BACKENDS = SUPPORTED_BACKEND_PREFERENCES
 
 
 class ProcessingRuleValues(TypedDict):
@@ -217,19 +218,20 @@ class SetupStateService:
             return self._empty_payload()
         try:
             raw = json.loads(self.state_path.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            return self._empty_payload()
+        except json.JSONDecodeError as error:
+            self._recover_corrupt_state(error)
+        except OSError as error:
+            raise ApiValidationError("Setup state file could not be read.") from error
+        if not isinstance(raw, dict):
+            self._recover_corrupt_state(ValueError("Setup state payload must be a JSON object."))
         processing_rules = raw.get("processing_rules")
         payload = self._empty_payload()
         payload["movies_root"] = self._clean_optional_path(raw.get("movies_root"))
         payload["tv_root"] = self._clean_optional_path(raw.get("tv_root"))
         execution_preferences = raw.get("execution_preferences")
         if isinstance(execution_preferences, dict):
-            preferred_backend = str(execution_preferences.get("preferred_backend") or "cpu_only").strip()
-            if preferred_backend not in SUPPORTED_EXECUTION_BACKENDS:
-                preferred_backend = "cpu_only"
             payload["execution_preferences"] = {
-                "preferred_backend": preferred_backend,
+                "preferred_backend": coerce_backend_preference(execution_preferences.get("preferred_backend")),
                 "allow_cpu_fallback": bool(execution_preferences.get("allow_cpu_fallback", True)),
             }
         if isinstance(processing_rules, dict):
@@ -244,7 +246,82 @@ class SetupStateService:
 
     def _write_state_payload(self, payload: SetupStatePayload) -> None:
         self.state_path.parent.mkdir(parents=True, exist_ok=True)
-        self.state_path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+        self._write_text_atomic(
+            self.state_path,
+            json.dumps(payload, indent=2, sort_keys=True) + "\n",
+        )
+
+    def _recover_corrupt_state(self, error: Exception) -> NoReturn:
+        backup_path = self._corrupt_backup_path()
+        try:
+            shutil.copy2(self.state_path, backup_path)
+        except OSError as backup_error:
+            raise ApiValidationError(
+                "Setup state file is corrupt and could not be backed up. "
+                "Repair or remove setup-state.json before continuing."
+            ) from backup_error
+        try:
+            self._write_state_payload(self._empty_payload())
+        except OSError as write_error:
+            raise ApiValidationError(
+                f"Setup state file is corrupt. The invalid file was backed up to {backup_path.as_posix()}, "
+                "but defaults could not be restored."
+            ) from write_error
+        raise ApiValidationError(
+            f"Setup state file is corrupt. The invalid file was backed up to {backup_path.as_posix()} "
+            "and defaults were restored."
+        ) from error
+
+    def _corrupt_backup_path(self) -> Path:
+        timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+        candidate = self.state_path.with_name(f"{self.state_path.stem}.corrupt-{timestamp}{self.state_path.suffix}")
+        index = 1
+        while candidate.exists():
+            candidate = self.state_path.with_name(
+                f"{self.state_path.stem}.corrupt-{timestamp}-{index}{self.state_path.suffix}"
+            )
+            index += 1
+        return candidate
+
+    @staticmethod
+    def _write_text_atomic(path: Path, contents: str) -> None:
+        temporary_path: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                "w",
+                dir=path.parent,
+                prefix=f".{path.name}.",
+                suffix=".tmp",
+                encoding="utf-8",
+                delete=False,
+            ) as handle:
+                temporary_path = Path(handle.name)
+                handle.write(contents)
+                handle.flush()
+                os.fsync(handle.fileno())
+        except OSError:
+            if temporary_path is not None and temporary_path.exists():
+                temporary_path.unlink()
+            raise
+        assert temporary_path is not None
+        try:
+            temporary_path.replace(path)
+            SetupStateService._fsync_directory(path.parent)
+        except OSError:
+            if temporary_path.exists():
+                temporary_path.unlink()
+            raise
+
+    @staticmethod
+    def _fsync_directory(directory: Path) -> None:
+        try:
+            descriptor = os.open(directory, os.O_RDONLY)
+        except OSError:
+            return
+        try:
+            os.fsync(descriptor)
+        finally:
+            os.close(descriptor)
 
     @classmethod
     def _empty_payload(cls) -> SetupStatePayload:
@@ -253,7 +330,7 @@ class SetupStateService:
             "tv_root": None,
             "processing_rules": {ruleset: None for ruleset in cls._ruleset_names()},
             "execution_preferences": {
-                "preferred_backend": "cpu_only",
+                "preferred_backend": DEFAULT_BACKEND_PREFERENCE,
                 "allow_cpu_fallback": True,
             },
         }

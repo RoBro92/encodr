@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
-from app.core.dependencies import get_session, require_admin_user
+from app.core.dependencies import get_config_bundle, get_session, require_admin_user
 from app.schemas.jobs import JobDetailResponse
 from app.schemas.review import (
     ReviewDecisionRequest,
@@ -15,6 +15,7 @@ from app.schemas.review import (
 from app.services.audit import AuditService
 from app.services.errors import ApiServiceError
 from app.services.review import ReviewService
+from encodr_core.config import ConfigBundle
 from encodr_db.models import User
 
 router = APIRouter(
@@ -24,8 +25,10 @@ router = APIRouter(
 )
 
 
-def get_review_service() -> ReviewService:
-    return ReviewService(audit_service=AuditService())
+def get_review_service(
+    config_bundle: ConfigBundle = Depends(get_config_bundle),
+) -> ReviewService:
+    return ReviewService(config_bundle=config_bundle, audit_service=AuditService())
 
 
 def _raise_service_error(error: ApiServiceError) -> None:

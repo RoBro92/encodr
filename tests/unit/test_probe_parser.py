@@ -140,6 +140,43 @@ def test_ffprobe_process_failure_is_reported(monkeypatch: pytest.MonkeyPatch) ->
     assert "Invalid data" in (error.stderr or "")
 
 
+def test_ffprobe_invocation_uses_configured_timeout(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_kwargs: dict[str, object] = {}
+
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        captured_kwargs.update(kwargs)
+        return subprocess.CompletedProcess(
+            args=args[0],
+            returncode=0,
+            stdout=(FIXTURES_DIR / "film_1080p.json").read_text(encoding="utf-8"),
+            stderr="",
+        )
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    client = FFprobeClient(binary_path="/usr/bin/ffprobe", timeout_seconds=12)
+    media = client.probe_file("/tmp/example.mkv")
+
+    assert media.file_name == "Example Film (2024).mkv"
+    assert captured_kwargs["timeout"] == 12
+
+
+def test_ffprobe_timeout_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
+    def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
+        raise subprocess.TimeoutExpired(cmd=args[0], timeout=kwargs["timeout"])
+
+    monkeypatch.setattr(subprocess, "run", fake_run)
+
+    client = FFprobeClient(binary_path="/usr/bin/ffprobe", timeout_seconds=3)
+    with pytest.raises(ProbeProcessError) as exc_info:
+        client.probe_file("/tmp/slow.mkv")
+
+    error = exc_info.value
+    assert error.kind == "probe_process_failed"
+    assert error.exit_code == -1
+    assert "timed out after 3 seconds" in (error.stderr or "")
+
+
 def test_missing_ffprobe_binary_is_reported(monkeypatch: pytest.MonkeyPatch) -> None:
     def fake_run(*args, **kwargs):  # type: ignore[no-untyped-def]
         raise FileNotFoundError("ffprobe not installed")

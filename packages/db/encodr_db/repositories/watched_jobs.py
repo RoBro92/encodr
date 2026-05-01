@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from sqlalchemy import desc, select
+from sqlalchemy import asc, desc, select
 from sqlalchemy.orm import Session
 
 from encodr_db.models import WatchedJobDefinition
@@ -20,7 +20,11 @@ class WatchedJobRepository:
         return self.session.scalar(query)
 
     def list_watched_jobs(self, *, enabled: bool | None = None) -> list[WatchedJobDefinition]:
-        query = select(WatchedJobDefinition).order_by(desc(WatchedJobDefinition.updated_at))
+        query = select(WatchedJobDefinition).order_by(
+            desc(WatchedJobDefinition.updated_at),
+            asc(WatchedJobDefinition.display_name),
+            asc(WatchedJobDefinition.id),
+        )
         if enabled is not None:
             query = query.where(WatchedJobDefinition.enabled.is_(enabled))
         return list(self.session.scalars(query))

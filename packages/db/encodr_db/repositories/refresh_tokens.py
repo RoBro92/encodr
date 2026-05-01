@@ -2,8 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from sqlalchemy import Select, desc, select
-from sqlalchemy.orm import Session
+from sqlalchemy import Select, desc, select, update
+from sqlalchemy.orm import Session, joinedload
 
 from encodr_db.models import RefreshToken
 
@@ -41,6 +41,33 @@ class RefreshTokenRepository:
                 RefreshToken.expires_at > now,
             )
         )
+
+    def consume_active_token(self, token_hash: str, *, reason: str) -> RefreshToken | None:
+        now = datetime.now(timezone.utc)
+        result = self.session.execute(
+            update(RefreshToken)
+            .where(
+                RefreshToken.token_hash == token_hash,
+                RefreshToken.revoked_at.is_(None),
+                RefreshToken.expires_at > now,
+            )
+            .values(
+                last_used_at=now,
+                revoked_at=now,
+                revocation_reason=reason,
+            )
+            .execution_options(synchronize_session=False)
+        )
+        if result.rowcount != 1:
+            self.session.flush()
+            return None
+        token = self.session.scalar(
+            select(RefreshToken)
+            .where(RefreshToken.token_hash == token_hash)
+            .options(joinedload(RefreshToken.user))
+        )
+        self.session.flush()
+        return token
 
     def revoke_token(self, token: RefreshToken, *, reason: str) -> RefreshToken:
         token.revoked_at = datetime.now(timezone.utc)

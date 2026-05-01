@@ -5,7 +5,15 @@ import platform
 
 from app.config import WorkerAgentSettings
 from app.version import read_agent_version
-from encodr_shared import collect_runtime_telemetry, recommend_worker_concurrency, validate_worker_path_mapping
+from encodr_shared import (
+    clean_runtime_summary_payload,
+    collect_runtime_telemetry,
+    coerce_backend_preference,
+    discover_runtime_devices,
+    hardware_hints_from_backend_probes,
+    recommend_worker_concurrency,
+    validate_worker_path_mapping,
+)
 from encodr_shared.worker_runtime import (
     BinaryProbe,
     HardwareProbe,
@@ -44,18 +52,13 @@ def build_capability_summary(
     execution_modes: list[str] = []
     if ffmpeg.discoverable:
         execution_modes.extend(["remux", "transcode"])
-    backend_probes = backend_probes if backend_probes is not None else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
+    backend_probes = (
+        backend_probes
+        if backend_probes is not None
+        else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
+    )
 
-    hardware_hints: list[str] = []
-    for probe in backend_probes:
-        if probe.backend == "cpu" or not probe.usable:
-            continue
-        hardware_hints.append(probe.backend)
-        usable_backends = probe.details.get("usable_backends") if isinstance(probe.details, dict) else None
-        if isinstance(usable_backends, list):
-            hardware_hints.extend(str(item) for item in usable_backends if item)
-    if not hardware_hints:
-        hardware_hints.append("cpu_only")
+    hardware_hints = hardware_hints_from_backend_probes(backend_probes)
     recommended_concurrency, recommendation_reason = recommend_worker_concurrency(
         cpu_count=os.cpu_count(),
         hardware_hints=hardware_hints,
@@ -99,14 +102,31 @@ def build_runtime_summary(
     configured = runtime_configuration or {}
     scratch_dir = str(configured.get("scratch_dir") or settings.scratch_dir or ".")
     ffmpeg = ffmpeg_probe or probe_binary(settings.ffmpeg_path)
-    preferred_backend = str(configured.get("preferred_backend") or settings.preferred_backend)
+    preferred_backend = coerce_backend_preference(
+        configured.get("preferred_backend") or settings.preferred_backend
+    )
     allow_cpu_fallback = bool(
         configured.get("allow_cpu_fallback")
         if isinstance(configured, dict) and configured.get("allow_cpu_fallback") is not None
         else settings.allow_cpu_fallback
     )
+    should_collect_backend_payload = include_backend_diagnostics or backend_probes is not None
+    if should_collect_backend_payload:
+        backend_probes = (
+            backend_probes
+            if backend_probes is not None
+            else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
+        )
+    else:
+        backend_probes = []
+    hardware_probes = [serialise_backend_probe(probe) for probe in backend_probes]
+    execution_backends: list[str] = []
+    if ffmpeg.discoverable:
+        execution_backends.extend(["remux", "transcode"])
+    hardware_acceleration = [
+        item for item in hardware_hints_from_backend_probes(backend_probes) if item != "cpu_only"
+    ]
     if include_backend_diagnostics:
-        backend_probes = backend_probes if backend_probes is not None else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
         backend_status = resolve_backend_runtime_status(
             preferred_backend,
             backend_probes,
@@ -133,7 +153,7 @@ def build_runtime_summary(
                 "marker_worker_path": validation.get("marker_worker_path"),
             }
         )
-    return {
+    return clean_runtime_summary_payload({
         "queue": settings.queue,
         "scratch_dir": scratch_dir,
         "scratch_status": probe_directory(scratch_dir, writable_required=True),
@@ -155,9 +175,21 @@ def build_runtime_summary(
             else 1
         ),
         "schedule_windows": list(configured.get("schedule_windows", [])) if isinstance(configured, dict) else [],
+        "current_job_id": None,
+        "current_backend": None,
+        "current_stage": None,
+        "current_progress_percent": None,
+        "current_progress_updated_at": None,
         "telemetry": collect_runtime_telemetry(),
         "last_completed_job_id": None,
-    }
+        "ffmpeg": serialise_binary_probe(ffmpeg),
+        "ffprobe": serialise_binary_probe(probe_binary(settings.ffprobe_path)),
+        "execution_backends": execution_backends,
+        "hardware_acceleration": hardware_acceleration,
+        "hardware_probes": hardware_probes,
+        "runtime_device_paths": discover_runtime_devices() if include_backend_diagnostics else [],
+        "transcode_backend_usable": backend_status.get("transcode_backend_usable"),
+    })
 
 
 def build_binary_summary(settings: WorkerAgentSettings) -> list[dict[str, object]]:
@@ -183,15 +215,19 @@ def build_worker_health(
         ffmpeg_probe=ffmpeg,
     )
     scratch = runtime_summary.get("scratch_status") or probe_directory(settings.scratch_dir or ".", writable_required=True)
-    backends = backend_probes if backend_probes is not None else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
+    backends = (
+        backend_probes
+        if backend_probes is not None
+        else (probe_execution_backends(settings.ffmpeg_path) if ffmpeg.discoverable else [])
+    )
     configured = runtime_configuration or {}
-    preferred_backend = str(configured.get("preferred_backend") or settings.preferred_backend)
+    preferred_backend = coerce_backend_preference(configured.get("preferred_backend") or settings.preferred_backend)
     allow_cpu_fallback = bool(
         configured.get("allow_cpu_fallback")
         if isinstance(configured, dict) and configured.get("allow_cpu_fallback") is not None
         else settings.allow_cpu_fallback
     )
-    backend_status = resolve_backend_runtime_status(
+    backend_status = runtime_summary.get("backend_diagnostic") or resolve_backend_runtime_status(
         preferred_backend,
         backends,
         allow_cpu_fallback=allow_cpu_fallback,

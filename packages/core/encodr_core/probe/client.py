@@ -9,8 +9,9 @@ from encodr_core.probe.parser import parse_ffprobe_json_output
 
 
 class FFprobeClient:
-    def __init__(self, binary_path: Path | str = "/usr/bin/ffprobe") -> None:
+    def __init__(self, binary_path: Path | str = "/usr/bin/ffprobe", *, timeout_seconds: int = 60) -> None:
         self.binary_path = Path(binary_path)
+        self.timeout_seconds = timeout_seconds
 
     def build_command(self, file_path: Path | str) -> list[str]:
         return [
@@ -34,11 +35,19 @@ class FFprobeClient:
                 capture_output=True,
                 text=True,
                 check=False,
+                timeout=self.timeout_seconds,
             )
         except FileNotFoundError as error:
             raise ProbeBinaryNotFoundError(
                 binary_path=self.binary_path,
                 file_path=resolved_path,
+            ) from error
+        except subprocess.TimeoutExpired as error:
+            raise ProbeProcessError(
+                file_path=resolved_path,
+                binary_path=self.binary_path,
+                exit_code=-1,
+                stderr=f"ffprobe timed out after {self.timeout_seconds} seconds.",
             ) from error
 
         if result.returncode != 0:
@@ -50,4 +59,3 @@ class FFprobeClient:
             )
 
         return parse_ffprobe_json_output(result.stdout, file_path=resolved_path)
-

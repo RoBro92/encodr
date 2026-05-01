@@ -2146,6 +2146,38 @@ describe("Encodr UI shell", () => {
     expect(screen.getByText(/previous film \(2024\)\.mkv/i)).toBeInTheDocument();
   });
 
+  it("shows resolved local worker binary paths in worker diagnostics", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/worker/status",
+        body: workerStatus({
+          ffmpeg: binaryStatus({ configured_path: "ffmpeg", resolved_path: "/opt/encodr/bin/ffmpeg" }),
+          ffprobe: binaryStatus({ configured_path: "ffprobe", resolved_path: "/opt/encodr/bin/ffprobe" }),
+        }),
+      },
+      {
+        method: "GET",
+        path: "/api/workers/worker-local-1",
+        body: workerInventory(),
+      },
+      {
+        method: "GET",
+        path: "/api/workers",
+        body: {
+          items: [workerInventory()],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/workers/worker-local-1", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^workers$/i, level: 1 })).toBeInTheDocument();
+    expect(screen.getByText(/ffmpeg path/i)).toBeInTheDocument();
+    expect(screen.getByText(/\/opt\/encodr\/bin\/ffmpeg \(configured: ffmpeg\)/i)).toBeInTheDocument();
+    expect(screen.getByText(/\/opt\/encodr\/bin\/ffprobe \(configured: ffprobe\)/i)).toBeInTheDocument();
+  });
+
   it("shows only the selected primary backend diagnostics on worker detail", async () => {
     mockFetchRoutes([
       { method: "GET", path: "/api/worker/status", body: workerStatus() },
@@ -2516,14 +2548,16 @@ function workerStatus(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function binaryStatus() {
+function binaryStatus(overrides: Record<string, unknown> = {}) {
   return {
     configured_path: "/usr/bin/ffmpeg",
+    resolved_path: "/usr/bin/ffmpeg",
     discoverable: true,
     exists: true,
     executable: true,
     status: "healthy",
     message: "Binary is discoverable and executable.",
+    ...overrides,
   };
 }
 

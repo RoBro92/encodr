@@ -6,9 +6,16 @@ from pathlib import Path
 import shutil
 from typing import Callable
 
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session
 
-from app.services.errors import ApiConflictError, ApiNotFoundError
+from app.services.errors import ApiConflictError, ApiNotFoundError, ApiValidationError
+from app.services.path_safety import (
+    configured_path_roots,
+    validate_backup_path,
+    validate_final_output_path,
+)
+from encodr_core.config import ConfigBundle
 from encodr_core.media import encodr_exclusion_reason
 from encodr_core.planning import ProcessingPlan
 from encodr_db.models import (
@@ -19,6 +26,7 @@ from encodr_db.models import (
     JobStatus,
     ManualReviewDecisionType,
     PlanSnapshot,
+    RETRYABLE_JOB_STATUSES,
     TrackedFile,
     WorkerType,
 )
@@ -29,6 +37,9 @@ logger = logging.getLogger("encodr.jobs")
 
 
 class JobsService:
+    def __init__(self, *, config_bundle: ConfigBundle | None = None) -> None:
+        self.config_bundle = config_bundle
+
     def list_jobs(
         self,
         session: Session,
@@ -91,6 +102,9 @@ class JobsService:
             tracked_file_id=tracked_file_id,
             plan_snapshot_id=plan_snapshot_id,
         )
+        tracked_files = TrackedFileRepository(session)
+        tracked_files.lock_for_update(tracked_file.id)
+        session.refresh(tracked_file)
         self._validate_processable_target(tracked_file)
         repository = JobRepository(session)
         if repository.has_active_job_for_tracked_file(tracked_file.id):
@@ -101,7 +115,8 @@ class JobsService:
             plan_snapshot=plan_snapshot,
             allow_review_approved=allow_review_approved,
         )
-        job = repository.create_job_from_plan(
+        job = self._create_job_from_plan(
+            session,
             tracked_file,
             plan_snapshot,
             preferred_worker_id=preferred_worker_id,
@@ -127,8 +142,15 @@ class JobsService:
 
     def retry_job(self, session: Session, *, job_id: str) -> Job:
         original_job = self.get_job(session, job_id=job_id)
-        if original_job.status not in {JobStatus.FAILED, JobStatus.MANUAL_REVIEW, JobStatus.SKIPPED, JobStatus.INTERRUPTED, JobStatus.CANCELLED}:
-            raise ApiConflictError("Only failed, interrupted, cancelled, manual-review, or skipped jobs can be retried.")
+        if original_job.status not in RETRYABLE_JOB_STATUSES:
+            raise ApiConflictError(
+                "Only failed, interrupted, cancelled, manual-review, or skipped jobs can be retried."
+            )
+        tracked_files = TrackedFileRepository(session)
+        tracked_files.lock_for_update(original_job.tracked_file_id)
+        session.refresh(original_job)
+        if original_job.tracked_file is not None:
+            session.refresh(original_job.tracked_file)
         self._validate_processable_target(original_job.tracked_file)
         self._validate_review_gate(
             session,
@@ -139,7 +161,8 @@ class JobsService:
         repository = JobRepository(session)
         if repository.has_active_job_for_tracked_file(original_job.tracked_file_id):
             raise ApiConflictError("An active job already exists for this tracked file.")
-        return repository.create_job_from_plan(
+        return self._create_job_from_plan(
+            session,
             original_job.tracked_file,
             original_job.plan_snapshot,
             attempt_count=original_job.attempt_count + 1,
@@ -233,16 +256,20 @@ class JobsService:
         return JobRepository(session).count_backup_jobs(search=search)
 
     def cleanup_expired_backups(self, session: Session, *, now: datetime | None = None) -> list[Job]:
-        jobs = JobRepository(session).cleanup_expired_backups(now=now)
+        jobs = JobRepository(session).cleanup_expired_backups(
+            now=now,
+            path_validator=self._validate_cleanup_backup_path,
+        )
         if jobs:
             logger.info("expired backups deleted", extra={"affected_count": len(jobs)})
         return jobs
 
     def delete_backup(self, session: Session, *, job_id: str) -> Job:
         job = self.get_job(session, job_id=job_id)
-        backup_path = _backup_path_for_job(job)
-        if not backup_path.exists():
+        backup_path = self._backup_path_for_job(job)
+        if not backup_path.exists() or backup_path.is_dir():
             raise ApiNotFoundError("Backup file could not be found.")
+        backup_path = self._backup_path_for_job(job)
         backup_path.unlink()
         job.backup_deleted_at = datetime.now(timezone.utc)
         logger.info("backup deleted", extra={"job_id": job.id, "backup_path": backup_path.as_posix()})
@@ -251,20 +278,37 @@ class JobsService:
 
     def restore_backup(self, session: Session, *, job_id: str) -> Job:
         job = self.get_job(session, job_id=job_id)
-        backup_path = _backup_path_for_job(job)
-        if not backup_path.exists():
+        tracked_files = TrackedFileRepository(session)
+        tracked_files.lock_for_update(job.tracked_file_id)
+        session.refresh(job)
+        if job.tracked_file is not None:
+            session.refresh(job.tracked_file)
+        if JobRepository(session).has_active_job_for_tracked_file(job.tracked_file_id):
+            raise ApiConflictError("An active job exists for this tracked file; restore the backup after it finishes.")
+        backup_path = self._backup_path_for_job(job)
+        if not backup_path.exists() or backup_path.is_dir():
             raise ApiNotFoundError("Backup file could not be found.")
-        source_path = Path(job.tracked_file.source_path)
-        replacement_path = Path(job.final_output_path or job.tracked_file.source_path)
+        source_path = self._media_path(job.tracked_file.source_path, label="source_path")
+        replacement_path = self._media_path(
+            job.final_output_path or job.tracked_file.source_path,
+            label="final_output_path",
+        )
+        restored_replacement: Path | None = None
         if replacement_path.exists():
             restored_replacement = replacement_path.with_name(
                 f"{replacement_path.stem}.encodr-restored-replacement{replacement_path.suffix}"
             )
+            restored_replacement = self._media_path(
+                restored_replacement,
+                label="restored_replacement_path",
+            )
             if restored_replacement.exists():
                 raise ApiConflictError("A previous restored replacement file already exists.")
-            shutil.move(replacement_path.as_posix(), restored_replacement.as_posix())
         if source_path.exists() and source_path != replacement_path:
             raise ApiConflictError("The original path is occupied and cannot be restored safely.")
+        if restored_replacement is not None:
+            shutil.move(replacement_path.as_posix(), restored_replacement.as_posix())
+        backup_path = self._backup_path_for_job(job)
         shutil.move(backup_path.as_posix(), source_path.as_posix())
         job.backup_restored_at = datetime.now(timezone.utc)
         job.tracked_file.lifecycle_state = FileLifecycleState.MANUAL_REVIEW
@@ -340,6 +384,8 @@ class JobsService:
     ) -> Job | None:
         repository = JobRepository(session)
         try:
+            TrackedFileRepository(session).lock_for_update(tracked_file.id)
+            session.refresh(tracked_file)
             self._validate_processable_target(tracked_file)
         except ApiConflictError:
             return None
@@ -354,15 +400,19 @@ class JobsService:
             )
         except ApiConflictError:
             return None
-        return repository.create_job_from_plan(
-            tracked_file,
-            plan_snapshot,
-            preferred_worker_id=preferred_worker_id,
-            pinned_worker_id=pinned_worker_id,
-            preferred_backend_override=preferred_backend_override,
-            schedule_windows=schedule_windows,
-            watched_job_id=watched_job_id,
-        )
+        try:
+            return self._create_job_from_plan(
+                session,
+                tracked_file,
+                plan_snapshot,
+                preferred_worker_id=preferred_worker_id,
+                pinned_worker_id=pinned_worker_id,
+                preferred_backend_override=preferred_backend_override,
+                schedule_windows=schedule_windows,
+                watched_job_id=watched_job_id,
+            )
+        except ApiConflictError:
+            return None
 
     def _resolve_target(
         self,
@@ -438,6 +488,59 @@ class JobsService:
         raise ApiConflictError(
             "This file requires manual review or protected-file approval before a job can be created."
         )
+
+    def _create_job_from_plan(
+        self,
+        session: Session,
+        tracked_file: TrackedFile,
+        plan_snapshot: PlanSnapshot,
+        **kwargs,
+    ) -> Job:
+        repository = JobRepository(session)
+        try:
+            with session.begin_nested():
+                return repository.create_job_from_plan(tracked_file, plan_snapshot, **kwargs)
+        except IntegrityError as error:
+            if repository.has_active_job_for_tracked_file(tracked_file.id):
+                raise ApiConflictError("An active job already exists for this tracked file.") from error
+            raise
+
+    def _backup_path_for_job(self, job: Job) -> Path:
+        backup_path = _backup_path_for_job(job)
+        roots = self._path_roots()
+        if roots is None:
+            return backup_path
+        safe_path = validate_backup_path(backup_path, roots, label="original_backup_path")
+        if safe_path is None:
+            raise ApiNotFoundError("No backup is recorded for this job.")
+        return safe_path
+
+    def _media_path(self, path: Path | str, *, label: str) -> Path:
+        roots = self._path_roots()
+        if roots is None:
+            return Path(path)
+        safe_path = validate_final_output_path(path, roots, label=label)
+        if safe_path is None:
+            raise ApiValidationError(f"{label} is required.")
+        return safe_path
+
+    def _validate_cleanup_backup_path(self, path: Path, job: Job) -> Path | None:
+        roots = self._path_roots()
+        if roots is None:
+            return path
+        try:
+            return validate_backup_path(path, roots, label="original_backup_path")
+        except ApiValidationError as error:
+            logger.warning(
+                "expired backup cleanup skipped unsafe path",
+                extra={"job_id": job.id, "backup_path": str(path), "reason": str(error)},
+            )
+            return None
+
+    def _path_roots(self):
+        if self.config_bundle is None:
+            return None
+        return configured_path_roots(self.config_bundle)
 
     @staticmethod
     def _normalise_datetime(value: datetime) -> datetime:

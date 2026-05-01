@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 import logging
 
 from fastapi import FastAPI, Request
@@ -53,7 +55,11 @@ def create_app(
     config_bundle: ConfigBundle | None = None,
     session_factory: sessionmaker | None = None,
     worker_execution_service: WorkerExecutionService | None = None,
+    start_background_services: bool | None = None,
 ) -> FastAPI:
+    should_start_background_services = (
+        config_bundle is None if start_background_services is None else start_background_services
+    )
     bundle = config_bundle or load_config_bundle()
     configure_component_logging(
         component="api",
@@ -61,10 +67,28 @@ def create_app(
         level=bundle.app.log_level.value,
         retention_days=bundle.app.diagnostics.retention_days,
     )
+
+    @asynccontextmanager
+    async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+        if should_start_background_services:
+            orchestration_loop = BackgroundOrchestrationLoop(
+                orchestration_service=app.state.orchestration_service,
+            )
+            app.state.orchestration_loop = orchestration_loop
+            orchestration_loop.start()
+        try:
+            yield
+        finally:
+            orchestration_loop = getattr(app.state, "orchestration_loop", None)
+            if orchestration_loop is not None:
+                orchestration_loop.stop()
+                app.state.orchestration_loop = None
+
     app = FastAPI(
         title="encodr API",
         version=APP_VERSION,
         description="API service for the encodr media ingestion preparation platform.",
+        lifespan=lifespan,
     )
 
     @app.exception_handler(SQLAlchemyTimeoutError)
@@ -117,14 +141,9 @@ def create_app(
         probe_client_factory=app.state.probe_client_factory,
     )
     app.state.orchestration_loop = None
-    if config_bundle is None:
-        orchestration_loop = BackgroundOrchestrationLoop(
-            orchestration_service=app.state.orchestration_service,
-        )
-        orchestration_loop.start()
-        app.state.orchestration_loop = orchestration_loop
 
     app.include_router(router, prefix=bundle.app.api.base_path)
     return app
+
 
 app = create_app()
