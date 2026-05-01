@@ -10,12 +10,13 @@ from encodr_shared.worker_runtime import discover_runtime_devices
 
 RUNTIME_COMPOSE_RELATIVE_PATH = Path(".runtime/compose.runtime.yml")
 RUNTIME_PROFILE_RELATIVE_PATH = Path(".runtime/compose.runtime.json")
-TARGET_SERVICES = ("api", "worker")
+TARGET_SERVICES = ("api", "worker", "worker-agent")
 
 
 @dataclass(frozen=True, slots=True)
 class RuntimeComposeProfile:
     dri_devices: tuple[str, ...]
+    dri_device_group_ids: tuple[str, ...]
     nvidia_devices_present: bool
     nvidia_runtime_available: bool
     warnings: tuple[str, ...]
@@ -35,6 +36,13 @@ def build_runtime_compose_profile() -> RuntimeComposeProfile:
     nvidia_runtime_available = detect_nvidia_runtime()
 
     warnings: list[str] = []
+    dri_device_group_ids: set[str] = set()
+    for device in dri_devices:
+        try:
+            dri_device_group_ids.add(str(Path(device).stat().st_gid))
+        except OSError:
+            warnings.append(f"Unable to inspect {device} for device group access; skipping group_add entry.")
+
     if nvidia_devices_present and not nvidia_runtime_available:
         warnings.append(
             "NVIDIA device nodes are present, but the Docker runtime does not report NVIDIA GPU support."
@@ -42,6 +50,7 @@ def build_runtime_compose_profile() -> RuntimeComposeProfile:
 
     return RuntimeComposeProfile(
         dri_devices=tuple(sorted(set(dri_devices))),
+        dri_device_group_ids=tuple(sorted(dri_device_group_ids, key=int)),
         nvidia_devices_present=nvidia_devices_present,
         nvidia_runtime_available=nvidia_runtime_available,
         warnings=tuple(warnings),
@@ -84,6 +93,10 @@ def render_runtime_compose(profile: RuntimeComposeProfile) -> str:
             lines.append("    devices:")
             for device in profile.dri_devices:
                 lines.append(f"      - {device}:{device}")
+        if profile.dri_devices and profile.dri_device_group_ids:
+            lines.append("    group_add:")
+            for group_id in profile.dri_device_group_ids:
+                lines.append(f'      - "{group_id}"')
         if profile.dri_devices:
             lines.append("    volumes:")
             lines.append("      - /sys/class/drm:/sys/class/drm:ro")
@@ -108,6 +121,7 @@ def write_runtime_compose_files(project_root: Path | str) -> RuntimeComposeProfi
         json.dumps(
             {
                 "dri_devices": list(profile.dri_devices),
+                "dri_device_group_ids": list(profile.dri_device_group_ids),
                 "nvidia_devices_present": profile.nvidia_devices_present,
                 "nvidia_runtime_available": profile.nvidia_runtime_available,
                 "warnings": list(profile.warnings),

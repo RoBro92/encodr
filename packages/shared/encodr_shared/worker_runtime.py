@@ -5,6 +5,7 @@ from pathlib import Path
 import os
 import shlex
 import shutil
+import stat
 import subprocess
 from typing import Any
 
@@ -437,7 +438,17 @@ def _device_probe(path: Path) -> dict[str, object]:
     readable = os.access(path, os.R_OK) if exists else False
     writable = os.access(path, os.W_OK) if exists else False
     is_char_device = False
+    uid: int | None = None
+    gid: int | None = None
+    mode: str | None = None
     if exists:
+        try:
+            stat_result = path.stat()
+            uid = stat_result.st_uid
+            gid = stat_result.st_gid
+            mode = f"{stat.S_IMODE(stat_result.st_mode):04o}"
+        except OSError:
+            pass
         try:
             is_char_device = path.is_char_device()
         except OSError:
@@ -462,6 +473,9 @@ def _device_probe(path: Path) -> dict[str, object]:
         "readable": readable,
         "writable": writable,
         "is_character_device": is_char_device,
+        "uid": uid,
+        "gid": gid,
+        "mode": mode,
         "status": status,
         "message": message,
     }

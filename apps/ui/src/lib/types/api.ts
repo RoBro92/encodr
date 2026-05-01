@@ -466,6 +466,9 @@ export type DevicePathStatus = {
   readable: boolean;
   writable: boolean;
   is_character_device: boolean;
+  uid?: number | null;
+  gid?: number | null;
+  mode?: string | null;
   status: string;
   message: string;
   vendor_id: string | null;
