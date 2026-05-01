@@ -642,6 +642,40 @@ def test_compose_env_sets_local_media_and_temp_fallbacks(repo_root: Path) -> Non
     assert env["ENCODR_TEMP_HOST_PATH"] == str(repo_root / ".runtime" / "temp")
 
 
+def test_compose_env_repairs_runtime_mount_permissions_for_non_root_containers(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    (tmp_path / ".env").write_text(
+        "ENCODR_RUNTIME_UID=2000\n"
+        "ENCODR_RUNTIME_GID=3000\n"
+        f"ENCODR_TEMP_HOST_PATH={tmp_path / 'scratch'}\n"
+        f"ENCODR_MEDIA_HOST_PATH={tmp_path / '.runtime' / 'media'}\n",
+        encoding="utf-8",
+    )
+    data_log = tmp_path / ".runtime" / "data" / "logs" / "api.jsonl"
+    data_log.parent.mkdir(parents=True)
+    data_log.write_text("", encoding="utf-8")
+    scratch_file = tmp_path / "scratch" / "job.tmp"
+    scratch_file.parent.mkdir(parents=True)
+    scratch_file.write_text("", encoding="utf-8")
+
+    chowned: list[tuple[Path, int, int]] = []
+
+    def fake_chown(path, uid: int, gid: int, *, follow_symlinks: bool = True) -> None:
+        chowned.append((Path(path), uid, gid))
+
+    monkeypatch.setattr(encodr_cli.os, "geteuid", lambda: 0)
+    monkeypatch.setattr(encodr_cli.os, "chown", fake_chown)
+
+    env = encodr_cli.compose_env(tmp_path)
+
+    assert env["ENCODR_RUNTIME_UID"] == "2000"
+    assert env["ENCODR_RUNTIME_GID"] == "3000"
+    assert (data_log, 2000, 3000) in chowned
+    assert (scratch_file, 2000, 3000) in chowned
+
+
 def test_example_configs_use_temp_for_transcode_scratch(repo_root: Path) -> None:
     app_config = (repo_root / "config" / "app.example.yaml").read_text(encoding="utf-8")
     worker_config = (repo_root / "config" / "workers.example.yaml").read_text(encoding="utf-8")
@@ -828,6 +862,45 @@ def test_install_script_normalises_host_config_paths_in_env(
     assert f"ENCODR_APP_CONFIG_FILE={tmp_path}/config/app.yaml" in result.stdout
     assert f"ENCODR_POLICY_CONFIG_FILE={tmp_path}/config/policy.yaml" in result.stdout
     assert f"ENCODR_WORKERS_CONFIG_FILE={tmp_path}/config/workers.yaml" in result.stdout
+
+
+def test_release_tree_sync_excludes_repo_only_files(tmp_path: Path) -> None:
+    source_root = tmp_path / "source"
+    target_root = tmp_path / "target"
+    required_files = [
+        "VERSION",
+        "encodr",
+        "encodr_cli.py",
+        "docker-compose.yml",
+        "config/app.example.yaml",
+        "infra/docker/api.Dockerfile",
+        "infra/scripts/bootstrap.sh",
+        "apps/api/pyproject.toml",
+        "apps/api/app/main.py",
+        "apps/ui/package.json",
+        "packages/shared/pyproject.toml",
+    ]
+    repo_only_files = [
+        "README.md",
+        "CHANGELOG.md",
+        "Makefile",
+        "pytest.ini",
+        ".dockerignore",
+        "docs/INSTALL.md",
+        "tests/unit/test_management_cli.py",
+        ".github/workflows/release.yml",
+    ]
+    for relative_path in [*required_files, *repo_only_files]:
+        path = source_root / relative_path
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(relative_path, encoding="utf-8")
+
+    encodr_cli.sync_release_tree(source_root=source_root, target_root=target_root)
+
+    for relative_path in required_files:
+        assert (target_root / relative_path).exists()
+    for relative_path in repo_only_files:
+        assert not (target_root / relative_path).exists()
 
 
 def test_install_script_syncs_generated_postgres_password_to_app_config(
