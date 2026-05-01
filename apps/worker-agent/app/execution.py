@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections.abc import Callable
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 
 from app.config import WorkerAgentSettings
@@ -24,6 +25,8 @@ from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload,
 from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
+
+logger = logging.getLogger("encodr.worker_agent.execution")
 
 
 class RemoteExecutionService:
@@ -167,6 +170,7 @@ class RemoteExecutionService:
                     )
                 )
             result = self._verify_and_place(
+                job_id=job_id,
                 plan=plan,
                 media_file=media_file,
                 staged_result=result,
@@ -352,6 +356,7 @@ class RemoteExecutionService:
     def _verify_and_place(
         self,
         *,
+        job_id: str,
         plan: ProcessingPlan,
         media_file: MediaFile,
         staged_result: ExecutionResult,
@@ -398,7 +403,12 @@ class RemoteExecutionService:
             source_media=media_file,
         )
         metrics = self._probe_media_savings(media_file, staged_result.output_path, verifier)
-        staged_metrics = {**metrics, "output_size_bytes": file_size_or_none(staged_result.output_path)}
+        source_size = metrics.get("input_size_bytes") or file_size_or_none(media_file.file_path)
+        staged_metrics = {
+            **metrics,
+            "input_size_bytes": source_size,
+            "output_size_bytes": file_size_or_none(staged_result.output_path),
+        }
         if not verification.passed:
             failure_message = verification.failures[0].message if verification.failures else "Output verification failed."
             return ExecutionResult(
@@ -425,9 +435,11 @@ class RemoteExecutionService:
 
         safety_metrics = {
             **metrics,
+            "input_size_bytes": source_size,
             "output_size_bytes": metrics.get("output_size_bytes") or staged_metrics["output_size_bytes"],
         }
         compression_failure = self._compression_safety_failure(
+            job_id=job_id,
             plan=plan,
             metrics=safety_metrics,
             staged_result=staged_result,
@@ -453,12 +465,49 @@ class RemoteExecutionService:
                 )
             )
 
-        replacement = self.replacement_service.place_verified_output(
-            source_path=media_file.file_path,
-            staged_output_path=staged_result.output_path,
-            plan=plan,
+        logger.info(
+            "replacement started",
+            extra={
+                "event": "replacement_started",
+                "job_id": job_id,
+                "source_path": str(media_file.file_path),
+                "staged_output_path": str(staged_result.output_path),
+            },
         )
+        try:
+            replacement = self.replacement_service.place_verified_output(
+                source_path=media_file.file_path,
+                staged_output_path=staged_result.output_path,
+                plan=plan,
+            )
+        except Exception as error:  # noqa: BLE001
+            replacement = ReplacementResult(
+                status=ReplacementStatus.FAILED,
+                failure_message="Verified output placement failed unexpectedly.",
+                details={
+                    "operation": "place_verified_output",
+                    "source_path": str(media_file.file_path),
+                    "staged_output_path": str(staged_result.output_path),
+                    "exception_type": type(error).__name__,
+                    "exception_message": str(error),
+                    "source_exists": Path(media_file.file_path).exists(),
+                    "staged_output_exists": Path(staged_result.output_path).exists(),
+                },
+            )
         if replacement.status != ReplacementStatus.SUCCEEDED:
+            logger.error(
+                "replacement failed",
+                extra={
+                    "event": "replacement_failed",
+                    "job_id": job_id,
+                    "source_path": str(media_file.file_path),
+                    "staged_output_path": str(staged_result.output_path),
+                    "final_output_path": str(replacement.final_output_path) if replacement.final_output_path is not None else None,
+                    "original_backup_path": str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
+                    "replacement_details": replacement.details,
+                    "replacement_failure_message": replacement.failure_message,
+                },
+            )
             return ExecutionResult(
                 mode=staged_result.mode,
                 status="failed",
@@ -485,8 +534,20 @@ class RemoteExecutionService:
 
         final_metrics = {
             **metrics,
+            "input_size_bytes": source_size,
             "output_size_bytes": file_size_or_none(replacement.final_output_path) or staged_metrics["output_size_bytes"],
         }
+        logger.info(
+            "replacement succeeded",
+            extra={
+                "event": "replacement_succeeded",
+                "job_id": job_id,
+                "source_path": str(media_file.file_path),
+                "final_output_path": str(replacement.final_output_path) if replacement.final_output_path is not None else None,
+                "original_backup_path": str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
+                "replacement_details": replacement.details,
+            },
+        )
         return ExecutionResult(
             mode=staged_result.mode,
             status="completed",
@@ -531,6 +592,7 @@ class RemoteExecutionService:
     def _compression_safety_failure(
         self,
         *,
+        job_id: str,
         plan: ProcessingPlan,
         metrics: dict[str, float | int | None],
         staged_result: ExecutionResult,
@@ -539,6 +601,15 @@ class RemoteExecutionService:
         failure = evaluate_execution_safety(plan=plan, metrics=metrics)
         if failure is None:
             return None
+        if failure.category == "output_larger_than_input":
+            logger.warning(
+                "output growth guard triggered",
+                extra={
+                    "event": "output_growth_guard_triggered",
+                    "job_id": job_id,
+                    **_output_growth_details(plan=plan, metrics=metrics),
+                },
+            )
         completed_at = datetime.now(timezone.utc)
         return ExecutionResult(
             mode=staged_result.mode,
@@ -658,6 +729,24 @@ def file_size_or_none(path: Path | str | None) -> int | None:
     if not resolved.exists() or not resolved.is_file():
         return None
     return resolved.stat().st_size
+
+
+def _output_growth_details(
+    *,
+    plan: ProcessingPlan,
+    metrics: dict[str, float | int | None],
+) -> dict[str, float | int | None]:
+    input_size = metrics.get("input_size_bytes")
+    output_size = metrics.get("output_size_bytes")
+    growth_percent = None
+    if input_size is not None and output_size is not None and float(input_size) > 0:
+        growth_percent = ((float(output_size) - float(input_size)) / float(input_size)) * 100.0
+    return {
+        "input_size_bytes": input_size,
+        "output_size_bytes": output_size,
+        "output_growth_percent": growth_percent,
+        "output_growth_guard_percent": plan.video.output_larger_than_input_review_percent,
+    }
 
 
 def _blocked_artifact_result(

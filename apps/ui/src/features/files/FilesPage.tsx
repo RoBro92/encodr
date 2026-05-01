@@ -11,9 +11,6 @@ import { ScheduleWindowsEditor } from "../../components/ScheduleWindowsEditor";
 import { SectionCard } from "../../components/SectionCard";
 import { StatusBadge } from "../../components/StatusBadge";
 import {
-  useActiveBulkQueueOperationsQuery,
-  useBulkQueueOperationQuery,
-  useCancelBulkQueueOperationMutation,
   useCreateDryRunJobsMutation,
   useCreateWatchedJobMutation,
   useFilesQuery,
@@ -21,14 +18,14 @@ import {
   useLibraryRootsQuery,
   useScanFolderMutation,
   useScansQuery,
-  useStartBulkQueueOperationMutation,
   useUpdateLibraryRootsMutation,
   useUpdateWatchedJobMutation,
   useWatchedJobsQuery,
   useWorkersQuery,
 } from "../../lib/api/hooks";
 import { ApiError } from "../../lib/api/client";
-import type { BulkQueueOperation, FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
+import { bulkProgressSummary, useBulkQueueProgress } from "../bulk-queue/BulkQueueProgress";
+import type { FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
 import { formatBitrate, formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -104,7 +101,6 @@ const BACKEND_OPTIONS = [
 
 const DRY_RUN_WARNING_THRESHOLD = 15;
 const LIBRARY_PAGE_SIZE = 25;
-const BULK_QUEUE_STORAGE_KEY = "encodr.activeBulkQueueOperationId";
 
 const ROOT_TABS: Array<{ key: RootKind; label: string }> = [
   { key: "movies", label: "Movies" },
@@ -210,12 +206,7 @@ export function FilesPage() {
   const [scanPage, setScanPage] = useState(1);
   const [expandedShows, setExpandedShows] = useState<Record<string, boolean>>({});
   const [expandedSeasons, setExpandedSeasons] = useState<Record<string, boolean>>({});
-  const [bulkOperationId, setBulkOperationId] = useState<string | null>(() =>
-    window.localStorage.getItem(BULK_QUEUE_STORAGE_KEY),
-  );
-  const [bulkProgressOpen, setBulkProgressOpen] = useState(false);
-  const [bulkToastMessage, setBulkToastMessage] = useState<string | null>(null);
-  const [lastBulkTerminalId, setLastBulkTerminalId] = useState<string | null>(null);
+  const bulkQueue = useBulkQueueProgress();
 
   const rootsQuery = useLibraryRootsQuery();
   const scansQuery = useScansQuery();
@@ -225,10 +216,6 @@ export function FilesPage() {
   const dryRunJobsQuery = useJobsQuery({ job_kind: "dry_run", limit: 100 });
   const scanMutation = useScanFolderMutation();
   const createDryRunJobsMutation = useCreateDryRunJobsMutation();
-  const startBulkQueueMutation = useStartBulkQueueOperationMutation();
-  const bulkOperationQuery = useBulkQueueOperationQuery(bulkOperationId);
-  const activeBulkOperationsQuery = useActiveBulkQueueOperationsQuery();
-  const cancelBulkOperationMutation = useCancelBulkQueueOperationMutation();
   const createWatchedJobMutation = useCreateWatchedJobMutation();
   const updateLibraryRootsMutation = useUpdateLibraryRootsMutation();
   const updateWatchedJobMutation = useUpdateWatchedJobMutation();
@@ -253,10 +240,9 @@ export function FilesPage() {
   const workers = workersQuery.data?.items ?? [];
   const allJobs = allJobsQuery.data?.items ?? [];
   const dryRunJobs = (dryRunJobsQuery.data?.items ?? []).filter((job) => latestDryRunJobIds.includes(job.id));
-  const activeBulkOperation = activeBulkOperationsQuery.data?.items[0] ?? null;
-  const bulkOperation = bulkOperationQuery.data ?? activeBulkOperation;
-  const bulkOperationActive = bulkOperation ? isBulkOperationActive(bulkOperation) : false;
-  const bulkOperationDone = bulkOperation ? isBulkOperationTerminal(bulkOperation) : false;
+  const bulkOperation = bulkQueue.operation;
+  const bulkOperationActive = bulkQueue.active;
+  const bulkOperationDone = bulkQueue.terminal;
   const moviesRoot = roots?.movies_root ?? null;
   const tvRoot = roots?.tv_root ?? null;
   const rootWatcherByKind = useMemo(() => {
@@ -504,28 +490,6 @@ export function FilesPage() {
   useEffect(() => {
     setScanPage((current) => Math.min(current, totalPages));
   }, [totalPages]);
-
-  useEffect(() => {
-    if (!bulkOperationId && activeBulkOperation?.id) {
-      setBulkOperationId(activeBulkOperation.id);
-      window.localStorage.setItem(BULK_QUEUE_STORAGE_KEY, activeBulkOperation.id);
-    }
-  }, [activeBulkOperation?.id, bulkOperationId]);
-
-  useEffect(() => {
-    if (!bulkOperation) {
-      return;
-    }
-    if (isBulkOperationTerminal(bulkOperation)) {
-      window.localStorage.removeItem(BULK_QUEUE_STORAGE_KEY);
-      if (bulkOperation.status === "completed" && lastBulkTerminalId !== bulkOperation.id) {
-        setBulkToastMessage(`Queue add complete: ${bulkOperation.queued_count} queued, ${bulkOperation.skipped_count + bulkOperation.blocked_count + bulkOperation.failed_count} skipped or blocked.`);
-        setLastBulkTerminalId(bulkOperation.id);
-      }
-      return;
-    }
-    window.localStorage.setItem(BULK_QUEUE_STORAGE_KEY, bulkOperation.id);
-  }, [bulkOperation, lastBulkTerminalId]);
 
   if (loading) {
     return <LoadingBlock label="Loading library" />;
@@ -857,14 +821,7 @@ export function FilesPage() {
   }
 
   async function startBulkQueue(payload: { folder_path?: string; selected_paths?: string[]; source_path?: string; backup_policy: string }) {
-    if (bulkOperationActive && bulkOperation) {
-      setBulkProgressOpen(true);
-      return;
-    }
-    const operation = await startBulkQueueMutation.mutateAsync(payload);
-    setBulkOperationId(operation.id);
-    window.localStorage.setItem(BULK_QUEUE_STORAGE_KEY, operation.id);
-    setBulkProgressOpen(true);
+    await bulkQueue.start(payload);
   }
 
   function runBatchJobs() {
@@ -918,11 +875,11 @@ export function FilesPage() {
       {createDryRunJobsMutation.error instanceof Error ? (
         <ErrorPanel title="Dry run failed" message={createDryRunJobsMutation.error.message} />
       ) : null}
-      {startBulkQueueMutation.error instanceof Error ? (
-        <ErrorPanel title="Job creation failed" message={startBulkQueueMutation.error.message} />
+      {bulkQueue.startError ? (
+        <ErrorPanel title="Job creation failed" message={bulkQueue.startError.message} />
       ) : null}
-      {cancelBulkOperationMutation.error instanceof Error ? (
-        <ErrorPanel title="Cancel bulk add failed" message={cancelBulkOperationMutation.error.message} />
+      {bulkQueue.cancelError ? (
+        <ErrorPanel title="Cancel bulk add failed" message={bulkQueue.cancelError.message} />
       ) : null}
       {createWatchedJobMutation.error instanceof Error ? (
         <ErrorPanel title="Unable to create watched job" message={createWatchedJobMutation.error.message} />
@@ -940,22 +897,6 @@ export function FilesPage() {
           <span>
             Choose your Movies and TV folders in <Link className="text-link" to={APP_ROUTES.config}>Settings</Link>.
           </span>
-        </div>
-      ) : null}
-
-      {bulkOperation && bulkOperationActive && !bulkProgressOpen ? (
-        <button className="bulk-progress-banner" type="button" onClick={() => setBulkProgressOpen(true)}>
-          <strong>Adding to queue</strong>
-          <span>{bulkProgressLabel(bulkOperation)}</span>
-        </button>
-      ) : null}
-
-      {bulkToastMessage ? (
-        <div className="bulk-toast" role="status">
-          <span>{bulkToastMessage}</span>
-          <button className="alert-dismiss-button" type="button" aria-label="Dismiss" onClick={() => setBulkToastMessage(null)}>
-            x
-          </button>
         </div>
       ) : null}
 
@@ -1051,9 +992,9 @@ export function FilesPage() {
                   className="button button-secondary"
                   type="button"
                   onClick={() => void processQueue()}
-                  disabled={!activeLibraryPath.trim() || startBulkQueueMutation.isPending || bulkOperationActive}
+                  disabled={!activeLibraryPath.trim() || bulkQueue.startPending || bulkOperationActive}
                 >
-                  {startBulkQueueMutation.isPending ? "Queueing..." : bulkOperationActive ? "Queueing..." : "Process Queue"}
+                  {bulkQueue.startPending ? "Queueing..." : bulkOperationActive ? "Queueing..." : "Process Queue"}
                 </button>
               ) : null}
             </div>
@@ -1355,9 +1296,9 @@ export function FilesPage() {
               className="button button-primary button-small"
               type="button"
               onClick={runBatchJobs}
-              disabled={!activeSelection || startBulkQueueMutation.isPending || bulkOperationActive}
+              disabled={!activeSelection || bulkQueue.startPending || bulkOperationActive}
             >
-              {startBulkQueueMutation.isPending ? "Creating..." : bulkOperationActive ? "Adding..." : "Create Jobs"}
+              {bulkQueue.startPending ? "Creating..." : bulkOperationActive ? "Adding..." : "Create Jobs"}
             </button>
           </div>
         </div>
@@ -1698,7 +1639,7 @@ export function FilesPage() {
                 <div className="card-stack">
                   <div className="info-strip">
                     <strong>{bulkOperationDone ? "Jobs created" : "Adding to queue"}</strong>
-                    <span>{bulkProgressLabel(bulkOperation)}</span>
+                    <span>{bulkProgressSummary(bulkOperation).outcomeLabel}</span>
                   </div>
                   <div className="metric-grid">
                     <div className="metric-panel">
@@ -1853,124 +1794,8 @@ export function FilesPage() {
         </div>
       ) : null}
 
-      {bulkProgressOpen && bulkOperation ? (
-        <BulkQueueProgressModal
-          operation={bulkOperation}
-          cancelling={cancelBulkOperationMutation.isPending}
-          onClose={() => setBulkProgressOpen(false)}
-          onCancel={() => cancelBulkOperationMutation.mutate(bulkOperation.id)}
-        />
-      ) : null}
     </div>
   );
-}
-
-function BulkQueueProgressModal({
-  operation,
-  cancelling,
-  onClose,
-  onCancel,
-}: {
-  operation: BulkQueueOperation;
-  cancelling: boolean;
-  onClose: () => void;
-  onCancel: () => void;
-}) {
-  const total = Math.max(operation.total_expected, operation.discovered_count, operation.queued_count + operation.skipped_count + operation.blocked_count + operation.failed_count);
-  const processed = operation.queued_count + operation.skipped_count + operation.blocked_count + operation.failed_count;
-  const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
-  const active = isBulkOperationActive(operation);
-  return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Adding to queue">
-      <section className="modal-panel">
-        <div className="card-stack">
-          <div>
-            <strong>Adding to queue</strong>
-            <p className="muted-copy">{operation.status_text ?? bulkProgressLabel(operation)}</p>
-          </div>
-
-          <div className="bulk-stage-list" aria-label="Bulk queue stages">
-            {["Scanning selection", "Itemising files", "Sending to queue", "Completed"].map((stage) => (
-              <span key={stage} className={bulkStageIsCurrent(operation, stage) ? "bulk-stage-current" : ""}>
-                {stage}
-              </span>
-            ))}
-          </div>
-
-          <div className="bulk-progress-meter">
-            <div className="bulk-progress-bar" role="progressbar" aria-label="Bulk queue progress" aria-valuemin={0} aria-valuemax={100} aria-valuenow={percent}>
-              <span style={{ width: `${percent}%` }} />
-            </div>
-            <strong>{operation.queued_count} / {total} files queued</strong>
-            <span>{bulkProgressLabel(operation)}</span>
-          </div>
-
-          <div className="metric-grid">
-            <div className="metric-panel">
-              <span className="metric-label">Queued</span>
-              <strong>{operation.queued_count}</strong>
-            </div>
-            <div className="metric-panel">
-              <span className="metric-label">Skipped</span>
-              <strong>{operation.skipped_count}</strong>
-            </div>
-            <div className="metric-panel">
-              <span className="metric-label">Blocked</span>
-              <strong>{operation.blocked_count}</strong>
-            </div>
-            <div className="metric-panel">
-              <span className="metric-label">Failed</span>
-              <strong>{operation.failed_count}</strong>
-            </div>
-          </div>
-
-          {operation.error_summary ? (
-            <div className="info-strip info-strip-warning">
-              <strong>Error summary</strong>
-              <span>{operation.error_summary}</span>
-            </div>
-          ) : null}
-
-          <div className="section-card-actions">
-            {active ? (
-              <button className="button button-secondary" type="button" onClick={onCancel} disabled={cancelling || operation.status === "cancelling"}>
-                {cancelling || operation.status === "cancelling" ? "Cancelling..." : "Cancel"}
-              </button>
-            ) : null}
-            <button className="button button-primary" type="button" onClick={onClose}>
-              {active ? "Close" : "Done"}
-            </button>
-          </div>
-        </div>
-      </section>
-    </div>
-  );
-}
-
-function isBulkOperationActive(operation: BulkQueueOperation) {
-  return ["pending", "running", "cancelling"].includes(operation.status);
-}
-
-function isBulkOperationTerminal(operation: BulkQueueOperation) {
-  return ["completed", "failed", "cancelled"].includes(operation.status);
-}
-
-function bulkProgressLabel(operation: BulkQueueOperation) {
-  if (operation.stage === "sending_to_queue" && operation.total_batches > 0) {
-    return `Adding batch ${operation.current_batch} of ${operation.total_batches}`;
-  }
-  if (operation.status === "completed") {
-    return `${operation.queued_count} queued, ${operation.skipped_count} skipped, ${operation.blocked_count} blocked, ${operation.failed_count} failed`;
-  }
-  return operation.status_text ?? titleCase(operation.stage.replace(/_/g, " "));
-}
-
-function bulkStageIsCurrent(operation: BulkQueueOperation, stageLabel: string) {
-  const stage = stageLabel.toLowerCase().replace(/\s+/g, "_");
-  if (stage === "completed") {
-    return isBulkOperationTerminal(operation);
-  }
-  return operation.stage === stage;
 }
 
 function pathLabel(path: string | null | undefined) {

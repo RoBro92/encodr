@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import shutil
 from enum import StrEnum
 from pathlib import Path
@@ -103,25 +104,82 @@ class ReplacementService:
                 final_output_path=final_output_path,
             )
 
-        source_path.rename(backup_path)
+        try:
+            source_path.rename(backup_path)
+        except OSError as error:
+            raise ReplacementError(
+                "Failed to move the source file to its backup path.",
+                source_path=source_path,
+                staged_output_path=staged_output_path,
+                final_output_path=final_output_path,
+                original_backup_path=backup_path,
+                details=_replacement_failure_details(
+                    operation="move_source_to_backup",
+                    error=error,
+                    source_path=source_path,
+                    staged_output_path=staged_output_path,
+                    final_output_path=final_output_path,
+                    original_backup_path=backup_path,
+                ),
+            ) from error
         try:
             shutil.move(staged_output_path.as_posix(), final_output_path.as_posix())
         except Exception as error:
+            details = _replacement_failure_details(
+                operation="move_verified_output_into_place",
+                error=error,
+                source_path=source_path,
+                staged_output_path=staged_output_path,
+                final_output_path=final_output_path,
+                original_backup_path=backup_path,
+            )
             if backup_path.exists() and not source_path.exists():
-                backup_path.rename(source_path)
+                try:
+                    backup_path.rename(source_path)
+                except OSError as rollback_error:
+                    details["rollback_error"] = str(rollback_error)
+                    details["rollback_errno"] = rollback_error.errno
+                    details["source_exists_after_rollback"] = source_path.exists()
+                    details["backup_exists_after_rollback"] = backup_path.exists()
+                    details["staged_output_exists_after_rollback"] = staged_output_path.exists()
+                else:
+                    details["rollback_succeeded"] = True
+                    details["source_exists_after_rollback"] = source_path.exists()
+                    details["backup_exists_after_rollback"] = backup_path.exists()
+                    details["staged_output_exists_after_rollback"] = staged_output_path.exists()
             raise ReplacementError(
                 "Failed to move the verified output into place.",
                 source_path=source_path,
                 staged_output_path=staged_output_path,
                 final_output_path=final_output_path,
                 original_backup_path=backup_path,
-                details={"error": str(error)},
+                details=details,
             ) from error
 
         deleted_original_source = False
         if plan.replace.delete_replaced_source and backup_path.exists():
-            backup_path.unlink()
-            deleted_original_source = True
+            try:
+                backup_path.unlink()
+                deleted_original_source = True
+            except OSError as error:
+                return ReplacementResult(
+                    status=ReplacementStatus.SUCCEEDED,
+                    final_output_path=final_output_path,
+                    original_backup_path=backup_path,
+                    deleted_original_source=False,
+                    details={
+                        "mode": "replace_in_place",
+                        "backup_delete_failed": True,
+                        **_replacement_failure_details(
+                            operation="delete_replaced_source_backup",
+                            error=error,
+                            source_path=source_path,
+                            staged_output_path=staged_output_path,
+                            final_output_path=final_output_path,
+                            original_backup_path=backup_path,
+                        ),
+                    },
+                )
 
         return ReplacementResult(
             status=ReplacementStatus.SUCCEEDED,
@@ -157,7 +215,14 @@ class ReplacementService:
                 source_path=source_path,
                 staged_output_path=staged_output_path,
                 final_output_path=final_output_path,
-                details={"error": str(error)},
+                details=_replacement_failure_details(
+                    operation="place_verified_output_alongside_source",
+                    error=error,
+                    source_path=source_path,
+                    staged_output_path=staged_output_path,
+                    final_output_path=final_output_path,
+                    original_backup_path=None,
+                ),
             ) from error
 
         return ReplacementResult(
@@ -169,3 +234,33 @@ class ReplacementService:
 
     def _build_backup_path(self, source_path: Path) -> Path:
         return source_path.with_name(f"{source_path.stem}.encodr-backup{source_path.suffix}")
+
+
+def _replacement_failure_details(
+    *,
+    operation: str,
+    error: BaseException,
+    source_path: Path,
+    staged_output_path: Path,
+    final_output_path: Path | None,
+    original_backup_path: Path | None,
+) -> dict[str, Any]:
+    error_number = getattr(error, "errno", None)
+    return {
+        "operation": operation,
+        "source_path": source_path.as_posix(),
+        "staged_output_path": staged_output_path.as_posix(),
+        "final_output_path": final_output_path.as_posix() if final_output_path is not None else None,
+        "original_backup_path": original_backup_path.as_posix() if original_backup_path is not None else None,
+        "errno": error_number,
+        "exception_type": type(error).__name__,
+        "exception_message": str(error),
+        "source_exists": source_path.exists(),
+        "staged_output_exists": staged_output_path.exists(),
+        "backup_exists": original_backup_path.exists() if original_backup_path is not None else None,
+        "permission_hint": (
+            "The destination filesystem denied access. Check NAS share ownership, group membership, and write permissions."
+            if error_number in {errno.EACCES, errno.EPERM}
+            else None
+        ),
+    }

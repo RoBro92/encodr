@@ -5,6 +5,7 @@ import { ConfigPage } from "../features/config/ConfigPage";
 import { DashboardPage } from "../features/dashboard/DashboardPage";
 import { LoginPage } from "../features/auth/LoginPage";
 import { ProtectedRoute } from "../features/auth/ProtectedRoute";
+import { BulkQueueProgressProvider } from "../features/bulk-queue/BulkQueueProgress";
 import { FilesPage } from "../features/files/FilesPage";
 import { JobsPage } from "../features/jobs/JobsPage";
 import { ReviewPage } from "../features/review/ReviewPage";
@@ -20,7 +21,9 @@ export function AppRoutes() {
       <Route
         element={
           <ProtectedRoute>
-            <AppShell />
+            <BulkQueueProgressProvider>
+              <AppShell />
+            </BulkQueueProgressProvider>
           </ProtectedRoute>
         }
       >

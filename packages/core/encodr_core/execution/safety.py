@@ -91,8 +91,7 @@ def _output_larger_than_input_failure(
     return ExecutionSafetyFailure(
         category="output_larger_than_input",
         message=(
-            f"Encoded output is {growth_percent:.1f}% larger than the source, above the "
-            f"configured review guard of {guard_percent}%."
+            f"Output grew by {growth_percent:.1f}%, exceeding configured guard of {guard_percent}%."
         ),
     )
 

@@ -1056,6 +1056,13 @@ function JobDetailDrawer({
                         { label: "Video saved", value: formatBytes(detail.video_space_saved_bytes) },
                         { label: "Audio and subtitle saved", value: formatBytes(detail.non_video_space_saved_bytes) },
                         { label: "Video reduction", value: formatPercent(detail.compression_reduction_percent) },
+                        { label: "Output growth", value: formatPercent(detail.output_growth_percent) },
+                        {
+                          label: "Output growth guard",
+                          value: detail.output_growth_guard_percent == null
+                            ? <MutedValue>Disabled</MutedValue>
+                            : `${detail.output_growth_guard_percent}%`,
+                        },
                       ]}
                     />
                   </CollapsibleSection>

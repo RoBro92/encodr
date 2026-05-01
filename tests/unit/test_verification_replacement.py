@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import shutil
 from pathlib import Path
 
@@ -129,7 +130,7 @@ def test_replacement_failure_preserves_original(tmp_path: Path, monkeypatch) -> 
     plan = replace_plan("non4k_remux_languages.json", source_path)
 
     def fail_move(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise OSError("move failed")
+        raise PermissionError(errno.EACCES, "permission denied")
 
     monkeypatch.setattr(shutil, "move", fail_move)
     result = service.place_verified_output(
@@ -139,8 +140,49 @@ def test_replacement_failure_preserves_original(tmp_path: Path, monkeypatch) -> 
     )
 
     assert result.status == ReplacementStatus.FAILED
+    assert result.details["operation"] == "move_verified_output_into_place"
+    assert result.details["source_path"] == source_path.as_posix()
+    assert result.details["staged_output_path"] == staged_path.as_posix()
+    assert result.details["final_output_path"] == source_path.as_posix()
+    assert result.details["original_backup_path"] == source_path.with_name("Example Film (2024).encodr-backup.mkv").as_posix()
+    assert result.details["errno"] == errno.EACCES
+    assert "NAS share" in result.details["permission_hint"]
+    assert result.details["source_exists"] is False
+    assert result.details["staged_output_exists"] is True
+    assert result.details["backup_exists"] is True
+    assert result.details["rollback_succeeded"] is True
+    assert result.details["source_exists_after_rollback"] is True
+    assert result.details["staged_output_exists_after_rollback"] is True
+    assert result.details["backup_exists_after_rollback"] is False
     assert source_path.read_text(encoding="utf-8") == "original"
     assert staged_path.read_text(encoding="utf-8") == "new"
+
+
+def test_source_backup_permission_failure_returns_context_without_mutating_files(tmp_path: Path, monkeypatch) -> None:
+    service = ReplacementService()
+    source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+    staged_path = tmp_path / "scratch" / "output.mkv"
+    source_path.parent.mkdir(parents=True)
+    staged_path.parent.mkdir(parents=True)
+    source_path.write_text("original", encoding="utf-8")
+    staged_path.write_text("new", encoding="utf-8")
+    plan = replace_plan("non4k_remux_languages.json", source_path)
+    original_rename = Path.rename
+
+    def fail_source_rename(self: Path, target: Path) -> Path:
+        if self == source_path:
+            raise PermissionError(errno.EACCES, "permission denied")
+        return original_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", fail_source_rename)
+    result = service.place_verified_output(source_path=source_path, staged_output_path=staged_path, plan=plan)
+
+    assert result.status == ReplacementStatus.FAILED
+    assert result.details["operation"] == "move_source_to_backup"
+    assert result.details["errno"] == errno.EACCES
+    assert source_path.read_text(encoding="utf-8") == "original"
+    assert staged_path.read_text(encoding="utf-8") == "new"
+    assert source_path.with_name("Example Film (2024).encodr-backup.mkv").exists() is False
 
 
 def test_output_probe_mismatch_with_plan_fails_verification(tmp_path: Path) -> None:

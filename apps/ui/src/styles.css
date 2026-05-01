@@ -2914,12 +2914,25 @@ pre {
 
 .settings-log-row {
   display: grid;
+  gap: 6px;
+  align-items: start;
+  padding: 8px 16px;
+  border-bottom: 1px solid #1e293b;
+  transition: background 140ms ease;
+}
+
+.settings-log-row-main {
+  display: grid;
   grid-template-columns: 160px 60px 100px minmax(0, 1fr);
   gap: var(--space-4);
   align-items: start;
-  padding: 6px 16px;
-  border-bottom: 1px solid #1e293b;
-  transition: background 140ms ease;
+}
+
+.settings-log-row-meta {
+  display: grid;
+  gap: 6px;
+  padding-left: calc(160px + 60px + 100px + (var(--space-4) * 3));
+  color: #94a3b8;
 }
 
 .settings-log-row:hover {
@@ -2946,9 +2959,37 @@ pre {
   letter-spacing: 0.06em;
 }
 
-.settings-log-row > span:last-child {
+.settings-log-row-main > span:last-child {
   color: #e5e7eb;
   overflow-wrap: anywhere;
+}
+
+.settings-log-fields {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 10px;
+  margin: 0;
+}
+
+.settings-log-fields div {
+  display: flex;
+  gap: 4px;
+  min-width: 0;
+}
+
+.settings-log-fields dt {
+  color: #93c5fd;
+}
+
+.settings-log-fields dt::after {
+  content: ":";
+}
+
+.settings-log-fields dd {
+  margin: 0;
+  color: #dbeafe;
+  overflow-wrap: anywhere;
+  white-space: pre-wrap;
 }
 
 .settings-log-row-error strong,
@@ -3385,14 +3426,84 @@ pre {
   box-shadow: var(--shadow-md);
 }
 
+.bulk-toast-warning {
+  border-color: color-mix(in srgb, var(--color-warning) 34%, var(--border));
+  background: color-mix(in srgb, var(--color-warning) 12%, var(--bg-panel-strong));
+}
+
+.bulk-toast-danger {
+  border-color: color-mix(in srgb, var(--color-danger) 34%, var(--border));
+  background: color-mix(in srgb, var(--color-danger) 10%, var(--bg-panel-strong));
+}
+
+.bulk-progress-sidebar {
+  display: grid;
+  gap: 7px;
+  width: 100%;
+  margin-top: 12px;
+  padding: 12px;
+  border: 1px solid color-mix(in srgb, var(--color-primary) 26%, var(--border));
+  border-radius: var(--radius-lg);
+  background: color-mix(in srgb, var(--color-primary) 8%, var(--bg-panel-strong));
+  color: var(--text);
+  text-align: left;
+  cursor: pointer;
+}
+
+.bulk-progress-sidebar-failed {
+  border-color: color-mix(in srgb, var(--color-danger) 30%, var(--border));
+  background: color-mix(in srgb, var(--color-danger) 8%, var(--bg-panel-strong));
+}
+
+.bulk-progress-sidebar-cancelled {
+  border-color: color-mix(in srgb, var(--color-warning) 30%, var(--border));
+  background: color-mix(in srgb, var(--color-warning) 8%, var(--bg-panel-strong));
+}
+
+.bulk-progress-sidebar-heading {
+  font-weight: 700;
+}
+
+.bulk-progress-sidebar-detail,
+.bulk-progress-sidebar-status {
+  color: var(--text-muted);
+  font-size: 0.82rem;
+}
+
+.bulk-progress-sidebar-bar {
+  display: block;
+  width: 100%;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--bg-panel-muted);
+}
+
+.bulk-progress-sidebar-bar span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--color-primary);
+}
+
+.bulk-modal-heading {
+  display: grid;
+  gap: 4px;
+}
+
 .bulk-stage-list {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
   gap: 8px;
+  padding: 0;
+  margin: 0;
+  list-style: none;
 }
 
-.bulk-stage-list span {
+.bulk-stage-list li {
   min-width: 0;
+  display: grid;
+  gap: 4px;
   padding: 8px 10px;
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
@@ -3403,10 +3514,32 @@ pre {
   text-align: center;
 }
 
+.bulk-stage-index {
+  width: 22px;
+  height: 22px;
+  margin: 0 auto;
+  display: inline-grid;
+  place-items: center;
+  border-radius: 999px;
+  background: var(--bg-panel-strong);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+
+.bulk-stage-label {
+  display: block;
+  line-height: 1.25;
+}
+
 .bulk-stage-list .bulk-stage-current {
   border-color: color-mix(in srgb, var(--color-primary) 34%, var(--border));
   background: color-mix(in srgb, var(--color-primary) 10%, var(--bg-panel-strong));
   color: var(--text);
+}
+
+.bulk-stage-list .bulk-stage-current .bulk-stage-index {
+  background: var(--color-primary);
+  color: var(--bg);
 }
 
 .bulk-progress-meter {
@@ -3419,6 +3552,20 @@ pre {
 }
 
 .bulk-progress-meter > span {
+  color: var(--text-muted);
+  font-size: 0.9rem;
+}
+
+.bulk-progress-summary {
+  display: grid;
+  gap: 4px;
+}
+
+.bulk-progress-summary > strong {
+  font-size: 0.96rem;
+}
+
+.bulk-progress-summary > span {
   color: var(--text-muted);
   font-size: 0.9rem;
 }
