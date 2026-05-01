@@ -97,23 +97,45 @@ def configure_component_logging(
     except OSError:
         resolved_dir = Path(tempfile.gettempdir()) / "encodr-logs"
         resolved_dir.mkdir(parents=True, exist_ok=True)
-    log_path = resolved_dir / f"{component}.jsonl"
     root_logger = logging.getLogger()
     numeric_level = getattr(logging, level.upper(), logging.INFO)
     root_logger.setLevel(numeric_level)
-    for handler in root_logger.handlers:
-        if getattr(handler, "_encodr_log_path", None) == log_path.as_posix():
-            return log_path
-    handler = TimedRotatingFileHandler(
-        log_path,
-        when="midnight",
-        backupCount=max(1, int(retention_days)),
-        encoding="utf-8",
-        utc=True,
-    )
-    handler.setLevel(numeric_level)
-    handler.setFormatter(JsonLogFormatter(component=component))
-    handler._encodr_log_path = log_path.as_posix()  # type: ignore[attr-defined]
+
+    def existing_handler_path(log_path: Path) -> Path | None:
+        for handler in root_logger.handlers:
+            if getattr(handler, "_encodr_log_path", None) == log_path.as_posix():
+                return log_path
+        return None
+
+    def create_handler(log_path: Path) -> TimedRotatingFileHandler:
+        handler = TimedRotatingFileHandler(
+            log_path,
+            when="midnight",
+            backupCount=max(1, int(retention_days)),
+            encoding="utf-8",
+            utc=True,
+        )
+        handler.setLevel(numeric_level)
+        handler.setFormatter(JsonLogFormatter(component=component))
+        handler._encodr_log_path = log_path.as_posix()  # type: ignore[attr-defined]
+        return handler
+
+    log_path = resolved_dir / f"{component}.jsonl"
+    existing_path = existing_handler_path(log_path)
+    if existing_path is not None:
+        return existing_path
+
+    try:
+        handler = create_handler(log_path)
+    except OSError:
+        resolved_dir = Path(tempfile.gettempdir()) / "encodr-logs"
+        resolved_dir.mkdir(parents=True, exist_ok=True)
+        log_path = resolved_dir / f"{component}.jsonl"
+        existing_path = existing_handler_path(log_path)
+        if existing_path is not None:
+            return existing_path
+        handler = create_handler(log_path)
+
     root_logger.addHandler(handler)
     cleanup_old_logs(resolved_dir, retention_days=retention_days)
     return log_path

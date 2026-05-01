@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.2 - 2026-05-01
+
+This hotfix restores updates for installs that moved to the 0.4.1 hardening release and then found the API container would not become healthy.
+
+- fixed API startup when preserved diagnostic log directories from older installs are not writable by the new non-root API user
+- repaired updater startup handling so preserved `/data` and scratch bind mounts are made writable for the non-root API and worker containers before Docker Compose starts them
+- trimmed update/install sync output so repo-only files such as docs, tests, CI workflow files, and root developer metadata are not copied into `/opt/encodr`
+- kept the non-root container hardening from 0.4.1 in place
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - `bash -n install.sh`
+  - `bash -n encodr`
+  - `bash -n infra/scripts/*.sh`
+
 ## 0.4.1 - 2026-05-01
 
 This release hardens Encodr for pre-production installs after the 0.4.0 release, with safer worker result handling, more reliable queue behavior, and clearer runtime reporting.

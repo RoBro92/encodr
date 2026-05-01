@@ -2,9 +2,17 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
+import logging
 import zipfile
 
-from encodr_shared.diagnostics import build_diagnostic_bundle, read_log_events, redact_mapping, redact_secrets
+import encodr_shared.diagnostics as diagnostics
+from encodr_shared.diagnostics import (
+    build_diagnostic_bundle,
+    configure_component_logging,
+    read_log_events,
+    redact_mapping,
+    redact_secrets,
+)
 
 
 def test_diagnostic_redaction_removes_secrets() -> None:
@@ -66,3 +74,30 @@ def test_diagnostic_bundle_includes_expected_sections_and_redacts_paths(tmp_path
         }.issubset(set(archive.namelist()))
         assert "/media/Movies" not in archive.read("jobs_recent.json").decode("utf-8")
         assert "secret" not in archive.read("config_summary_redacted.json").decode("utf-8")
+
+
+def test_component_logging_falls_back_when_existing_log_file_cannot_be_opened(tmp_path, monkeypatch) -> None:
+    requested_log_dir = tmp_path / "data" / "logs"
+    requested_log_dir.mkdir(parents=True)
+    fallback_temp_dir = tmp_path / "tmp"
+    fallback_temp_dir.mkdir()
+    original_handler = diagnostics.TimedRotatingFileHandler
+
+    def handler_factory(filename, *args, **kwargs):
+        if str(filename) == (requested_log_dir / "api.jsonl").as_posix():
+            raise PermissionError("existing log directory is not writable")
+        return original_handler(filename, *args, **kwargs)
+
+    monkeypatch.setattr(diagnostics, "TimedRotatingFileHandler", handler_factory)
+    monkeypatch.setattr(diagnostics.tempfile, "gettempdir", lambda: fallback_temp_dir.as_posix())
+
+    log_path = configure_component_logging(component="api", log_dir=requested_log_dir)
+    try:
+        assert log_path == fallback_temp_dir / "encodr-logs" / "api.jsonl"
+        assert log_path.exists()
+    finally:
+        root_logger = logging.getLogger()
+        for handler in list(root_logger.handlers):
+            if getattr(handler, "_encodr_log_path", None) == log_path.as_posix():
+                root_logger.removeHandler(handler)
+                handler.close()
