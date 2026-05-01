@@ -48,6 +48,111 @@ from encodr_shared import (
 )
 
 
+RESET_ADMIN_CONTAINER_SCRIPT = r"""
+import json
+import sys
+
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from app.core.security import PasswordHashService
+from encodr_core.config import load_config_bundle
+from encodr_db.models import AuditEventType, AuditOutcome, UserRole
+from encodr_db.repositories import AuditEventRepository, UserRepository
+
+payload = json.loads(sys.stdin.read())
+username = str(payload["username"])
+password = str(payload["password"])
+
+if len(password) < 8:
+    print("Password must be at least 8 characters.")
+    raise SystemExit(1)
+
+bundle = load_config_bundle()
+engine = create_engine(bundle.app.database.dsn, future=True)
+Session = sessionmaker(engine, future=True, expire_on_commit=False)
+password_hasher = PasswordHashService(bundle.app.auth.password_hash_scheme)
+
+with Session() as session:
+    users = UserRepository(session)
+    user = users.get_by_username(username)
+    created = False
+    if user is None:
+        if users.any_users_exist():
+            print(f"Admin user '{username}' does not exist.")
+            raise SystemExit(1)
+        user = users.create_user(
+            username=username,
+            password_hash=password_hasher.hash_password(password),
+            role=UserRole.ADMIN,
+            is_active=True,
+            is_bootstrap_admin=True,
+        )
+        created = True
+    else:
+        user.password_hash = password_hasher.hash_password(password)
+        user.role = UserRole.ADMIN
+        user.is_active = True
+        session.flush()
+
+    AuditEventRepository(session).add_event(
+        event_type=AuditEventType.ADMIN_RESET,
+        outcome=AuditOutcome.SUCCESS,
+        user=user,
+        details={"created": created, "via": "cli"},
+    )
+    session.commit()
+
+print(f"Admin user '{username}' {'created' if created else 'updated'} successfully.")
+""".strip()
+
+
+DEV_SEED_UI_CONTAINER_SCRIPT = r"""
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from encodr_core.config import load_config_bundle
+from encodr_db.dev_seed_ui import seed_ui_demo_data
+
+bundle = load_config_bundle()
+engine = create_engine(bundle.app.database.dsn, future=True)
+Session = sessionmaker(engine, future=True, expire_on_commit=False)
+summary = seed_ui_demo_data(Session, bundle)
+print("Seeded Encodr UI demo data. This command is development/demo-only and never runs automatically.")
+print(f"Worker: {summary.worker_display_name} ({summary.worker_key})")
+print(f"Demo media root: {summary.demo_media_root}")
+print(f"Tracked files: {summary.tracked_files_seeded}")
+print(f"Jobs: {summary.jobs_seeded}")
+print(f"Review items: {summary.review_items_seeded}")
+print("Run './encodr dev-clear-ui-seed' to remove the demo records.")
+""".strip()
+
+
+DEV_CLEAR_UI_SEED_CONTAINER_SCRIPT = r"""
+from sqlalchemy import create_engine
+from sqlalchemy.orm import sessionmaker
+
+from encodr_core.config import load_config_bundle
+from encodr_db.dev_seed_ui import clear_ui_demo_data
+
+bundle = load_config_bundle()
+engine = create_engine(bundle.app.database.dsn, future=True)
+Session = sessionmaker(engine, future=True, expire_on_commit=False)
+summary = clear_ui_demo_data(Session, bundle)
+print("Cleared Encodr UI demo data.")
+print(f"Demo media root: {summary.demo_media_root}")
+print(f"Tracked files removed: {summary.tracked_files_removed}")
+print(f"Jobs removed: {summary.jobs_removed}")
+print(f"Review items removed: {summary.review_items_removed}")
+if summary.worker_restored:
+    print("Local worker settings restored to their pre-demo values.")
+elif summary.worker_removed:
+    print("Demo-created local worker removed.")
+else:
+    print("No demo local worker settings were found.")
+""".strip()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
@@ -131,7 +236,15 @@ def build_parser() -> argparse.ArgumentParser:
 
     reset_admin_parser = subparsers.add_parser("reset-admin", help="Create or reset an admin user password.")
     reset_admin_parser.add_argument("--username", default="admin", help="Admin username to create or reset.")
-    reset_admin_parser.add_argument("--password", help="New password. If omitted, prompt securely.")
+    reset_admin_parser.add_argument(
+        "--password",
+        help="New password. Deprecated because command-line arguments can expose secrets; use --password-stdin or omit to prompt.",
+    )
+    reset_admin_parser.add_argument(
+        "--password-stdin",
+        action="store_true",
+        help="Read the new password from stdin for non-interactive automation.",
+    )
     reset_admin_parser.set_defaults(func=command_reset_admin)
 
     mount_parser = subparsers.add_parser("mount-setup", help="Generate and validate storage mount guidance.")
@@ -276,6 +389,13 @@ def command_dev_ui(args: argparse.Namespace) -> int:
 def command_dev_seed_ui(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bundle = load_bundle(project_root)
+    if should_run_db_command_in_api_container(bundle, project_root):
+        return run_api_container_python(
+            project_root,
+            DEV_SEED_UI_CONTAINER_SCRIPT,
+            operation="dev-seed-ui",
+        )
+
     session_factory = create_local_cli_session_factory(bundle, project_root)
     from encodr_db.dev_seed_ui import seed_ui_demo_data
 
@@ -293,6 +413,13 @@ def command_dev_seed_ui(args: argparse.Namespace) -> int:
 def command_dev_clear_ui_seed(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bundle = load_bundle(project_root)
+    if should_run_db_command_in_api_container(bundle, project_root):
+        return run_api_container_python(
+            project_root,
+            DEV_CLEAR_UI_SEED_CONTAINER_SCRIPT,
+            operation="dev-clear-ui-seed",
+        )
+
     session_factory = create_local_cli_session_factory(bundle, project_root)
     from encodr_db.dev_seed_ui import clear_ui_demo_data
 
@@ -325,6 +452,16 @@ def command_doctor(args: argparse.Namespace) -> int:
         runtime = dockerised_payload["runtime"]
         storage = dockerised_payload["storage"]
         doctor_mode = "docker-compose/api-container"
+    elif should_run_db_command_in_api_container(bundle, project_root):
+        system_service_class = get_system_service_class()
+        system = system_service_class(
+            config_bundle=bundle,
+            session_factory=None,
+            app_version=read_version(project_root),
+        )
+        runtime = system.runtime_status()
+        storage = system.storage_status()
+        doctor_mode = "docker-compose/api-container-unavailable"
     else:
         session_factory = create_session_factory(bundle)
         system_service_class = get_system_service_class()
@@ -526,12 +663,21 @@ def command_update(args: argparse.Namespace) -> int:
 def command_reset_admin(args: argparse.Namespace) -> int:
     project_root = Path(args.project_root).resolve()
     bundle = load_bundle(project_root)
-    session_factory = create_local_cli_session_factory(bundle, project_root)
-    password = args.password or getpass.getpass("New admin password: ")
+    password = read_reset_admin_password(args)
+    if password is None:
+        return 1
     if len(password) < 8:
         print("Password must be at least 8 characters.")
         return 1
 
+    if should_run_db_command_in_api_container(bundle, project_root):
+        return run_reset_admin_in_api_container(
+            project_root,
+            username=args.username,
+            password=password,
+        )
+
+    session_factory = create_local_cli_session_factory(bundle, project_root)
     password_hash_service_class = get_password_hash_service_class()
     password_hasher = password_hash_service_class(bundle.app.auth.password_hash_scheme)
     with session_factory() as session:
@@ -566,6 +712,28 @@ def command_reset_admin(args: argparse.Namespace) -> int:
 
     print(f"Admin user '{args.username}' {'created' if created else 'updated'} successfully.")
     return 0
+
+
+def read_reset_admin_password(args: argparse.Namespace) -> str | None:
+    password_arg = getattr(args, "password", None)
+    password_stdin = bool(getattr(args, "password_stdin", False))
+    if password_arg and password_stdin:
+        print("Use either --password or --password-stdin, not both.")
+        return None
+    if password_stdin:
+        password = sys.stdin.readline().rstrip("\n")
+        if not password:
+            print("No password was read from stdin.")
+            return None
+        return password
+    if password_arg:
+        print(
+            "Warning: --password can expose secrets in shell history and process listings; "
+            "use --password-stdin or omit it to prompt securely.",
+            file=sys.stderr,
+        )
+        return password_arg
+    return getpass.getpass("New admin password: ")
 
 
 def command_mount_setup(args: argparse.Namespace) -> int:
@@ -697,8 +865,10 @@ def repair_runtime_mount_permissions(project_root: Path, *, env: dict[str, str],
         return
 
     runtime_root = project_root / ".runtime"
+    logs_root = runtime_root / "data" / "logs"
     candidate_roots = [
         runtime_root / "data",
+        logs_root,
         Path(env["ENCODR_TEMP_HOST_PATH"]).expanduser(),
     ]
     media_path = Path(env["ENCODR_MEDIA_HOST_PATH"]).expanduser()
@@ -710,13 +880,42 @@ def repair_runtime_mount_permissions(project_root: Path, *, env: dict[str, str],
         candidate_roots.append(media_path)
 
     for root in candidate_roots:
+        repair_runtime_tree_owner(root, uid=uid, gid=gid)
+
+
+def repair_runtime_tree_owner(root: Path, *, uid: int, gid: int) -> None:
+    if path_has_symlink_component(root):
+        return
+    try:
+        root.mkdir(parents=True, exist_ok=True)
+    except OSError:
+        return
+    if path_has_symlink_component(root):
+        return
+    for path in runtime_tree_paths_without_symlink_traversal(root):
+        repair_path_owner(path, uid=uid, gid=gid)
+
+
+def path_has_symlink_component(path: Path) -> bool:
+    for candidate in [path, *path.parents]:
         try:
-            root.mkdir(parents=True, exist_ok=True)
+            if candidate.is_symlink():
+                return True
         except OSError:
-            continue
-        repair_path_owner(root, uid=uid, gid=gid)
-        for child in root.rglob("*"):
-            repair_path_owner(child, uid=uid, gid=gid)
+            return True
+    return False
+
+
+def runtime_tree_paths_without_symlink_traversal(root: Path):
+    yield root
+    for dirpath, dirnames, filenames in os.walk(root, followlinks=False):
+        for dirname in list(dirnames):
+            child = Path(dirpath) / dirname
+            yield child
+            if child.is_symlink():
+                dirnames.remove(dirname)
+        for filename in filenames:
+            yield Path(dirpath) / filename
 
 
 def repair_path_owner(path: Path, *, uid: int, gid: int) -> None:
@@ -865,7 +1064,9 @@ def create_local_cli_session_factory(bundle: ConfigBundle, project_root: Path) -
 
 def host_reachable_database_dsn(dsn: str, project_root: Path) -> str:
     parsed = urlsplit(dsn)
-    if parsed.hostname != "postgres" or Path("/.dockerenv").exists():
+    if parsed.hostname != "postgres" or running_inside_container():
+        return dsn
+    if not compose_uses_local_dev_datastore_ports(project_root):
         return dsn
 
     host_port = read_env_value(project_root / ".env", "POSTGRES_PORT") or str(parsed.port or 5432)
@@ -875,13 +1076,164 @@ def host_reachable_database_dsn(dsn: str, project_root: Path) -> str:
     return parsed._replace(netloc=f"{credentials}127.0.0.1:{host_port}").geturl()
 
 
+def running_inside_container() -> bool:
+    return Path("/.dockerenv").exists()
+
+
+def database_dsn_targets_compose_postgres(dsn: str) -> bool:
+    try:
+        parsed = urlsplit(dsn)
+    except ValueError:
+        return False
+    return parsed.hostname == "postgres"
+
+
+def compose_uses_local_dev_datastore_ports(project_root: Path) -> bool:
+    environment = (read_env_value(project_root / ".env", "ENCODR_ENV") or "").strip().strip("\"'").lower()
+    return (
+        (project_root / ".git").exists()
+        and (project_root / "infra" / "compose" / "local.override.yml").exists()
+        and environment == "development"
+    )
+
+
+def should_run_db_command_in_api_container(bundle: ConfigBundle, project_root: Path) -> bool:
+    return (
+        database_dsn_targets_compose_postgres(str(bundle.app.database.dsn))
+        and not running_inside_container()
+        and not compose_uses_local_dev_datastore_ports(project_root)
+    )
+
+
+def run_reset_admin_in_api_container(project_root: Path, *, username: str, password: str) -> int:
+    payload = json.dumps({"username": username, "password": password})
+    return run_api_container_python(
+        project_root,
+        RESET_ADMIN_CONTAINER_SCRIPT,
+        operation="reset-admin",
+        input_text=payload,
+        sensitive_values=[password],
+    )
+
+
+def run_api_container_python(
+    project_root: Path,
+    script: str,
+    *,
+    operation: str,
+    input_text: str | None = None,
+    sensitive_values: list[str] | None = None,
+) -> int:
+    secrets = sensitive_values or []
+    datastore_result = subprocess.run(
+        compose_command(project_root, "up", "-d", "postgres", "redis"),
+        cwd=project_root,
+        env=compose_env(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if datastore_result.returncode != 0:
+        print(f"Unable to prepare private datastore services for {operation}.")
+        print("Confirm Docker is running, then run: docker compose up -d postgres redis")
+        details = first_nonempty_line(datastore_result.stderr, datastore_result.stdout, sensitive_values=secrets)
+        if details:
+            print(f"Docker reported: {details}")
+        return int(datastore_result.returncode or 1)
+
+    run_command = compose_command(project_root, "run", "--rm", "--no-deps", "-T", "api", "python", "-c", script)
+    run_result = subprocess.run(
+        run_command,
+        cwd=project_root,
+        env=compose_env(project_root),
+        input=input_text,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if run_result.returncode == 0:
+        print_container_command_output(run_result)
+        return 0
+
+    exec_command = compose_command(project_root, "exec", "-T", "api", "python", "-c", script)
+    exec_result = subprocess.run(
+        exec_command,
+        cwd=project_root,
+        env=compose_env(project_root),
+        input=input_text,
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if exec_result.returncode == 0:
+        print_container_command_output(exec_result)
+        return 0
+
+    print_api_container_command_error(operation, exec_result, run_result, sensitive_values=secrets)
+    return int(run_result.returncode or exec_result.returncode or 1)
+
+
+def print_container_command_output(result: subprocess.CompletedProcess[str]) -> None:
+    if result.stdout:
+        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n")
+    if result.stderr:
+        print(result.stderr, end="" if result.stderr.endswith("\n") else "\n", file=sys.stderr)
+
+
+def print_api_container_command_error(
+    operation: str,
+    exec_result: subprocess.CompletedProcess[str],
+    run_result: subprocess.CompletedProcess[str],
+    *,
+    sensitive_values: list[str] | None = None,
+) -> None:
+    print(f"Unable to run {operation} inside the API container.")
+    print("Confirm Docker is running and the Encodr stack/API image exists, then run: docker compose up -d --build")
+    details = first_nonempty_line(
+        run_result.stderr,
+        run_result.stdout,
+        exec_result.stderr,
+        exec_result.stdout,
+        sensitive_values=sensitive_values or [],
+    )
+    if details:
+        print(f"Docker reported: {details}")
+
+
+def first_nonempty_line(*values: str | None, sensitive_values: list[str] | None = None) -> str | None:
+    for value in values:
+        if not value:
+            continue
+        for line in value.splitlines():
+            stripped = line.strip()
+            if stripped:
+                return redact_sensitive_text(stripped, sensitive_values=sensitive_values or [])
+    return None
+
+
+def redact_sensitive_text(value: str, *, sensitive_values: list[str]) -> str:
+    redacted = value
+    for secret in sensitive_values:
+        if secret:
+            redacted = redacted.replace(secret, "[redacted]")
+    redacted = re.sub(
+        r"([A-Za-z][A-Za-z0-9+.-]*://[^:/\s@]+:)([^@\s]+)(@)",
+        r"\1[redacted]\3",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)\b([A-Z0-9_]*(?:PASSWORD|SECRET|TOKEN|KEY)[A-Z0-9_]*=)([^\s]+)",
+        r"\1[redacted]",
+        redacted,
+    )
+    return redacted
+
+
 def maybe_collect_dockerised_doctor_payload(project_root: Path) -> dict[str, object] | None:
     if not should_use_dockerised_doctor(project_root):
         return None
 
-    diagnostics = docker_compose_exec_api_python(
-        project_root,
-        """
+    diagnostics_script = """
 import json
 from pathlib import Path
 from sqlalchemy import create_engine
@@ -907,8 +1259,10 @@ print(json.dumps(
     },
     default=str,
 ))
-""".strip(),
-    )
+""".strip()
+    diagnostics = docker_compose_exec_api_python(project_root, diagnostics_script)
+    if diagnostics is None:
+        diagnostics = docker_compose_run_api_python(project_root, diagnostics_script)
 
     if diagnostics is None:
         return None
@@ -937,23 +1291,37 @@ def should_use_dockerised_doctor(project_root: Path) -> bool:
         text=True,
         check=False,
     )
-    if compose_version.returncode != 0:
-        return False
+    return compose_version.returncode == 0
 
-    api_exec = subprocess.run(
-        compose_command(project_root, "exec", "-T", "api", "true"),
+
+def docker_compose_exec_api_python(project_root: Path, script: str) -> str | None:
+    result = subprocess.run(
+        compose_command(project_root, "exec", "-T", "api", "python", "-c", script),
         cwd=project_root,
         env=compose_env(project_root),
         capture_output=True,
         text=True,
         check=False,
     )
-    return api_exec.returncode == 0
+    if result.returncode != 0:
+        return None
+    return result.stdout
 
 
-def docker_compose_exec_api_python(project_root: Path, script: str) -> str | None:
+def docker_compose_run_api_python(project_root: Path, script: str) -> str | None:
+    datastore_result = subprocess.run(
+        compose_command(project_root, "up", "-d", "postgres", "redis"),
+        cwd=project_root,
+        env=compose_env(project_root),
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if datastore_result.returncode != 0:
+        return None
+
     result = subprocess.run(
-        compose_command(project_root, "exec", "-T", "api", "python", "-c", script),
+        compose_command(project_root, "run", "--rm", "--no-deps", "-T", "api", "python", "-c", script),
         cwd=project_root,
         env=compose_env(project_root),
         capture_output=True,
@@ -981,7 +1349,7 @@ def compose_command(project_root: Path, *compose_args: str) -> list[str]:
     local_override = project_root / "infra" / "compose" / "local.override.yml"
     runtime_override = project_root / ".runtime" / "compose.runtime.yml"
     command.extend(["-f", "docker-compose.yml"])
-    if (project_root / ".git").exists() and local_override.exists():
+    if compose_uses_local_dev_datastore_ports(project_root):
         command.extend(["-f", str(local_override)])
     if runtime_override.exists():
         command.extend(["-f", str(runtime_override)])
