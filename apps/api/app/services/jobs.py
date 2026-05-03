@@ -157,6 +157,11 @@ class JobsService:
             tracked_file=original_job.tracked_file,
             plan_snapshot=original_job.plan_snapshot,
             allow_review_approved=False,
+            operational_retry_job_id=(
+                original_job.id
+                if self._can_retry_operational_manual_review(original_job)
+                else None
+            ),
         )
         repository = JobRepository(session)
         if repository.has_active_job_for_tracked_file(original_job.tracked_file_id):
@@ -467,18 +472,31 @@ class JobsService:
         tracked_file: TrackedFile,
         plan_snapshot: PlanSnapshot,
         allow_review_approved: bool,
+        operational_retry_job_id: str | None = None,
     ) -> None:
         latest_job = JobRepository(session).get_latest_for_tracked_file(tracked_file.id)
         latest_decision = ManualReviewDecisionRepository(session).get_latest_for_tracked_file(tracked_file.id)
-        requires_review = bool(
+        protected_or_planner_review_required = bool(
             tracked_file.operator_protected
             or tracked_file.is_protected
             or plan_snapshot.action.value == "manual_review"
             or plan_snapshot.should_treat_as_protected
-            or (
-                latest_job is not None
-                and latest_job.status == JobStatus.MANUAL_REVIEW
-            )
+        )
+        latest_job_requires_review = bool(
+            latest_job is not None
+            and latest_job.status == JobStatus.MANUAL_REVIEW
+        )
+        if (
+            operational_retry_job_id is not None
+            and latest_job is not None
+            and latest_job.id == operational_retry_job_id
+            and latest_job_requires_review
+            and not protected_or_planner_review_required
+        ):
+            return
+        requires_review = bool(
+            protected_or_planner_review_required
+            or latest_job_requires_review
         )
         if not requires_review:
             return
@@ -503,6 +521,10 @@ class JobsService:
         raise ApiConflictError(
             "This file requires manual review or protected-file approval before a job can be created."
         )
+
+    @staticmethod
+    def _can_retry_operational_manual_review(job: Job) -> bool:
+        return job.status == JobStatus.MANUAL_REVIEW and job.failure_category == "replacement_failed"
 
     def _create_job_from_plan(
         self,
