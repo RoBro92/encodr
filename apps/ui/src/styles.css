@@ -1115,6 +1115,16 @@ pre {
   height: 1rem;
 }
 
+.problem-job-checkbox {
+  flex: 0 0 auto;
+  padding-top: 4px;
+}
+
+.problem-job-checkbox input {
+  width: 1rem;
+  height: 1rem;
+}
+
 .action-group {
   justify-items: end;
   gap: 6px;

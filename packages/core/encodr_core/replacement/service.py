@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from pydantic import Field
 
@@ -93,14 +94,32 @@ class ReplacementService:
 
         final_output_path = source_path.with_suffix(f".{plan.container.target_container.value}")
         backup_path = self._build_backup_path(source_path)
+        existing_backup_strategy = plan.replace.existing_backup_strategy
+        backup_exists = backup_path.exists()
 
-        if backup_path.exists():
+        if backup_exists and existing_backup_strategy == "fail":
             raise ReplacementError(
                 "A backup file already exists for the source path.",
                 source_path=source_path,
                 staged_output_path=staged_output_path,
                 final_output_path=final_output_path,
                 original_backup_path=backup_path,
+                details={
+                    "failure_code": "backup_already_exists",
+                    "existing_backup_strategy": existing_backup_strategy,
+                },
+            )
+        if not backup_exists and existing_backup_strategy == "keep_existing_backup":
+            raise ReplacementError(
+                "A backup file must already exist before keeping the original backup.",
+                source_path=source_path,
+                staged_output_path=staged_output_path,
+                final_output_path=final_output_path,
+                original_backup_path=backup_path,
+                details={
+                    "failure_code": "backup_missing_for_keep_existing",
+                    "existing_backup_strategy": existing_backup_strategy,
+                },
             )
         if final_output_path != source_path and final_output_path.exists():
             raise ReplacementError(
@@ -110,24 +129,54 @@ class ReplacementService:
                 final_output_path=final_output_path,
             )
 
-        try:
-            source_path.rename(backup_path)
-        except OSError as error:
-            raise ReplacementError(
-                "Failed to move the source file to its backup path.",
-                source_path=source_path,
-                staged_output_path=staged_output_path,
-                final_output_path=final_output_path,
-                original_backup_path=backup_path,
-                details=_replacement_failure_details(
+        replaced_backup_path: Path | None = None
+        if backup_exists and existing_backup_strategy == "replace_backup":
+            replaced_backup_path = _temporary_replaced_backup_path(backup_path)
+            try:
+                backup_path.rename(replaced_backup_path)
+            except OSError as error:
+                raise ReplacementError(
+                    "Failed to move the existing backup aside before replacement.",
+                    source_path=source_path,
+                    staged_output_path=staged_output_path,
+                    final_output_path=final_output_path,
+                    original_backup_path=backup_path,
+                    details=_replacement_failure_details(
+                        operation="move_existing_backup_aside",
+                        error=error,
+                        source_path=source_path,
+                        staged_output_path=staged_output_path,
+                        final_output_path=final_output_path,
+                        original_backup_path=backup_path,
+                    ),
+                ) from error
+
+        create_new_backup = existing_backup_strategy != "keep_existing_backup"
+        if create_new_backup:
+            try:
+                source_path.rename(backup_path)
+            except OSError as error:
+                details = _replacement_failure_details(
                     operation="move_source_to_backup",
                     error=error,
                     source_path=source_path,
                     staged_output_path=staged_output_path,
                     final_output_path=final_output_path,
                     original_backup_path=backup_path,
-                ),
-            ) from error
+                )
+                _restore_replaced_backup(
+                    replaced_backup_path=replaced_backup_path,
+                    backup_path=backup_path,
+                    details=details,
+                )
+                raise ReplacementError(
+                    "Failed to move the source file to its backup path.",
+                    source_path=source_path,
+                    staged_output_path=staged_output_path,
+                    final_output_path=final_output_path,
+                    original_backup_path=backup_path,
+                    details=details,
+                ) from error
         try:
             move_result = _move_generated_output(staged_output_path, final_output_path)
         except Exception as error:
@@ -139,7 +188,7 @@ class ReplacementService:
                 final_output_path=final_output_path,
                 original_backup_path=backup_path,
             )
-            if backup_path.exists() and not source_path.exists():
+            if create_new_backup and backup_path.exists() and not source_path.exists():
                 try:
                     backup_path.rename(source_path)
                 except OSError as rollback_error:
@@ -153,6 +202,11 @@ class ReplacementService:
                     details["source_exists_after_rollback"] = source_path.exists()
                     details["backup_exists_after_rollback"] = backup_path.exists()
                     details["staged_output_exists_after_rollback"] = staged_output_path.exists()
+            _restore_replaced_backup(
+                replaced_backup_path=replaced_backup_path,
+                backup_path=backup_path,
+                details=details,
+            )
             raise ReplacementError(
                 "Failed to move the verified output into place.",
                 source_path=source_path,
@@ -163,19 +217,31 @@ class ReplacementService:
             ) from error
 
         deleted_original_source = False
-        if plan.replace.delete_replaced_source and backup_path.exists():
+        success_details = {
+            "mode": "replace_in_place",
+            "existing_backup_strategy": existing_backup_strategy,
+            **move_result.details,
+        }
+        if create_new_backup and plan.replace.delete_replaced_source and backup_path.exists():
             try:
                 backup_path.unlink()
                 deleted_original_source = True
             except OSError as error:
+                _delete_replaced_backup_temp(
+                    replaced_backup_path=replaced_backup_path,
+                    source_path=source_path,
+                    staged_output_path=staged_output_path,
+                    final_output_path=final_output_path,
+                    backup_path=backup_path,
+                    details=success_details,
+                )
                 return ReplacementResult(
                     status=ReplacementStatus.SUCCEEDED,
                     final_output_path=final_output_path,
                     original_backup_path=backup_path,
                     deleted_original_source=False,
                     details={
-                        "mode": "replace_in_place",
-                        **move_result.details,
+                        **success_details,
                         "backup_delete_failed": True,
                         **_replacement_failure_details(
                             operation="delete_replaced_source_backup",
@@ -188,12 +254,20 @@ class ReplacementService:
                     },
                 )
 
+        _delete_replaced_backup_temp(
+            replaced_backup_path=replaced_backup_path,
+            source_path=source_path,
+            staged_output_path=staged_output_path,
+            final_output_path=final_output_path,
+            backup_path=backup_path,
+            details=success_details,
+        )
         return ReplacementResult(
             status=ReplacementStatus.SUCCEEDED,
             final_output_path=final_output_path,
             original_backup_path=None if deleted_original_source else backup_path,
             deleted_original_source=deleted_original_source,
-            details={"mode": "replace_in_place", **move_result.details},
+            details=success_details,
         )
 
     def _place_alongside_original(
@@ -264,6 +338,70 @@ def _move_generated_output(staged_output_path: Path, final_output_path: Path) ->
         cross_device_details["staged_cleanup_errno"] = cleanup_error.errno
         cross_device_details["staged_cleanup_error"] = str(cleanup_error)
     return _OutputMoveResult(details=cross_device_details)
+
+
+def _temporary_replaced_backup_path(backup_path: Path) -> Path:
+    while True:
+        candidate = backup_path.with_name(f"{backup_path.name}.replacing-{uuid4().hex}.tmp")
+        if not candidate.exists():
+            return candidate
+
+
+def _restore_replaced_backup(
+    *,
+    replaced_backup_path: Path | None,
+    backup_path: Path,
+    details: dict[str, Any],
+) -> None:
+    if replaced_backup_path is None:
+        return
+    details["replaced_backup_temp_path"] = replaced_backup_path.as_posix()
+    if not replaced_backup_path.exists():
+        details["replaced_backup_temp_exists_after_rollback"] = False
+        return
+    if backup_path.exists():
+        details["replaced_backup_restore_blocked"] = True
+        details["backup_exists_after_replaced_backup_restore"] = True
+        return
+    try:
+        replaced_backup_path.rename(backup_path)
+    except OSError as rollback_error:
+        details["replaced_backup_restore_error"] = str(rollback_error)
+        details["replaced_backup_restore_errno"] = rollback_error.errno
+    else:
+        details["replaced_backup_restore_succeeded"] = True
+    details["replaced_backup_temp_exists_after_rollback"] = replaced_backup_path.exists()
+    details["backup_exists_after_replaced_backup_restore"] = backup_path.exists()
+
+
+def _delete_replaced_backup_temp(
+    *,
+    replaced_backup_path: Path | None,
+    source_path: Path,
+    staged_output_path: Path,
+    final_output_path: Path,
+    backup_path: Path,
+    details: dict[str, Any],
+) -> None:
+    if replaced_backup_path is None or not replaced_backup_path.exists():
+        return
+    try:
+        replaced_backup_path.unlink()
+    except OSError as error:
+        details["replaced_backup_delete_failed"] = True
+        details.update(
+            _replacement_failure_details(
+                operation="delete_replaced_existing_backup",
+                error=error,
+                source_path=source_path,
+                staged_output_path=staged_output_path,
+                final_output_path=final_output_path,
+                original_backup_path=backup_path,
+            )
+        )
+        details["replaced_backup_temp_path"] = replaced_backup_path.as_posix()
+    else:
+        details["replaced_existing_backup_deleted"] = True
 
 
 def _replacement_failure_details(

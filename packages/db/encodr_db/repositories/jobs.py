@@ -582,33 +582,100 @@ class JobRepository:
         self,
         *,
         status: JobStatus | None = None,
+        status_group: str | None = None,
         job_kind: JobKind | None = None,
         tracked_file_id: str | None = None,
         worker_name: str | None = None,
+        search: str | None = None,
         include_cleared: bool = False,
         limit: int | None = None,
         offset: int | None = None,
     ) -> list[Job]:
         query: Select[tuple[Job]] = (
             select(Job)
+            .outerjoin(Job.tracked_file)
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
             .order_by(desc(Job.created_at), desc(Job.id))
         )
+        query = self._apply_job_list_filters(
+            query,
+            status=status,
+            status_group=status_group,
+            job_kind=job_kind,
+            tracked_file_id=tracked_file_id,
+            worker_name=worker_name,
+            search=search,
+            include_cleared=include_cleared,
+        )
+        if offset is not None:
+            query = query.offset(offset)
+        if limit is not None:
+            query = query.limit(limit)
+        return list(self.session.scalars(query))
+
+    def count_jobs(
+        self,
+        *,
+        status: JobStatus | None = None,
+        status_group: str | None = None,
+        job_kind: JobKind | None = None,
+        tracked_file_id: str | None = None,
+        worker_name: str | None = None,
+        search: str | None = None,
+        include_cleared: bool = False,
+    ) -> int:
+        query: Select[tuple[int]] = select(func.count(Job.id)).outerjoin(Job.tracked_file)
+        query = self._apply_job_list_filters(
+            query,
+            status=status,
+            status_group=status_group,
+            job_kind=job_kind,
+            tracked_file_id=tracked_file_id,
+            worker_name=worker_name,
+            search=search,
+            include_cleared=include_cleared,
+        )
+        return int(self.session.scalar(query) or 0)
+
+    def _apply_job_list_filters(
+        self,
+        query: Select,
+        *,
+        status: JobStatus | None,
+        status_group: str | None,
+        job_kind: JobKind | None,
+        tracked_file_id: str | None,
+        worker_name: str | None,
+        search: str | None,
+        include_cleared: bool,
+    ) -> Select:
         if status is not None:
             query = query.where(Job.status == status)
+        elif status_group == "problem":
+            query = query.where(
+                Job.status.in_([JobStatus.FAILED, JobStatus.INTERRUPTED, JobStatus.CANCELLED, JobStatus.MANUAL_REVIEW])
+            )
         if job_kind is not None:
             query = query.where(Job.job_kind == job_kind)
         if tracked_file_id is not None:
             query = query.where(Job.tracked_file_id == tracked_file_id)
         if worker_name is not None:
             query = query.where(Job.worker_name == worker_name)
+        search_text = (search or "").strip().lower()
+        if search_text:
+            pattern = f"%{search_text}%"
+            query = query.where(
+                or_(
+                    func.lower(Job.failure_message).like(pattern),
+                    func.lower(Job.failure_category).like(pattern),
+                    func.lower(Job.worker_name).like(pattern),
+                    func.lower(TrackedFile.source_path).like(pattern),
+                    func.lower(TrackedFile.source_filename).like(pattern),
+                )
+            )
         if not include_cleared:
             query = query.where(Job.cleared_at.is_(None))
-        if offset is not None:
-            query = query.offset(offset)
-        if limit is not None:
-            query = query.limit(limit)
-        return list(self.session.scalars(query))
+        return query
 
     def list_progress_stream_jobs(
         self,
@@ -722,6 +789,7 @@ class JobRepository:
         self,
         *,
         cleared_at: datetime,
+        job_ids: list[str] | None = None,
         reason: str = "Cleared historical problem jobs by operator.",
     ) -> list[Job]:
         query = (
@@ -733,6 +801,8 @@ class JobRepository:
             .options(joinedload(Job.tracked_file), joinedload(Job.plan_snapshot))
             .order_by(desc(Job.updated_at), desc(Job.created_at), desc(Job.id))
         )
+        if job_ids is not None:
+            query = query.where(Job.id.in_(job_ids))
         jobs = list(self.session.scalars(query))
         for job in jobs:
             self.mark_cleared(job, cleared_at=cleared_at, reason=reason)

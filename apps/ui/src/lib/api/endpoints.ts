@@ -13,6 +13,7 @@ import type {
   BatchJobCreateResponse,
   BulkQueueOperation,
   BulkQueueOperationListResponse,
+  ClearFailedJobsPayload,
   BulkJobActionResponse,
   CreateJobPayload,
   CreateDryRunJobsPayload,
@@ -51,6 +52,7 @@ import type {
   ReviewDecisionResponse,
   ReviewItemDetail,
   ReviewListResponse,
+  RetryJobPayload,
   WorkerInventoryDetail,
   WorkerInventoryListResponse,
   WorkerPreferencePayload,
@@ -226,8 +228,14 @@ export function clearQueue(client: ApiClient): Promise<BulkJobActionResponse> {
   return client.request<BulkJobActionResponse>("/jobs/clear-queue", { method: "POST" });
 }
 
-export function clearFailedJobs(client: ApiClient): Promise<BulkJobActionResponse> {
-  return client.request<BulkJobActionResponse>("/jobs/clear-failed", { method: "POST" });
+export function clearFailedJobs(
+  client: ApiClient,
+  payload?: ClearFailedJobsPayload,
+): Promise<BulkJobActionResponse> {
+  return client.request<BulkJobActionResponse>("/jobs/clear-failed", {
+    method: "POST",
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
 }
 
 export function listJobBackups(
@@ -416,8 +424,11 @@ export function cancelBulkQueueOperation(client: ApiClient, operationId: string)
   return client.request<BulkQueueOperation>(`/jobs/bulk-queue/${operationId}/cancel`, { method: "POST" });
 }
 
-export function retryJob(client: ApiClient, jobId: string): Promise<JobDetail> {
-  return client.request<JobDetail>(`/jobs/${jobId}/retry`, { method: "POST" });
+export function retryJob(client: ApiClient, jobId: string, payload?: RetryJobPayload): Promise<JobDetail> {
+  return client.request<JobDetail>(`/jobs/${jobId}/retry`, {
+    method: "POST",
+    body: payload ? JSON.stringify(payload) : undefined,
+  });
 }
 
 export function runWorkerOnce(client: ApiClient): Promise<WorkerRunOnceResponse> {

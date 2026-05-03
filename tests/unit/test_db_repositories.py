@@ -629,6 +629,105 @@ def test_clear_failed_history_includes_skipped_jobs() -> None:
         assert completed_job.cleared_at is None
 
 
+def test_problem_job_listing_supports_search_and_total() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        def create_job_for(path: str):
+            file_media = media_at_path(media, Path(path))
+            tracked_file = tracked_files.upsert_by_path(path, media_file=file_media)
+            probe_snapshot = probes.add_probe_snapshot(tracked_file, file_media)
+            plan = build_processing_plan(file_media, bundle, source_path=path)
+            plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+            return jobs.create_job_from_plan(tracked_file, plan_snapshot)
+
+        backup_job = create_job_for("/media/Movies/Backup Collision.mkv")
+        backup_job.status = JobStatus.FAILED
+        backup_job.failure_category = "replacement_failed"
+        backup_job.failure_message = "A backup file already exists for the source path."
+        worker_job = create_job_for("/media/Movies/Worker Failure.mkv")
+        worker_job.status = JobStatus.CANCELLED
+        worker_job.failure_category = "worker_failed"
+        worker_job.failure_message = "The worker stopped unexpectedly."
+        completed_job = create_job_for("/media/Movies/Completed Backup.mkv")
+        completed_job.status = JobStatus.COMPLETED
+        completed_job.failure_message = "A backup file already exists for the source path."
+
+        matches = jobs.list_jobs(status_group="problem", search="backup", limit=10, offset=0)
+        total = jobs.count_jobs(status_group="problem", search="backup")
+
+        assert [job.id for job in matches] == [backup_job.id]
+        assert total == 1
+        assert worker_job.id not in {job.id for job in matches}
+        assert completed_job.id not in {job.id for job in matches}
+
+
+def test_clear_failed_history_can_target_selected_jobs_only() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+
+        selected_failed = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        selected_failed.status = JobStatus.FAILED
+        selected_cancelled = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        selected_cancelled.status = JobStatus.CANCELLED
+        unselected_skipped = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        unselected_skipped.status = JobStatus.SKIPPED
+        unselected_failed = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        unselected_failed.status = JobStatus.FAILED
+
+        cleared = jobs.clear_failed_history(
+            cleared_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+            job_ids=[selected_failed.id, selected_cancelled.id],
+        )
+
+        assert {job.id for job in cleared} == {selected_failed.id, selected_cancelled.id}
+        assert selected_failed.cleared_at is not None
+        assert selected_cancelled.cleared_at is not None
+        assert unselected_skipped.cleared_at is None
+        assert unselected_failed.cleared_at is None
+
+
+def test_clear_failed_history_empty_selection_clears_nothing() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+
+        failed_job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        failed_job.status = JobStatus.FAILED
+
+        cleared = jobs.clear_failed_history(
+            cleared_at=datetime(2026, 4, 22, 13, 0, tzinfo=timezone.utc),
+            job_ids=[],
+        )
+
+        assert cleared == []
+        assert failed_job.cleared_at is None
+
+
 def test_backup_policy_is_persisted_on_jobs() -> None:
     with database_session() as session:
         tracked_files = TrackedFileRepository(session)

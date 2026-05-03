@@ -10,6 +10,7 @@ from encodr_core.media.models import MediaFile
 from encodr_core.planning import ProcessingPlan, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
 from encodr_core.replacement import ReplacementService, ReplacementStatus
+from encodr_core.replacement import service as replacement_service_module
 from encodr_core.verification import OutputVerifier, VerificationStatus
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "ffprobe"
@@ -65,6 +66,122 @@ def test_replace_in_place_policy_swaps_file_safely(tmp_path: Path) -> None:
     assert result.original_backup_path == backup_path
     assert source_path.read_text(encoding="utf-8") == "new"
     assert backup_path.read_text(encoding="utf-8") == "original"
+
+
+def test_existing_backup_can_be_replaced_when_operator_chooses_replace(tmp_path: Path) -> None:
+    service = ReplacementService()
+    source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+    staged_path = tmp_path / "scratch" / "output.mkv"
+    backup_path = source_path.with_name("Example Film (2024).encodr-backup.mkv")
+    source_path.parent.mkdir(parents=True)
+    staged_path.parent.mkdir(parents=True)
+    source_path.write_text("current source", encoding="utf-8")
+    staged_path.write_text("new output", encoding="utf-8")
+    backup_path.write_text("old backup", encoding="utf-8")
+
+    plan = replace_plan("non4k_remux_languages.json", source_path)
+    plan.replace.existing_backup_strategy = "replace_backup"
+
+    result = service.place_verified_output(
+        source_path=source_path,
+        staged_output_path=staged_path,
+        plan=plan,
+    )
+
+    assert result.status == ReplacementStatus.SUCCEEDED
+    assert result.final_output_path == source_path
+    assert result.original_backup_path == backup_path
+    assert result.details["existing_backup_strategy"] == "replace_backup"
+    assert source_path.read_text(encoding="utf-8") == "new output"
+    assert backup_path.read_text(encoding="utf-8") == "current source"
+
+
+def test_replace_backup_restores_old_backup_when_output_move_fails(
+    tmp_path: Path,
+    monkeypatch,
+) -> None:
+    service = ReplacementService()
+    source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+    staged_path = tmp_path / "scratch" / "output.mkv"
+    backup_path = source_path.with_name("Example Film (2024).encodr-backup.mkv")
+    source_path.parent.mkdir(parents=True)
+    staged_path.parent.mkdir(parents=True)
+    source_path.write_text("current source", encoding="utf-8")
+    staged_path.write_text("new output", encoding="utf-8")
+    backup_path.write_text("old backup", encoding="utf-8")
+
+    def fail_output_move(staged_output_path: Path, final_output_path: Path):  # type: ignore[no-untyped-def]
+        raise PermissionError(errno.EACCES, "permission denied")
+
+    monkeypatch.setattr(replacement_service_module, "_move_generated_output", fail_output_move)
+
+    plan = replace_plan("non4k_remux_languages.json", source_path)
+    plan.replace.existing_backup_strategy = "replace_backup"
+
+    result = service.place_verified_output(
+        source_path=source_path,
+        staged_output_path=staged_path,
+        plan=plan,
+    )
+
+    assert result.status == ReplacementStatus.FAILED
+    assert result.details["rollback_succeeded"] is True
+    assert result.details["replaced_backup_restore_succeeded"] is True
+    assert source_path.read_text(encoding="utf-8") == "current source"
+    assert backup_path.read_text(encoding="utf-8") == "old backup"
+    assert staged_path.read_text(encoding="utf-8") == "new output"
+
+
+def test_existing_backup_can_be_kept_when_operator_chooses_keep_original(tmp_path: Path) -> None:
+    service = ReplacementService()
+    source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+    staged_path = tmp_path / "scratch" / "output.mkv"
+    backup_path = source_path.with_name("Example Film (2024).encodr-backup.mkv")
+    source_path.parent.mkdir(parents=True)
+    staged_path.parent.mkdir(parents=True)
+    source_path.write_text("current source", encoding="utf-8")
+    staged_path.write_text("new output", encoding="utf-8")
+    backup_path.write_text("old backup", encoding="utf-8")
+
+    plan = replace_plan("non4k_remux_languages.json", source_path)
+    plan.replace.existing_backup_strategy = "keep_existing_backup"
+
+    result = service.place_verified_output(
+        source_path=source_path,
+        staged_output_path=staged_path,
+        plan=plan,
+    )
+
+    assert result.status == ReplacementStatus.SUCCEEDED
+    assert result.final_output_path == source_path
+    assert result.original_backup_path == backup_path
+    assert result.details["existing_backup_strategy"] == "keep_existing_backup"
+    assert source_path.read_text(encoding="utf-8") == "new output"
+    assert backup_path.read_text(encoding="utf-8") == "old backup"
+
+
+def test_keep_existing_backup_requires_existing_backup(tmp_path: Path) -> None:
+    service = ReplacementService()
+    source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+    staged_path = tmp_path / "scratch" / "output.mkv"
+    source_path.parent.mkdir(parents=True)
+    staged_path.parent.mkdir(parents=True)
+    source_path.write_text("current source", encoding="utf-8")
+    staged_path.write_text("new output", encoding="utf-8")
+
+    plan = replace_plan("non4k_remux_languages.json", source_path)
+    plan.replace.existing_backup_strategy = "keep_existing_backup"
+
+    result = service.place_verified_output(
+        source_path=source_path,
+        staged_output_path=staged_path,
+        plan=plan,
+    )
+
+    assert result.status == ReplacementStatus.FAILED
+    assert result.details["failure_code"] == "backup_missing_for_keep_existing"
+    assert source_path.read_text(encoding="utf-8") == "current source"
+    assert staged_path.read_text(encoding="utf-8") == "new output"
 
 
 def test_delete_original_policy_only_removes_backup_after_success(tmp_path: Path) -> None:

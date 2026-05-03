@@ -5,7 +5,7 @@ import json
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from fastapi.responses import FileResponse, StreamingResponse
 from sqlalchemy.orm import Session
 
@@ -23,6 +23,7 @@ from app.schemas.jobs import (
     BulkQueueOperationListResponse,
     BulkQueueOperationResponse,
     BulkQueueStartRequest,
+    BulkJobClearRequest,
     BulkJobActionResponse,
     CreateBatchJobsRequest,
     CreateDryRunJobsRequest,
@@ -33,6 +34,7 @@ from app.schemas.jobs import (
     JobBackupResponse,
     JobListResponse,
     JobSummaryResponse,
+    RetryJobRequest,
 )
 from app.services.errors import ApiServiceError
 from app.services.files import FilesService
@@ -87,9 +89,11 @@ def get_library_service(
 @router.get("", response_model=JobListResponse)
 def list_jobs(
     status: JobStatus | None = None,
+    status_group: str | None = None,
     job_kind: JobKind | None = None,
     file_id: str | None = None,
     worker_name: str | None = None,
+    search: str | None = None,
     include_cleared: bool = False,
     limit: int | None = 50,
     offset: int = 0,
@@ -100,17 +104,30 @@ def list_jobs(
     jobs = JobsService().list_jobs(
         session,
         status=status,
+        status_group=status_group,
         job_kind=job_kind,
         tracked_file_id=file_id,
         worker_name=worker_name,
+        search=search,
         include_cleared=include_cleared,
         limit=limit,
         offset=offset,
+    )
+    total = JobsService().count_jobs(
+        session,
+        status=status,
+        status_group=status_group,
+        job_kind=job_kind,
+        tracked_file_id=file_id,
+        worker_name=worker_name,
+        search=search,
+        include_cleared=include_cleared,
     )
     return JobListResponse(
         items=[JobSummaryResponse.from_model(job) for job in jobs],
         limit=limit,
         offset=offset,
+        total=total,
     )
 
 
@@ -175,12 +192,16 @@ def clear_queue(
 
 @router.post("/clear-failed", response_model=BulkJobActionResponse)
 def clear_failed_jobs(
+    payload: BulkJobClearRequest | None = Body(default=None),
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin_user),
 ) -> BulkJobActionResponse:
     del current_user
     try:
-        jobs = JobsService().clear_failed_history(session)
+        jobs = JobsService().clear_failed_history(
+            session,
+            job_ids=payload.job_ids if payload is not None else None,
+        )
         session.commit()
         return BulkJobActionResponse(
             status="cleared",
@@ -406,12 +427,17 @@ def create_job(
 @router.post("/{job_id}/retry", response_model=JobDetailResponse, status_code=201)
 def retry_job(
     job_id: str,
+    payload: RetryJobRequest | None = Body(default=None),
     session: Session = Depends(get_session),
     current_user: User = Depends(require_admin_user),
 ) -> JobDetailResponse:
     del current_user
     try:
-        job = JobsService().retry_job(session, job_id=job_id)
+        job = JobsService().retry_job(
+            session,
+            job_id=job_id,
+            existing_backup_strategy=(payload.existing_backup_strategy if payload is not None else "fail"),
+        )
         session.commit()
         return JobDetailResponse.from_model(job)
     except ApiServiceError as error:

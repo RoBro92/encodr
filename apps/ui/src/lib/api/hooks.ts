@@ -77,6 +77,7 @@ import {
 } from "./endpoints";
 import { useSession } from "../../features/auth/AuthProvider";
 import type {
+  ClearFailedJobsPayload,
   CreateBatchJobsPayload,
   CreateJobPayload,
   CreateDryRunJobsPayload,
@@ -90,6 +91,7 @@ import type {
   ProbeOrPlanPayload,
   ProcessingRuleValues,
   ReviewDecisionPayload,
+  RetryJobPayload,
   RemoteWorkerOnboardingPayload,
   WatchedJobPayload,
   WorkerPreferencePayload,
@@ -98,6 +100,12 @@ import type {
 const TERMINAL_JOB_STATUSES = new Set(["completed", "failed", "interrupted", "cancelled", "manual_review", "skipped"]);
 const UPDATE_STATUS_STALE_MS = 60 * 1000;
 const UPDATE_STATUS_REFETCH_MS = 5 * 60 * 1000;
+const PROBLEM_JOB_STATUSES = new Set(["failed", "interrupted", "cancelled", "manual_review"]);
+
+type RetryJobMutationPayload = string | {
+  jobId: string;
+  request?: RetryJobPayload;
+};
 
 export function useBootstrapStatusQuery(enabled = true) {
   const { apiClient } = useSession();
@@ -214,6 +222,7 @@ export function useJobsQuery(filters: Record<string, string | number | undefined
     queryKey: ["jobs", filters],
     queryFn: () => listJobs(apiClient, filters),
     enabled: isAuthenticated,
+    placeholderData: (previousData) => previousData,
   });
 }
 
@@ -376,6 +385,9 @@ function matchesJobFilters(job: JobSummary, filters: Record<string, string | num
   if (filters.status && job.status !== filters.status) {
     return false;
   }
+  if (filters.status_group === "problem" && !PROBLEM_JOB_STATUSES.has(job.status)) {
+    return false;
+  }
   if (filters.file_id && job.tracked_file_id !== filters.file_id) {
     return false;
   }
@@ -384,6 +396,20 @@ function matchesJobFilters(job: JobSummary, filters: Record<string, string | num
   }
   if (filters.worker_name && job.worker_name !== filters.worker_name) {
     return false;
+  }
+  if (filters.search) {
+    const query = String(filters.search).trim().toLowerCase();
+    const haystack = [
+      job.source_filename,
+      job.source_path,
+      job.failure_message,
+      job.failure_category,
+      job.failure_code,
+      job.worker_name,
+    ].filter(Boolean).join(" ").toLowerCase();
+    if (query && !haystack.includes(query)) {
+      return false;
+    }
   }
   return true;
 }
@@ -424,7 +450,7 @@ export function useClearFailedJobsMutation() {
   const { apiClient } = useSession();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: () => clearFailedJobs(apiClient),
+    mutationFn: (payload?: ClearFailedJobsPayload) => clearFailedJobs(apiClient, payload),
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["jobs"] }),
@@ -983,7 +1009,10 @@ export function useRetryJobMutation() {
   const { apiClient } = useSession();
   const queryClient = useQueryClient();
   return useMutation({
-    mutationFn: (jobId: string) => retryJob(apiClient, jobId),
+    mutationFn: (payload: RetryJobMutationPayload) =>
+      typeof payload === "string"
+        ? retryJob(apiClient, payload)
+        : retryJob(apiClient, payload.jobId, payload.request),
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
       await queryClient.invalidateQueries({ queryKey: ["review"] });

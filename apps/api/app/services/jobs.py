@@ -45,21 +45,47 @@ class JobsService:
         session: Session,
         *,
         status: JobStatus | None = None,
+        status_group: str | None = None,
         job_kind: JobKind | None = None,
         tracked_file_id: str | None = None,
         worker_name: str | None = None,
+        search: str | None = None,
         include_cleared: bool = False,
         limit: int | None = None,
         offset: int = 0,
     ) -> list[Job]:
         return JobRepository(session).list_jobs(
             status=status,
+            status_group=status_group,
             job_kind=job_kind,
             tracked_file_id=tracked_file_id,
             worker_name=worker_name,
+            search=search,
             include_cleared=include_cleared,
             limit=limit,
             offset=offset,
+        )
+
+    def count_jobs(
+        self,
+        session: Session,
+        *,
+        status: JobStatus | None = None,
+        status_group: str | None = None,
+        job_kind: JobKind | None = None,
+        tracked_file_id: str | None = None,
+        worker_name: str | None = None,
+        search: str | None = None,
+        include_cleared: bool = False,
+    ) -> int:
+        return JobRepository(session).count_jobs(
+            status=status,
+            status_group=status_group,
+            job_kind=job_kind,
+            tracked_file_id=tracked_file_id,
+            worker_name=worker_name,
+            search=search,
+            include_cleared=include_cleared,
         )
 
     def list_progress_stream_jobs(
@@ -140,7 +166,13 @@ class JobsService:
         )
         return job
 
-    def retry_job(self, session: Session, *, job_id: str) -> Job:
+    def retry_job(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+        existing_backup_strategy: str = "fail",
+    ) -> Job:
         original_job = self.get_job(session, job_id=job_id)
         if original_job.status not in RETRYABLE_JOB_STATUSES:
             raise ApiConflictError(
@@ -163,13 +195,20 @@ class JobsService:
                 else None
             ),
         )
+        if existing_backup_strategy != "fail":
+            self._validate_existing_backup_retry(original_job, existing_backup_strategy)
         repository = JobRepository(session)
         if repository.has_active_job_for_tracked_file(original_job.tracked_file_id):
             raise ApiConflictError("An active job already exists for this tracked file.")
+        plan_snapshot = self._plan_snapshot_for_retry(
+            session,
+            original_job=original_job,
+            existing_backup_strategy=existing_backup_strategy,
+        )
         return self._create_job_from_plan(
             session,
             original_job.tracked_file,
-            original_job.plan_snapshot,
+            plan_snapshot,
             attempt_count=original_job.attempt_count + 1,
             preferred_worker_id=original_job.preferred_worker_id,
             pinned_worker_id=original_job.pinned_worker_id,
@@ -242,8 +281,14 @@ class JobsService:
         logger.info("queue cleared", extra={"affected_count": len(cancelled)})
         return cancelled
 
-    def clear_failed_history(self, session: Session) -> list[Job]:
-        jobs = JobRepository(session).clear_failed_history(cleared_at=datetime.now(timezone.utc))
+    def clear_failed_history(self, session: Session, *, job_ids: list[str] | None = None) -> list[Job]:
+        if job_ids == []:
+            logger.info("failed job history clear skipped for empty selection")
+            return []
+        jobs = JobRepository(session).clear_failed_history(
+            cleared_at=datetime.now(timezone.utc),
+            job_ids=job_ids,
+        )
         logger.info("failed job history cleared", extra={"affected_count": len(jobs)})
         return jobs
 
@@ -526,6 +571,59 @@ class JobsService:
     def _can_retry_operational_manual_review(job: Job) -> bool:
         return job.status == JobStatus.MANUAL_REVIEW and job.failure_category == "replacement_failed"
 
+    @staticmethod
+    def _validate_existing_backup_retry(job: Job, existing_backup_strategy: str) -> None:
+        if existing_backup_strategy not in {"replace_backup", "keep_existing_backup"}:
+            raise ApiValidationError("Unsupported backup handling option for retry.")
+        if not _job_failed_because_backup_already_exists(job):
+            raise ApiConflictError(
+                "Backup handling options are only available for jobs that failed because a backup already exists."
+            )
+        if not job.original_backup_path:
+            raise ApiConflictError("The existing backup file is no longer recorded for this job.")
+        backup_path = Path(job.original_backup_path)
+        if job.tracked_file is not None:
+            source_path = Path(job.tracked_file.source_path)
+            expected_backup_path = source_path.with_name(
+                f"{source_path.stem}.encodr-backup{source_path.suffix}"
+            )
+            if backup_path != expected_backup_path:
+                raise ApiConflictError("The recorded backup path does not match the expected source backup.")
+        if not backup_path.exists():
+            raise ApiConflictError("The existing backup file is no longer available.")
+
+    def _plan_snapshot_for_retry(
+        self,
+        session: Session,
+        *,
+        original_job: Job,
+        existing_backup_strategy: str,
+    ) -> PlanSnapshot:
+        if existing_backup_strategy == "fail":
+            return original_job.plan_snapshot
+        if existing_backup_strategy not in {"replace_backup", "keep_existing_backup"}:
+            raise ApiValidationError("Unsupported backup handling option for retry.")
+
+        plan = ProcessingPlan.model_validate(original_job.plan_snapshot.payload)
+        plan.replace.existing_backup_strategy = existing_backup_strategy
+        snapshot = PlanSnapshot(
+            tracked_file_id=original_job.tracked_file_id,
+            probe_snapshot_id=original_job.plan_snapshot.probe_snapshot_id,
+            action=plan.action,
+            confidence=plan.confidence,
+            policy_version=plan.policy_context.policy_version,
+            profile_name=plan.policy_context.selected_profile_name,
+            is_already_compliant=plan.is_already_compliant,
+            should_treat_as_protected=plan.should_treat_as_protected,
+            reasons=[reason.model_dump(mode="json") for reason in plan.reasons],
+            warnings=[warning.model_dump(mode="json") for warning in plan.warnings],
+            selected_streams=plan.selected_streams.model_dump(mode="json"),
+            payload=plan.model_dump(mode="json"),
+        )
+        session.add(snapshot)
+        session.flush()
+        return snapshot
+
     def _create_job_from_plan(
         self,
         session: Session,
@@ -590,3 +688,14 @@ def _backup_path_for_job(job: Job) -> Path:
     if not job.original_backup_path:
         raise ApiNotFoundError("No backup is recorded for this job.")
     return Path(job.original_backup_path)
+
+
+def _job_failed_because_backup_already_exists(job: Job) -> bool:
+    replacement_payload = job.replacement_payload if isinstance(job.replacement_payload, dict) else {}
+    details = replacement_payload.get("details") if isinstance(replacement_payload.get("details"), dict) else {}
+    if details.get("failure_code") == "backup_already_exists":
+        return True
+    return (
+        job.failure_category == "replacement_failed"
+        and "backup file already exists" in (job.failure_message or "").lower()
+    )

@@ -24,7 +24,7 @@ import {
   useRestoreJobBackupMutation,
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
-import type { FileSummary, JobBackup, JobDetail, JobSummary } from "../../lib/types/api";
+import type { FileSummary, JobBackup, JobDetail, JobSummary, RetryJobPayload } from "../../lib/types/api";
 import { formatBitrate, formatBytes, formatDateTime, formatDurationSeconds, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -43,7 +43,9 @@ const JOB_STATUS_OPTIONS = [
 
 type JobsTab = "active" | "completed" | "problem";
 type ConfirmAction = "clear-queue" | "clear-failed" | null;
+type BackupRetryStrategy = NonNullable<RetryJobPayload["existing_backup_strategy"]>;
 const BACKUP_PAGE_SIZE = 15;
+const PROBLEM_JOB_PAGE_SIZE = 10;
 const ARTWORK_CONCURRENCY_LIMIT = 4;
 const NO_ARTWORK_CACHE = new Set<string>();
 const ARTWORK_URL_CACHE = new Map<string, string>();
@@ -79,6 +81,12 @@ export function JobsPage() {
   const [backupSearch, setBackupSearch] = useState("");
   const [backupPage, setBackupPage] = useState(0);
   const [selectedBackupIds, setSelectedBackupIds] = useState<Set<string>>(new Set());
+  const [problemSearch, setProblemSearch] = useState("");
+  const [problemPage, setProblemPage] = useState(0);
+  const [selectedProblemJobIds, setSelectedProblemJobIds] = useState<Set<string>>(new Set());
+  const [selectedClearJobIds, setSelectedClearJobIds] = useState<string[] | null>(null);
+  const [mixedProblemSelectionOpen, setMixedProblemSelectionOpen] = useState(false);
+  const [backupRetryJobIds, setBackupRetryJobIds] = useState<string[] | null>(null);
 
   const filters = useMemo(
     () => ({
@@ -87,6 +95,17 @@ export function JobsPage() {
       limit: 100,
     }),
     [fileId, status],
+  );
+  const problemFilters = useMemo(
+    () => ({
+      status_group: "problem",
+      status: status && tabForStatus(status) === "problem" ? status : undefined,
+      search: problemSearch.trim() || undefined,
+      file_id: fileId || undefined,
+      limit: PROBLEM_JOB_PAGE_SIZE,
+      offset: problemPage * PROBLEM_JOB_PAGE_SIZE,
+    }),
+    [fileId, problemPage, problemSearch, status],
   );
 
   const filterFilesQuery = useFilesQuery({
@@ -98,6 +117,7 @@ export function JobsPage() {
     limit: 25,
   });
   const jobsQuery = useJobsQuery(filters);
+  const problemJobsQuery = useJobsQuery(problemFilters);
   const detailQuery = useJobDetailQuery(jobId);
   const retryMutation = useRetryJobMutation();
   const cancelMutation = useCancelJobMutation();
@@ -124,17 +144,22 @@ export function JobsPage() {
   const files = deduplicateTrackedFiles([...filterFiles, ...createFiles]);
   const jobs = jobsQuery.data?.items ?? [];
   const orderedJobs = sortJobsForDisplay(jobs);
+  const problemPageJobs = problemJobsQuery.data?.items ?? [];
+  const problemTotal = problemJobsQuery.data?.total ?? problemPageJobs.length;
+  const problemTotalPages = Math.max(1, Math.ceil(problemTotal / PROBLEM_JOB_PAGE_SIZE));
+  const problemPageStart = problemTotal === 0 ? 0 : Math.min(problemPage * PROBLEM_JOB_PAGE_SIZE + 1, problemTotal);
+  const problemPageEnd = Math.min((problemPage + 1) * PROBLEM_JOB_PAGE_SIZE, problemTotal);
   const activeJobs = orderedJobs.filter(isActiveQueueJob);
   const clearableQueueJobs = orderedJobs.filter((job) =>
     ["pending", "scheduled"].includes(normalisedJobStatus(job))
     || isRetryableInterruptedForQueueClear(job),
   );
   const completedJobs = orderedJobs.filter(isCompletedJob);
-  const problemJobs = orderedJobs.filter(isProblemJob);
   const clearableHistoricalJobs = orderedJobs.filter((job) =>
     ["failed", "interrupted", "cancelled", "skipped"].includes(normalisedJobStatus(job)),
   );
-  const tabJobs = jobsForTab(orderedJobs, jobsTab);
+  const tabJobs = jobsTab === "problem" ? problemPageJobs : jobsForTab(orderedJobs, jobsTab);
+  const tabJobsTotal = jobsTab === "problem" ? problemTotal : tabJobs.length;
   const groupedJobs = groupJobsByWorker(tabJobs);
   const localWorkerId = workerStatusQuery.data?.worker_id ?? null;
   const detail = detailQuery.data;
@@ -148,6 +173,11 @@ export function JobsPage() {
   const backupPageEnd = Math.min((backupPage + 1) * BACKUP_PAGE_SIZE, backupTotal);
   const selectedVisibleBackupCount = backupItems.filter((item) => selectedBackupIds.has(item.job_id)).length;
   const allVisibleBackupsSelected = backupItems.length > 0 && selectedVisibleBackupCount === backupItems.length;
+  const selectedProblemJobs = problemPageJobs.filter((job) => selectedProblemJobIds.has(job.id));
+  const selectedVisibleProblemCount = selectedProblemJobs.length;
+  const allVisibleProblemsSelected = problemPageJobs.length > 0 && selectedVisibleProblemCount === problemPageJobs.length;
+  const selectedProblemJobIdsArray = [...selectedProblemJobIds];
+  const selectedProblemBackupCollision = selectedProblemJobs.length > 0 && selectedProblemJobs.every(isBackupAlreadyExistsJob);
   const jobsQuerySyncKey = searchParams.toString();
 
   function closeDrawer() {
@@ -222,6 +252,29 @@ export function JobsPage() {
   }, [backupSearch]);
 
   useEffect(() => {
+    setProblemPage(0);
+    setSelectedProblemJobIds(new Set());
+  }, [fileId, problemSearch, status]);
+
+  useEffect(() => {
+    setSelectedProblemJobIds((current) => {
+      const visible = new Set(problemPageJobs.map((job) => job.id));
+      const next = new Set([...current].filter((jobId) => visible.has(jobId)));
+      return next.size === current.size ? current : next;
+    });
+  }, [problemPageJobs]);
+
+  useEffect(() => {
+    if (!problemJobsQuery.data) {
+      return;
+    }
+    const lastPage = Math.max(0, Math.ceil(problemTotal / PROBLEM_JOB_PAGE_SIZE) - 1);
+    if (problemPage > lastPage) {
+      setProblemPage(lastPage);
+    }
+  }, [problemJobsQuery.data, problemPage, problemTotal]);
+
+  useEffect(() => {
     setSelectedBackupIds((current) => {
       const visible = new Set(backupItems.map((item) => item.job_id));
       const next = new Set([...current].filter((jobId) => visible.has(jobId)));
@@ -239,12 +292,56 @@ export function JobsPage() {
     }
   }, [backupPage, backupTotal, jobBackupsQuery.data]);
 
-  if (jobsQuery.isLoading || filterFilesQuery.isLoading || createFilesQuery.isLoading) {
+  const isProblemInitialLoading = jobsTab === "problem" && problemJobsQuery.isLoading && !problemJobsQuery.data;
+  const loadError = error ?? (jobsTab === "problem" ? problemJobsQuery.error : null);
+
+  if (jobsQuery.isLoading || isProblemInitialLoading || filterFilesQuery.isLoading || createFilesQuery.isLoading) {
     return <LoadingBlock label="Loading jobs" />;
   }
 
-  if (error instanceof Error) {
-    return <ErrorPanel title="Unable to load jobs" message={error.message} />;
+  if (loadError instanceof Error) {
+    return <ErrorPanel title="Unable to load jobs" message={loadError.message} />;
+  }
+
+  function validateProblemSelection() {
+    if (selectedProblemJobIdsArray.length <= 1) {
+      return true;
+    }
+    if (problemSelectionErrorKeys(selectedProblemJobs).length <= 1) {
+      return true;
+    }
+    setMixedProblemSelectionOpen(true);
+    return false;
+  }
+
+  function openSelectedClearModal() {
+    if (selectedProblemJobIdsArray.length === 0 || !validateProblemSelection()) {
+      return;
+    }
+    setSelectedClearJobIds(selectedProblemJobIdsArray);
+    setConfirmAction("clear-failed");
+  }
+
+  function openBackupRetryModal(jobIds: string[]) {
+    if (jobIds.length === 0 || !validateProblemSelection()) {
+      return;
+    }
+    setBackupRetryJobIds(jobIds);
+  }
+
+  function retryBackupJobs(strategy: BackupRetryStrategy) {
+    const jobIds = backupRetryJobIds ?? [];
+    void Promise.all(jobIds.map((id) =>
+      retryMutation.mutateAsync({
+        jobId: id,
+        request: { existing_backup_strategy: strategy },
+      }),
+    ))
+      .then(() => {
+        setBackupRetryJobIds(null);
+        setSelectedProblemJobIds(new Set());
+      })
+      .catch(() => undefined);
   }
 
   return (
@@ -304,7 +401,10 @@ export function JobsPage() {
             <button
               className="button button-secondary button-small"
               type="button"
-              onClick={() => setConfirmAction("clear-failed")}
+              onClick={() => {
+                setSelectedClearJobIds(null);
+                setConfirmAction("clear-failed");
+              }}
               disabled={clearFailedMutation.isPending || clearableHistoricalJobs.length === 0}
             >
               {clearFailedMutation.isPending ? "Clearing…" : "Clear failed"}
@@ -394,7 +494,7 @@ export function JobsPage() {
       </SectionCard>
 
       <section className="jobs-review-layout jobs-review-layout-single">
-        <SectionCard title={jobsTabTitle(jobsTab)} subtitle={`${tabJobs.length} job${tabJobs.length === 1 ? "" : "s"} in view`}>
+        <SectionCard title={jobsTabTitle(jobsTab)} subtitle={`${tabJobsTotal} job${tabJobsTotal === 1 ? "" : "s"} in view`}>
           <div className="jobs-tab-bar" role="tablist" aria-label="Job queue sections">
             <button
               className={`jobs-tab${jobsTab === "active" ? " jobs-tab-active" : ""}`}
@@ -421,9 +521,88 @@ export function JobsPage() {
               aria-selected={jobsTab === "problem"}
               onClick={() => updateJobsTab("problem")}
             >
-              Failed / Cancelled <span>{problemJobs.length}</span>
+              Failed / Cancelled <span>{problemTotal}</span>
             </button>
           </div>
+
+          {jobsTab === "problem" ? (
+            <>
+              <div className="backup-toolbar problem-toolbar">
+                <label className="field backup-search-field">
+                  <span>Search failed and cancelled jobs</span>
+                  <input
+                    aria-label="Search failed and cancelled jobs"
+                    value={problemSearch}
+                    placeholder="Search by file, worker, or error"
+                    onChange={(event) => setProblemSearch(event.target.value)}
+                  />
+                </label>
+                <div className="backup-toolbar-actions">
+                  <button
+                    className="button button-secondary button-small"
+                    type="button"
+                    onClick={() => {
+                      setSelectedProblemJobIds((current) => {
+                        const next = new Set(current);
+                        if (allVisibleProblemsSelected) {
+                          problemPageJobs.forEach((item) => next.delete(item.id));
+                        } else {
+                          problemPageJobs.forEach((item) => next.add(item.id));
+                        }
+                        return next;
+                      });
+                    }}
+                    disabled={problemPageJobs.length === 0}
+                  >
+                    {allVisibleProblemsSelected ? "Clear visible problem selection" : "Select all visible problem jobs"}
+                  </button>
+                  <button
+                    className="button button-secondary button-small"
+                    type="button"
+                    onClick={openSelectedClearModal}
+                    disabled={selectedProblemJobIds.size === 0 || clearFailedMutation.isPending}
+                  >
+                    {clearFailedMutation.isPending
+                      ? "Clearing…"
+                      : `Clear selected${selectedProblemJobIds.size > 0 ? ` (${selectedProblemJobIds.size})` : ""}`}
+                  </button>
+                  {selectedProblemBackupCollision ? (
+                    <button
+                      className="button button-primary button-small"
+                      type="button"
+                      onClick={() => openBackupRetryModal(selectedProblemJobIdsArray)}
+                      disabled={retryMutation.isPending}
+                    >
+                      Backup options ({selectedProblemJobIds.size})
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="backup-pagination problem-pagination" aria-label="Failed and cancelled job pagination">
+                <span>
+                  Showing {problemPageStart}-{problemPageEnd} of {problemTotal}
+                </span>
+                <div className="section-card-actions">
+                  <button
+                    className="button button-secondary button-small"
+                    type="button"
+                    onClick={() => setProblemPage((current) => Math.max(0, current - 1))}
+                    disabled={problemPage === 0}
+                  >
+                    Previous
+                  </button>
+                  <button
+                    className="button button-secondary button-small"
+                    type="button"
+                    onClick={() => setProblemPage((current) => Math.min(problemTotalPages - 1, current + 1))}
+                    disabled={problemPage >= problemTotalPages - 1}
+                  >
+                    Next
+                  </button>
+                </div>
+              </div>
+            </>
+          ) : null}
 
           {tabJobs.length === 0 ? (
             <EmptyState title={emptyTitleForTab(jobsTab)} message={emptyMessageForTab(jobsTab)} />
@@ -462,6 +641,26 @@ export function JobsPage() {
                             className={`record-list-item queue-job-card${isActive ? " record-list-item-active" : ""}`}
                           >
                             <div className="queue-job-card-body">
+                              {jobsTab === "problem" ? (
+                                <label className="problem-job-checkbox">
+                                  <input
+                                    type="checkbox"
+                                    aria-label={`Select problem job ${jobPrimaryLabel(item, files)}`}
+                                    checked={selectedProblemJobIds.has(item.id)}
+                                    onChange={(event) => {
+                                      setSelectedProblemJobIds((current) => {
+                                        const next = new Set(current);
+                                        if (event.target.checked) {
+                                          next.add(item.id);
+                                        } else {
+                                          next.delete(item.id);
+                                        }
+                                        return next;
+                                      });
+                                    }}
+                                  />
+                                </label>
+                              ) : null}
                               <JobArtwork jobId={item.id} title={jobPrimaryLabel(item, files)} />
                               <div className="queue-job-card-content">
                                 <div className="queue-job-card-header">
@@ -509,6 +708,18 @@ export function JobsPage() {
                                   disabled={cancelMutation.isPending}
                                 >
                                   {cancelMutation.isPending ? "Cancelling…" : "Cancel"}
+                                </button>
+                              ) : null}
+                              {jobsTab === "problem" && isBackupAlreadyExistsJob(item) ? (
+                                <button
+                                  className="button button-primary button-small"
+                                  type="button"
+                                  onClick={() => {
+                                    setBackupRetryJobIds([item.id]);
+                                  }}
+                                  disabled={retryMutation.isPending}
+                                >
+                                  Backup options
                                 </button>
                               ) : null}
                             </div>
@@ -650,19 +861,43 @@ export function JobsPage() {
           action={confirmAction}
           activeCount={clearableQueueJobs.length}
           problemCount={clearableHistoricalJobs.length}
+          selectedCount={selectedClearJobIds?.length ?? null}
           isPending={clearQueueMutation.isPending || clearFailedMutation.isPending}
-          onClose={() => setConfirmAction(null)}
+          onClose={() => {
+            setConfirmAction(null);
+            setSelectedClearJobIds(null);
+          }}
           onConfirm={() => {
             if (confirmAction === "clear-queue") {
               clearQueueMutation.mutate(undefined, {
-                onSuccess: () => setConfirmAction(null),
+                onSuccess: () => {
+                  setConfirmAction(null);
+                  setSelectedClearJobIds(null);
+                },
               });
               return;
             }
-            clearFailedMutation.mutate(undefined, {
-              onSuccess: () => setConfirmAction(null),
+            clearFailedMutation.mutate(selectedClearJobIds ? { job_ids: selectedClearJobIds } : undefined, {
+              onSuccess: () => {
+                setConfirmAction(null);
+                setSelectedClearJobIds(null);
+                setSelectedProblemJobIds(new Set());
+              },
             });
           }}
+        />
+      ) : null}
+
+      {mixedProblemSelectionOpen ? (
+        <MixedProblemSelectionModal onClose={() => setMixedProblemSelectionOpen(false)} />
+      ) : null}
+
+      {backupRetryJobIds ? (
+        <BackupRetryModal
+          count={backupRetryJobIds.length}
+          isPending={retryMutation.isPending}
+          onCancel={() => setBackupRetryJobIds(null)}
+          onRetry={retryBackupJobs}
         />
       ) : null}
 
@@ -678,7 +913,11 @@ export function JobsPage() {
           onClose={closeDrawer}
           onRetry={() => {
             if (selectedJobId) {
-              retryMutation.mutate(selectedJobId);
+              if (detail && isBackupAlreadyExistsJob(detail)) {
+                setBackupRetryJobIds([selectedJobId]);
+              } else {
+                retryMutation.mutate(selectedJobId);
+              }
             }
           }}
           onCancel={() => {
@@ -768,6 +1007,7 @@ function ConfirmBulkActionModal({
   action,
   activeCount,
   problemCount,
+  selectedCount,
   isPending,
   onClose,
   onConfirm,
@@ -775,21 +1015,30 @@ function ConfirmBulkActionModal({
   action: Exclude<ConfirmAction, null>;
   activeCount: number;
   problemCount: number;
+  selectedCount: number | null;
   isPending: boolean;
   onClose: () => void;
   onConfirm: () => void;
 }) {
   const isClearQueue = action === "clear-queue";
+  const isSelectedClear = !isClearQueue && selectedCount != null;
   return (
-    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label={isClearQueue ? "Clear queue" : "Clear failed jobs"}>
+    <div
+      className="modal-backdrop"
+      role="dialog"
+      aria-modal="true"
+      aria-label={isClearQueue ? "Clear queue" : isSelectedClear ? "Clear selected failed jobs" : "Clear failed jobs"}
+    >
       <section className="modal-panel">
         <div className="card-stack">
           <div>
-            <strong>{isClearQueue ? "Clear active queue?" : "Clear failed history?"}</strong>
+            <strong>{isClearQueue ? "Clear active queue?" : isSelectedClear ? "Clear selected jobs?" : "Clear failed history?"}</strong>
               <p className="muted-copy">
                 {isClearQueue
                   ? `${activeCount} queued, scheduled, retryable interrupted, or waiting job${activeCount === 1 ? "" : "s"} will be cancelled. Running jobs are left alone.`
-                  : `${problemCount} failed, cancelled, interrupted, or skipped historical job${problemCount === 1 ? "" : "s"} will be hidden from the queue view. Review-held jobs stay visible.`}
+                  : isSelectedClear
+                    ? `${selectedCount} selected failed or cancelled job${selectedCount === 1 ? "" : "s"} will be hidden from the queue view.`
+                    : `${problemCount} failed, cancelled, interrupted, or skipped historical job${problemCount === 1 ? "" : "s"} will be hidden from the queue view. Review-held jobs stay visible.`}
             </p>
           </div>
           <div className="section-card-actions">
@@ -797,7 +1046,75 @@ function ConfirmBulkActionModal({
               Keep
             </button>
             <button className="button button-primary" type="button" onClick={onConfirm} disabled={isPending}>
-              {isPending ? "Clearing…" : isClearQueue ? "Clear queue" : "Clear failed"}
+              {isPending ? "Clearing…" : isClearQueue ? "Clear queue" : isSelectedClear ? "Clear selected" : "Clear failed"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function MixedProblemSelectionModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Mixed problem selection">
+      <section className="modal-panel">
+        <div className="card-stack">
+          <div>
+            <strong>Mixed problem selection</strong>
+            <p className="muted-copy">Select jobs with the same error before using a bulk action.</p>
+          </div>
+          <div className="section-card-actions">
+            <button className="button button-primary" type="button" onClick={onClose}>
+              OK
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
+function BackupRetryModal({
+  count,
+  isPending,
+  onCancel,
+  onRetry,
+}: {
+  count: number;
+  isPending: boolean;
+  onCancel: () => void;
+  onRetry: (strategy: BackupRetryStrategy) => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Backup already exists">
+      <section className="modal-panel">
+        <div className="card-stack">
+          <div>
+            <strong>Backup already exists</strong>
+            <p className="muted-copy">
+              Choose how to handle the existing backup before retrying {count} selected job{count === 1 ? "" : "s"}.
+            </p>
+          </div>
+          <div className="section-card-actions">
+            <button className="button button-secondary" type="button" onClick={onCancel} disabled={isPending}>
+              Cancel
+            </button>
+            <button
+              className="button button-secondary"
+              type="button"
+              onClick={() => onRetry("keep_existing_backup")}
+              disabled={isPending}
+            >
+              Keep original
+            </button>
+            <button
+              className="button button-primary"
+              type="button"
+              onClick={() => onRetry("replace_backup")}
+              disabled={isPending}
+            >
+              Replace backup
             </button>
           </div>
         </div>
@@ -1607,6 +1924,31 @@ function isProblemJob(job: JobSummary) {
   return ["failed", "interrupted", "cancelled", "manual_review"].includes(normalisedJobStatus(job));
 }
 
+function problemSelectionErrorKeys(jobs: JobSummary[]) {
+  return [...new Set(jobs.map(problemErrorKey))];
+}
+
+function problemErrorKey(
+  job: Pick<JobSummary, "status" | "failure_code" | "failure_category" | "failure_message" | "skipped_reason">,
+) {
+  const code = job.failure_code ?? job.failure_category ?? "unknown";
+  const message = normaliseProblemMessage(job.failure_message ?? job.skipped_reason ?? "");
+  return `${code}:${message}`;
+}
+
+function normaliseProblemMessage(value: string) {
+  return value.trim().replace(/\s+/g, " ").toLowerCase();
+}
+
+function isBackupAlreadyExistsJob(
+  job: Pick<JobSummary, "failure_code" | "failure_category" | "failure_message">,
+) {
+  return (
+    job.failure_code === "backup_already_exists"
+    || (job.failure_category === "replacement_failed" && /backup file already exists/i.test(job.failure_message ?? ""))
+  );
+}
+
 function isRetryableInterruptedForQueueClear(job: JobSummary) {
   return (
     normalisedJobStatus(job) === "interrupted"
@@ -2049,7 +2391,7 @@ function groupJobsByWorker(jobs: JobSummary[]): JobWorkerGroup[] {
             ? "Execution and dry-run jobs"
             : "Execution queue",
       jobs: items,
-      initiallyOpen: items.some((item) => item.status === "running" || item.status === "pending"),
+      initiallyOpen: items.some((item) => item.status === "running" || item.status === "pending" || isProblemJob(item)),
       totalDurationSeconds: sumNullable(items.map((item) => item.duration_seconds)),
       totalInputSizeBytes: sumNullable(items.map((item) => item.input_size_bytes)),
       totalOutputSizeBytes: sumNullable(items.map((item) => item.output_size_bytes)),

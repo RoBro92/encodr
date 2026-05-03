@@ -98,3 +98,90 @@ def test_strip_only_review_plan_preserves_output_growth_guard(tmp_path: Path, re
     assert strip_plan.video.transcode_required is False
     assert strip_plan.video.max_allowed_video_reduction_percent is None
     assert strip_plan.video.output_larger_than_input_review_percent == 7
+
+
+def test_retry_job_can_set_existing_backup_strategy(tmp_path: Path, repo_root: Path) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Backup Collision.mkv"
+    backup_path = tmp_path / "Backup Collision.encodr-backup.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    backup_path.write_text("backup", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "replacement_failed"
+        persisted.job.failure_message = "A backup file already exists for the source path."
+        persisted.job.original_backup_path = backup_path.as_posix()
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            retry_job = jobs_module.JobsService().retry_job(
+                session,
+                job_id=persisted.job.id,
+                existing_backup_strategy="replace_backup",
+            )
+
+        assert retry_job.attempt_count == persisted.job.attempt_count + 1
+        assert retry_job.plan_snapshot_id != persisted.job.plan_snapshot_id
+        assert retry_job.plan_snapshot.payload["replace"]["existing_backup_strategy"] == "replace_backup"
+
+
+def test_retry_job_rejects_backup_strategy_for_other_failures(tmp_path: Path, repo_root: Path) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Worker Failure.mkv"
+    backup_path = tmp_path / "Worker Failure.encodr-backup.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    backup_path.write_text("backup", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "worker_failed"
+        persisted.job.failure_message = "The worker stopped unexpectedly."
+        persisted.job.original_backup_path = backup_path.as_posix()
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            with pytest.raises(jobs_module.ApiConflictError) as error:
+                jobs_module.JobsService().retry_job(
+                    session,
+                    job_id=persisted.job.id,
+                    existing_backup_strategy="replace_backup",
+                )
+
+        assert "failed because a backup already exists" in str(error.value)
+
+
+def test_retry_job_rejects_backup_strategy_when_recorded_backup_is_missing(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Missing Backup.mkv"
+    backup_path = tmp_path / "Missing Backup.encodr-backup.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "replacement_failed"
+        persisted.job.failure_message = "A backup file already exists for the source path."
+        persisted.job.original_backup_path = backup_path.as_posix()
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            with pytest.raises(jobs_module.ApiConflictError) as error:
+                jobs_module.JobsService().retry_job(
+                    session,
+                    job_id=persisted.job.id,
+                    existing_backup_strategy="keep_existing_backup",
+                )
+
+        assert "backup file is no longer available" in str(error.value)
