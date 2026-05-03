@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.4 - 2026-05-03
+
+This hotfix improves bulk recovery for failed and cancelled jobs, especially replacement failures caused by existing backup files.
+
+- capped the Failed / Cancelled queue view at 10 jobs per page with search and pagination for longer failure lists
+- added visible multi-select, select-all-visible, and selected clear actions for failed and cancelled jobs
+- blocked mixed-error bulk selections with a gentle operator prompt so unrelated failures are not processed together
+- added backup-collision retry choices for replace backup, keep original backup, or cancel
+- hardened backup retry handling so backup strategies are only accepted for confirmed backup-collision failures with an existing recorded backup
+- preserved the old backup during replace-backup retries until the new replacement succeeds, restoring it on failure
+- made empty selected-clear requests clear nothing instead of falling back to full failed-history clearing
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests`
+
 ## 0.4.3 - 2026-05-03
 
 This hotfix improves replacement retry handling for installs where verified output could not be moved into place.

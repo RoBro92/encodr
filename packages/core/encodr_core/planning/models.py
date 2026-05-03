@@ -94,6 +94,7 @@ class ReplacePlan(ConfigModel):
     require_verification: bool
     keep_original_until_verified: bool
     delete_replaced_source: bool
+    existing_backup_strategy: str = "fail"
 
 
 class PolicyContext(ConfigModel):

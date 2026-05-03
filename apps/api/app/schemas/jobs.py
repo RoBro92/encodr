@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
@@ -193,6 +193,14 @@ class BulkJobActionResponse(BaseModel):
     affected_job_ids: list[str] = Field(default_factory=list)
 
 
+class BulkJobClearRequest(BaseModel):
+    job_ids: list[str] | None = None
+
+
+class RetryJobRequest(BaseModel):
+    existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
+
+
 class JobBackupResponse(BaseModel):
     job_id: str
     tracked_file_id: str
@@ -254,6 +262,7 @@ class JobSummaryResponse(BaseModel):
     backend_selection_reason: str | None = None
     failure_message: str | None = None
     failure_category: str | None = None
+    failure_code: str | None = None
     skipped_reason: str | None = None
     input_size_bytes: int | None = None
     output_size_bytes: int | None = None
@@ -328,6 +337,7 @@ class JobSummaryResponse(BaseModel):
             backend_selection_reason=job.backend_selection_reason,
             failure_message=job.failure_message,
             failure_category=job.failure_category,
+            failure_code=job_failure_code(job),
             skipped_reason=job_skipped_reason(job),
             input_size_bytes=job.input_size_bytes,
             output_size_bytes=job.output_size_bytes if job.output_size_bytes is not None else (
@@ -422,6 +432,7 @@ class JobListResponse(BaseModel):
     items: list[JobSummaryResponse]
     limit: int | None = None
     offset: int = 0
+    total: int = 0
 
 
 BatchJobItemResponse.model_rebuild()
@@ -434,6 +445,24 @@ def job_duration_seconds(job: Job) -> int | None:
     if duration < 0:
         return None
     return int(round(duration))
+
+
+def job_failure_code(job: Job) -> str | None:
+    replacement_payload = job.replacement_payload if isinstance(job.replacement_payload, dict) else {}
+    details = replacement_payload.get("details")
+    if isinstance(details, dict) and details.get("failure_code"):
+        return str(details["failure_code"])
+    message = " ".join(
+        value
+        for value in [
+            job.failure_message,
+            job.replacement_failure_message,
+        ]
+        if value
+    ).lower()
+    if "backup file already exists" in message:
+        return "backup_already_exists"
+    return job.failure_category
 
 
 def job_removed_audio_tracks(job: Job) -> int:
