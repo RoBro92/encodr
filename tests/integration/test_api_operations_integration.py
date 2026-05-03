@@ -228,6 +228,64 @@ def test_retry_endpoint_creates_new_job_record(
         assert jobs[1].status == JobStatus.PENDING
 
 
+def test_retry_endpoint_allows_replacement_failure_manual_review_retry(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Replacement Retry Film (2024).mkv", contents="retry")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.MANUAL_REVIEW
+        persisted.job.failure_category = "replacement_failed"
+        persisted.job.failure_message = "Failed to move the verified output into place."
+        session.commit()
+        original_job_id = persisted.job.id
+
+    response = context.client.post(
+        f"/api/jobs/{original_job_id}/retry",
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["id"] != original_job_id
+    assert payload["status"] == JobStatus.PENDING.value
+    assert payload["attempt_count"] == 2
+
+
+def test_retry_endpoint_keeps_protected_replacement_failure_behind_review_gate(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Protected Replacement Retry Film (2024).mkv", contents="retry")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.MANUAL_REVIEW
+        persisted.job.failure_category = "replacement_failed"
+        persisted.job.failure_message = "Failed to move the verified output into place."
+        persisted.job.tracked_file.is_protected = True
+        session.commit()
+        original_job_id = persisted.job.id
+
+    response = context.client.post(
+        f"/api/jobs/{original_job_id}/retry",
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 409
+    assert "requires manual review" in response.json()["detail"]
+
+
 def test_retry_endpoint_blocks_when_active_job_exists(
     tmp_path: Path,
     repo_root: Path,

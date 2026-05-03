@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import errno
+import os
 import shutil
 from pathlib import Path
 
@@ -129,10 +130,14 @@ def test_replacement_failure_preserves_original(tmp_path: Path, monkeypatch) -> 
 
     plan = replace_plan("non4k_remux_languages.json", source_path)
 
-    def fail_move(*args, **kwargs):  # type: ignore[no-untyped-def]
-        raise PermissionError(errno.EACCES, "permission denied")
+    original_replace = os.replace
 
-    monkeypatch.setattr(shutil, "move", fail_move)
+    def fail_replace(src, dst):  # type: ignore[no-untyped-def]
+        if Path(src).resolve() == staged_path.resolve() and Path(dst).resolve() == source_path.resolve():
+            raise PermissionError(errno.EACCES, "permission denied")
+        original_replace(src, dst)
+
+    monkeypatch.setattr(os, "replace", fail_replace)
     result = service.place_verified_output(
         source_path=source_path,
         staged_output_path=staged_path,
@@ -156,6 +161,52 @@ def test_replacement_failure_preserves_original(tmp_path: Path, monkeypatch) -> 
     assert result.details["backup_exists_after_rollback"] is False
     assert source_path.read_text(encoding="utf-8") == "original"
     assert staged_path.read_text(encoding="utf-8") == "new"
+
+
+def test_cross_device_replacement_does_not_require_metadata_preservation(tmp_path: Path, monkeypatch) -> None:
+    service = ReplacementService()
+    source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+    staged_path = tmp_path / "scratch" / "output.mkv"
+    source_path.parent.mkdir(parents=True)
+    staged_path.parent.mkdir(parents=True)
+    source_path.write_text("original", encoding="utf-8")
+    staged_path.write_text("new", encoding="utf-8")
+    plan = replace_plan("non4k_remux_languages.json", source_path)
+    original_rename = os.rename
+    original_replace = os.replace
+
+    def fail_staged_rename(src, dst):  # type: ignore[no-untyped-def]
+        if Path(src).resolve() == staged_path.resolve() and Path(dst).resolve() == source_path.resolve():
+            raise OSError(errno.EXDEV, "cross-device link")
+        original_rename(src, dst)
+
+    def fail_staged_replace(src, dst):  # type: ignore[no-untyped-def]
+        if Path(src).resolve() == staged_path.resolve() and Path(dst).resolve() == source_path.resolve():
+            raise OSError(errno.EXDEV, "cross-device link")
+        original_replace(src, dst)
+
+    def metadata_preserving_copy_denied(src: str, dst: str, *args, **kwargs) -> str:  # type: ignore[no-untyped-def]
+        Path(dst).write_bytes(Path(src).read_bytes())
+        raise PermissionError(errno.EPERM, "operation not permitted")
+
+    monkeypatch.setattr(os, "rename", fail_staged_rename)
+    monkeypatch.setattr(os, "replace", fail_staged_replace)
+    monkeypatch.setattr(shutil, "copy2", metadata_preserving_copy_denied)
+
+    result = service.place_verified_output(
+        source_path=source_path,
+        staged_output_path=staged_path,
+        plan=plan,
+    )
+
+    backup_path = source_path.with_name("Example Film (2024).encodr-backup.mkv")
+    assert result.status == ReplacementStatus.SUCCEEDED
+    assert result.final_output_path == source_path
+    assert result.original_backup_path == backup_path
+    assert result.details["move_strategy"] == "copyfile"
+    assert source_path.read_text(encoding="utf-8") == "new"
+    assert backup_path.read_text(encoding="utf-8") == "original"
+    assert staged_path.exists() is False
 
 
 def test_source_backup_permission_failure_returns_context_without_mutating_files(tmp_path: Path, monkeypatch) -> None:

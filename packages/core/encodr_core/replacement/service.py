@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import errno
 import shutil
+from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
 from typing import Any
@@ -30,6 +31,11 @@ class ReplacementResult(ConfigModel):
     @classmethod
     def not_required(cls) -> "ReplacementResult":
         return cls(status=ReplacementStatus.NOT_REQUIRED)
+
+
+@dataclass(frozen=True, slots=True)
+class _OutputMoveResult:
+    details: dict[str, Any]
 
 
 class ReplacementService:
@@ -123,7 +129,7 @@ class ReplacementService:
                 ),
             ) from error
         try:
-            shutil.move(staged_output_path.as_posix(), final_output_path.as_posix())
+            move_result = _move_generated_output(staged_output_path, final_output_path)
         except Exception as error:
             details = _replacement_failure_details(
                 operation="move_verified_output_into_place",
@@ -169,6 +175,7 @@ class ReplacementService:
                     deleted_original_source=False,
                     details={
                         "mode": "replace_in_place",
+                        **move_result.details,
                         "backup_delete_failed": True,
                         **_replacement_failure_details(
                             operation="delete_replaced_source_backup",
@@ -186,7 +193,7 @@ class ReplacementService:
             final_output_path=final_output_path,
             original_backup_path=None if deleted_original_source else backup_path,
             deleted_original_source=deleted_original_source,
-            details={"mode": "replace_in_place"},
+            details={"mode": "replace_in_place", **move_result.details},
         )
 
     def _place_alongside_original(
@@ -208,7 +215,7 @@ class ReplacementService:
             )
 
         try:
-            shutil.move(staged_output_path.as_posix(), final_output_path.as_posix())
+            move_result = _move_generated_output(staged_output_path, final_output_path)
         except Exception as error:
             raise ReplacementError(
                 "Failed to place the verified output alongside the source file.",
@@ -229,11 +236,34 @@ class ReplacementService:
             status=ReplacementStatus.SUCCEEDED,
             final_output_path=final_output_path,
             deleted_original_source=False,
-            details={"mode": "keep_original"},
+            details={"mode": "keep_original", **move_result.details},
         )
 
     def _build_backup_path(self, source_path: Path) -> Path:
         return source_path.with_name(f"{source_path.stem}.encodr-backup{source_path.suffix}")
+
+
+def _move_generated_output(staged_output_path: Path, final_output_path: Path) -> _OutputMoveResult:
+    try:
+        staged_output_path.replace(final_output_path)
+        return _OutputMoveResult(details={"move_strategy": "rename"})
+    except OSError as error:
+        if getattr(error, "errno", None) != errno.EXDEV:
+            raise
+        cross_device_details = {
+            "move_strategy": "copyfile",
+            "cross_device_errno": error.errno,
+            "cross_device_message": str(error),
+        }
+
+    shutil.copyfile(staged_output_path, final_output_path)
+    try:
+        staged_output_path.unlink()
+    except OSError as cleanup_error:
+        cross_device_details["staged_cleanup_failed"] = True
+        cross_device_details["staged_cleanup_errno"] = cleanup_error.errno
+        cross_device_details["staged_cleanup_error"] = str(cleanup_error)
+    return _OutputMoveResult(details=cross_device_details)
 
 
 def _replacement_failure_details(

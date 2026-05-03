@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.4.3 - 2026-05-03
+
+This hotfix improves replacement retry handling for installs where verified output could not be moved into place.
+
+- allowed retrying replacement-failure manual-review jobs when the file itself does not require protected or planner review
+- kept protected replacement failures behind the existing manual-review gate
+- made verified output placement tolerate cross-device moves by falling back to content copy without metadata preservation
+- retained move-strategy details in replacement results for diagnosis
+- revalidated with:
+  - `pytest tests/unit/test_verification_replacement.py tests/integration/test_api_operations_integration.py -q`
+  - `bash infra/scripts/release-check.sh`
+
 ## 0.4.2 - 2026-05-01
 
 This hotfix restores updates for installs that moved to the 0.4.1 hardening release and then found the API container would not become healthy.
