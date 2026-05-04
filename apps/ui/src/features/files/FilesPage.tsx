@@ -25,7 +25,14 @@ import {
 } from "../../lib/api/hooks";
 import { ApiError } from "../../lib/api/client";
 import { bulkProgressSummary, useBulkQueueProgress } from "../bulk-queue/BulkQueueProgress";
-import type { ExistingBackupStrategy, FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
+import type {
+  ExistingBackupStrategy,
+  FolderScanSummary,
+  JobSummary,
+  ReprocessMode,
+  WatchedJob,
+  WatchedJobPayload,
+} from "../../lib/types/api";
 import { formatBitrate, formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -197,6 +204,7 @@ export function FilesPage() {
   const [dryRunWorkerId, setDryRunWorkerId] = useState("");
   const [backupPolicy, setBackupPolicy] = useState("keep");
   const [existingBackupStrategy, setExistingBackupStrategy] = useState<ExistingBackupStrategy>("fail");
+  const [rerunMode, setRerunMode] = useState<ReprocessMode | null>(null);
   const [dryRunScheduleConflict, setDryRunScheduleConflict] = useState<{
     worker_id: string;
     worker_name: string;
@@ -375,6 +383,24 @@ export function FilesPage() {
   const pendingProcessingCount = scopedJobs.filter((job) =>
     ["pending", "scheduled", "running"].includes(job.status),
   ).length;
+  const rerunSelectedCount =
+    selectedPaths.length > 0
+      ? selectedPaths.length
+      : activeScan?.folder_path === selectedFolder
+        ? activeScan.files.length
+        : selectedFolder
+          ? 1
+          : 0;
+  const rerunSkippedBackupTempCount = activeScan ? activeScan.backup_file_count ?? 0 : 0;
+  const rerunAlreadyQueuedCount = allJobs.filter((job) => {
+    if (!["pending", "scheduled", "running"].includes(job.status)) {
+      return false;
+    }
+    if (selectedPaths.length > 0) {
+      return selectedPaths.some((path) => pathsMatch(path, job.source_path));
+    }
+    return selectedFolder ? pathsWithinScope(job.source_path, selectedFolder) : false;
+  }).length;
   const selectionScopeLabel =
     selectedPaths.length > 0
       ? `${selectedPaths.length} file${selectedPaths.length === 1 ? "" : "s"} selected`
@@ -827,6 +853,7 @@ export function FilesPage() {
     source_path?: string;
     backup_policy: string;
     existing_backup_strategy: ExistingBackupStrategy;
+    reprocess_mode?: ReprocessMode;
   }) {
     await bulkQueue.start(payload);
   }
@@ -837,6 +864,27 @@ export function FilesPage() {
     }
     setActiveTab("jobs-created");
     void startBulkQueue({ ...activeSelection, backup_policy: backupPolicy, existing_backup_strategy: existingBackupStrategy });
+  }
+
+  function openRerunSummary(mode: ReprocessMode) {
+    if (!activeSelection) {
+      return;
+    }
+    setRerunMode(mode);
+  }
+
+  function startRerun(mode: ReprocessMode) {
+    if (!activeSelection) {
+      return;
+    }
+    setRerunMode(null);
+    setActiveTab("jobs-created");
+    void startBulkQueue({
+      ...activeSelection,
+      backup_policy: backupPolicy,
+      existing_backup_strategy: "keep_existing_backup_if_present",
+      reprocess_mode: mode,
+    });
   }
 
   const tabs: Array<{ key: LibraryTab; label: string }> = [
@@ -1318,6 +1366,22 @@ export function FilesPage() {
             >
               {bulkQueue.startPending ? "Creating..." : bulkOperationActive ? "Adding..." : "Create Jobs"}
             </button>
+            <button
+              className="button button-secondary button-small"
+              type="button"
+              onClick={() => openRerunSummary("normal")}
+              disabled={!activeSelection || bulkQueue.startPending || bulkOperationActive}
+            >
+              Reprocess selected
+            </button>
+            <button
+              className="button button-secondary button-small"
+              type="button"
+              onClick={() => openRerunSummary("strip_only")}
+              disabled={!activeSelection || bulkQueue.startPending || bulkOperationActive}
+            >
+              Strip audio/subtitles only
+            </button>
           </div>
         </div>
 
@@ -1711,6 +1775,72 @@ export function FilesPage() {
           void runScan(path);
         }}
       />
+
+      {rerunMode ? (
+        <div
+          className="modal-backdrop"
+          role="dialog"
+          aria-modal="true"
+          aria-label={rerunMode === "strip_only" ? "Strip audio/subtitles only" : "Reprocess selected"}
+        >
+          <section className="modal-panel">
+            <div className="card-stack">
+              <div>
+                <strong>{rerunMode === "strip_only" ? "Strip audio/subtitles only" : "Reprocess selected"}</strong>
+                <p className="muted-copy">
+                  This queues only the active media files and skips backup, temp, scratch, and staged files.
+                </p>
+              </div>
+
+              {rerunMode === "strip_only" ? (
+                <div className="info-strip">
+                  <strong>Recommended cleanup</strong>
+                  <span>
+                    Strip-only cleanup is recommended for fixing audio/subtitle policy changes because it leaves video unchanged.
+                  </span>
+                </div>
+              ) : null}
+
+              <div className="metric-grid">
+                <div className="metric-card">
+                  <span className="metric-label">Selected</span>
+                  <strong>{rerunSelectedCount}</strong>
+                  <span className="muted-copy">Selected files: {rerunSelectedCount}</span>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">Skipped</span>
+                  <strong>{rerunSkippedBackupTempCount}</strong>
+                  <span className="muted-copy">Skipped backup/temp files: {rerunSkippedBackupTempCount}</span>
+                </div>
+                <div className="metric-card">
+                  <span className="metric-label">Already queued</span>
+                  <strong>{rerunAlreadyQueuedCount}</strong>
+                  <span className="muted-copy">Already queued or running: {rerunAlreadyQueuedCount}</span>
+                </div>
+              </div>
+
+              <p className="muted-copy">
+                Existing backup files will not be processed as media, and any current active job for a file will be blocked
+                rather than duplicated. Jobs created will be shown in the bulk queue result.
+              </p>
+
+              <div className="section-card-actions">
+                <button className="button button-secondary" type="button" onClick={() => setRerunMode(null)}>
+                  Cancel
+                </button>
+                <button
+                  className="button button-primary"
+                  type="button"
+                  onClick={() => startRerun(rerunMode)}
+                  disabled={bulkQueue.startPending || bulkOperationActive}
+                >
+                  {rerunMode === "strip_only" ? "Start strip-only cleanup" : "Start reprocess"}
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
 
       {dryRunModalOpen ? (
         <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Start dry run">

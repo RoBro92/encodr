@@ -8,6 +8,8 @@ from pydantic import BaseModel, Field, ValidationError, model_validator
 from app.schemas.schedules import ScheduleWindowRequest, ScheduleWindowResponse
 from encodr_db.models import BulkQueueOperation, Job
 
+CreateExistingBackupStrategy = Literal["fail", "replace_backup", "keep_existing_backup", "keep_existing_backup_if_present"]
+
 
 class CreateJobRequest(BaseModel):
     tracked_file_id: str | None = None
@@ -17,7 +19,8 @@ class CreateJobRequest(BaseModel):
     preferred_backend_override: str | None = None
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
     backup_policy: str = "keep"
-    existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
+    existing_backup_strategy: CreateExistingBackupStrategy = "fail"
+    reprocess_mode: Literal["normal", "strip_only"] = "normal"
 
     @model_validator(mode="after")
     def validate_target(self) -> "CreateJobRequest":
@@ -36,7 +39,8 @@ class CreateBatchJobsRequest(BaseModel):
     preferred_backend_override: str | None = None
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
     backup_policy: str = "keep"
-    existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
+    existing_backup_strategy: CreateExistingBackupStrategy = "fail"
+    reprocess_mode: Literal["normal", "strip_only"] = "normal"
     summary_only: bool = False
 
     @model_validator(mode="after")

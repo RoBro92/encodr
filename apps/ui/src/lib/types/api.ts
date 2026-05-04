@@ -138,6 +138,7 @@ export type FolderScanSummary = {
   directory_count: number;
   direct_directory_count: number;
   video_file_count: number;
+  backup_file_count: number;
   likely_show_count: number;
   likely_season_count: number;
   likely_episode_count: number;
@@ -468,7 +469,8 @@ export type RetryJobPayload = {
   existing_backup_strategy?: "fail" | "replace_backup" | "keep_existing_backup";
 };
 
-export type ExistingBackupStrategy = "fail" | "replace_backup" | "keep_existing_backup";
+export type ExistingBackupStrategy = "fail" | "replace_backup" | "keep_existing_backup" | "keep_existing_backup_if_present";
+export type ReprocessMode = "normal" | "strip_only";
 
 export type JobBackup = {
   job_id: string;
@@ -1114,6 +1116,7 @@ export type CreateJobPayload = {
   schedule_windows?: ScheduleWindow[];
   backup_policy?: string;
   existing_backup_strategy?: ExistingBackupStrategy;
+  reprocess_mode?: ReprocessMode;
 };
 
 export type CreateBatchJobsPayload = FileSelectionPayload & {
@@ -1123,6 +1126,7 @@ export type CreateBatchJobsPayload = FileSelectionPayload & {
   schedule_windows?: ScheduleWindow[];
   backup_policy?: string;
   existing_backup_strategy?: ExistingBackupStrategy;
+  reprocess_mode?: ReprocessMode;
   summary_only?: boolean;
 };
 

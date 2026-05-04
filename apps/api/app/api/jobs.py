@@ -472,6 +472,7 @@ def create_job(
             schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
             backup_policy=payload.backup_policy,
             existing_backup_strategy=payload.existing_backup_strategy,
+            reprocess_mode=payload.reprocess_mode,
         )
         session.commit()
         return JobDetailResponse.from_model(job)
@@ -609,6 +610,7 @@ def create_batch_jobs(
             schedule_windows=schedule_windows,
             backup_policy=payload.backup_policy,
             existing_backup_strategy=payload.existing_backup_strategy,
+            reprocess_mode=payload.reprocess_mode,
         )
         for result in batch_results:
             total_files += 1

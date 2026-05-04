@@ -1486,6 +1486,120 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/queue add complete/i);
   });
 
+  it("shows safe rerun summary and starts strip-only cleanup through bulk queue", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-active-rerun",
+              source_path: "/media/TV/Bluey/Bluey S01E02.mkv",
+              source_filename: "Bluey S01E02.mkv",
+              status: "running",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: {
+          media_root: "/media",
+          movies_root: "/media/Movies",
+          tv_root: "/media/TV",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/files/scan",
+        body: {
+          folder_path: "/media/TV/Bluey",
+          root_path: "/media",
+          directory_count: 1,
+          direct_directory_count: 1,
+          video_file_count: 2,
+          backup_file_count: 1,
+          likely_show_count: 1,
+          likely_season_count: 1,
+          likely_episode_count: 2,
+          likely_film_count: 0,
+          files: [
+            { name: "Bluey S01E01.mkv", path: "/media/TV/Bluey/Bluey S01E01.mkv", entry_type: "file", is_video: true },
+            { name: "Bluey S01E02.mkv", path: "/media/TV/Bluey/Bluey S01E02.mkv", entry_type: "file", is_video: true },
+          ],
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/bulk-queue",
+        body: {
+          ...bulkQueueOperation(),
+          total_expected: 3,
+          queued_count: 1,
+          skipped_count: 1,
+          blocked_count: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/bulk-queue/bulk-1",
+        body: {
+          ...bulkQueueOperation(),
+          total_expected: 3,
+          queued_count: 1,
+          skipped_count: 1,
+          blocked_count: 1,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/files", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^tv/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /scan folder/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /select all/i }));
+    await userEvent.click(screen.getByRole("button", { name: /strip audio\/subtitles only/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /strip audio\/subtitles only/i });
+    expect(within(dialog).getByText(/selected files:\s*2/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/skipped backup\/temp files:\s*1/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/already queued or running:\s*1/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/recommended for fixing audio\/subtitle policy changes/i)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: /start strip-only cleanup/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/bulk-queue"),
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            selected_paths: ["/media/TV/Bluey/Bluey S01E01.mkv", "/media/TV/Bluey/Bluey S01E02.mkv"],
+            backup_policy: "keep",
+            existing_backup_strategy: "keep_existing_backup_if_present",
+            reprocess_mode: "strip_only",
+          }),
+        }),
+      );
+    });
+
+    const progressDialog = await screen.findByRole("dialog", { name: /adding to queue/i });
+    expect(progressDialog).toBeInTheDocument();
+    expect(within(progressDialog).getByText(/1 queued, 1 skipped, 1 blocked, 0 failed/i)).toBeInTheDocument();
+  });
+
   it("keeps bulk queue progress visible in the sidebar after the modal is closed", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
