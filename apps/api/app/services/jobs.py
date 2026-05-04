@@ -159,8 +159,11 @@ class JobsService:
         logger.info(
             "job created",
             extra={
+                "event": "job_created",
                 "job_id": job.id,
                 "tracked_file_id": job.tracked_file_id,
+                "file_id": job.tracked_file_id,
+                "status": job.status.value,
                 "job_kind": job.job_kind.value,
                 "backup_policy": job.backup_policy,
             },
@@ -206,7 +209,7 @@ class JobsService:
             original_job=original_job,
             existing_backup_strategy=existing_backup_strategy,
         )
-        return self._create_job_from_plan(
+        retry = self._create_job_from_plan(
             session,
             original_job.tracked_file,
             plan_snapshot,
@@ -221,6 +224,18 @@ class JobsService:
             ignore_worker_schedule=original_job.ignore_worker_schedule,
             backup_policy=original_job.backup_policy,
         )
+        logger.info(
+            "job retried",
+            extra={
+                "event": "job_retried",
+                "job_id": retry.id,
+                "tracked_file_id": retry.tracked_file_id,
+                "file_id": retry.tracked_file_id,
+                "status": retry.status.value,
+                "original_job_id": original_job.id,
+            },
+        )
+        return retry
 
     def cancel_job(
         self,
@@ -243,7 +258,17 @@ class JobsService:
                 job.tracked_file,
                 ProcessingPlan.model_validate(job.plan_snapshot.payload),
             )
-            logger.info("queued job cancelled", extra={"job_id": job.id, "status": job.status.value})
+            logger.info(
+                "queued job cancelled",
+                extra={
+                    "event": "job_cancelled",
+                    "job_id": job.id,
+                    "tracked_file_id": job.tracked_file_id,
+                    "file_id": job.tracked_file_id,
+                    "status": job.status.value,
+                    "reason": "cancelled_by_operator",
+                },
+            )
             return job
 
         assigned_worker = (
@@ -259,14 +284,35 @@ class JobsService:
                 requested_at=cancelled_at,
                 reason="Cancellation requested for the remote worker.",
             )
-            logger.warning("remote job cancellation requested", extra={"job_id": job.id, "worker_id": job.assigned_worker_id})
+            logger.warning(
+                "remote job cancellation requested",
+                extra={
+                    "event": "job_cancellation_requested",
+                    "job_id": job.id,
+                    "tracked_file_id": job.tracked_file_id,
+                    "file_id": job.tracked_file_id,
+                    "worker_id": job.assigned_worker_id,
+                    "status": job.status.value,
+                    "reason": "remote_worker_cancellation_requested",
+                },
+            )
             return job
         if job.job_kind == JobKind.DRY_RUN:
             raise ApiConflictError("Running dry run analysis cannot yet be cancelled safely.")
         if not local_worker_loop.request_cancel(job.id):
             raise ApiConflictError("The local worker is not actively processing this job.")
         jobs.mark_cancelling(job, requested_at=cancelled_at)
-        logger.info("local running job cancellation requested", extra={"job_id": job.id})
+        logger.info(
+            "local running job cancellation requested",
+            extra={
+                "event": "job_cancellation_requested",
+                "job_id": job.id,
+                "tracked_file_id": job.tracked_file_id,
+                "file_id": job.tracked_file_id,
+                "status": job.status.value,
+                "reason": "local_worker_cancellation_requested",
+            },
+        )
         return job
 
     def clear_queue(self, session: Session) -> list[Job]:
@@ -279,18 +325,37 @@ class JobsService:
                 job.tracked_file,
                 ProcessingPlan.model_validate(job.plan_snapshot.payload),
             )
-        logger.info("queue cleared", extra={"affected_count": len(cancelled)})
+        logger.info(
+            "queue cleared",
+            extra={
+                "event": "job_queue_cleared",
+                "status": "cleared",
+                "affected_count": len(cancelled),
+                "job_ids": [job.id for job in cancelled],
+            },
+        )
         return cancelled
 
     def clear_failed_history(self, session: Session, *, job_ids: list[str] | None = None) -> list[Job]:
         if job_ids == []:
-            logger.info("failed job history clear skipped for empty selection")
+            logger.info(
+                "failed job history clear skipped for empty selection",
+                extra={"event": "failed_job_history_clear_skipped", "status": "skipped", "reason": "empty_selection"},
+            )
             return []
         jobs = JobRepository(session).clear_failed_history(
             cleared_at=datetime.now(timezone.utc),
             job_ids=job_ids,
         )
-        logger.info("failed job history cleared", extra={"affected_count": len(jobs)})
+        logger.info(
+            "failed job history cleared",
+            extra={
+                "event": "failed_job_history_cleared",
+                "status": "cleared",
+                "affected_count": len(jobs),
+                "job_ids": [job.id for job in jobs],
+            },
+        )
         return jobs
 
     def resolve_problem_jobs(self, session: Session, *, job_ids: list[str], action: str) -> list[Job]:
@@ -331,7 +396,15 @@ class JobsService:
             path_validator=self._validate_cleanup_backup_path,
         )
         if jobs:
-            logger.info("expired backups deleted", extra={"affected_count": len(jobs)})
+            logger.info(
+                "expired backups deleted",
+                extra={
+                    "event": "expired_backups_deleted",
+                    "status": "deleted",
+                    "affected_count": len(jobs),
+                    "job_ids": [job.id for job in jobs],
+                },
+            )
         return jobs
 
     def delete_backup(self, session: Session, *, job_id: str) -> Job:
@@ -342,7 +415,17 @@ class JobsService:
         backup_path = self._backup_path_for_job(job)
         backup_path.unlink()
         job.backup_deleted_at = datetime.now(timezone.utc)
-        logger.info("backup deleted", extra={"job_id": job.id, "backup_path": backup_path.as_posix()})
+        logger.info(
+            "backup deleted",
+            extra={
+                "event": "backup_deleted",
+                "job_id": job.id,
+                "tracked_file_id": job.tracked_file_id,
+                "file_id": job.tracked_file_id,
+                "status": "deleted",
+                "backup_path": backup_path.as_posix(),
+            },
+        )
         session.flush()
         return job
 
@@ -400,7 +483,17 @@ class JobsService:
                     "restored_at": restored_at.isoformat(),
                 },
             )
-        logger.warning("backup restored and file returned to manual review", extra={"job_id": job.id, "backup_path": backup_path.as_posix()})
+        logger.warning(
+            "backup restored and file returned to manual review",
+            extra={
+                "event": "backup_restored",
+                "job_id": job.id,
+                "tracked_file_id": job.tracked_file_id,
+                "file_id": job.tracked_file_id,
+                "status": "restored",
+                "backup_path": backup_path.as_posix(),
+            },
+        )
         session.flush()
         return job
 

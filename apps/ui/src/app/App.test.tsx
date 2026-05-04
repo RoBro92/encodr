@@ -899,8 +899,8 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByRole("dialog", { name: /release notes/i })).not.toBeInTheDocument();
   });
 
-  it("opens diagnostics from the settings header action and renders logs in a console", async () => {
-    mockFetchRoutes([
+  it("opens diagnostics from the settings header action and renders logs with explicit event names", async () => {
+    const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
       { method: "GET", path: "/api/system/storage", body: storageStatus() },
       { method: "GET", path: "/api/system/update", body: updateStatus() },
@@ -920,6 +920,7 @@ describe("Encodr UI shell", () => {
               component: "api",
               logger: "encodr.jobs",
               message: "job created",
+              event: "job_created",
               fields: { job_id: "job-1", event: "job_created" },
             },
             {
@@ -928,6 +929,7 @@ describe("Encodr UI shell", () => {
               component: "worker",
               logger: "encodr.worker.loop",
               message: "replacement failed",
+              event: "replacement_failed",
               fields: {
                 event: "replacement_failed",
                 job_id: "job-2",
@@ -967,11 +969,65 @@ describe("Encodr UI shell", () => {
     expect(logConsole).toHaveTextContent(/INFO/i);
     expect(logConsole).toHaveTextContent(/api/i);
     expect(logConsole).toHaveTextContent(/job created/i);
+    expect(logConsole).toHaveTextContent(/event:\s*job_created/i);
     expect(logConsole).toHaveTextContent(/encodr\.worker\.loop/i);
-    expect(logConsole).toHaveTextContent(/replacement_failed/i);
+    expect(logConsole).toHaveTextContent(/event:\s*replacement_failed/i);
     expect(logConsole).toHaveTextContent(/job-2/i);
     expect(logConsole).toHaveTextContent(/move_verified_output_into_place/i);
     expect(logConsole).toHaveTextContent(/13/i);
+
+    await userEvent.type(within(dialog).getByLabelText(/^event$/i), "replacement_failed");
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(expect.stringContaining("event=replacement_failed"), expect.anything());
+    });
+  });
+
+  it("surfaces processing rules save failures with a diagnostics hint", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+      { method: "GET", path: "/api/system/update", body: updateStatus() },
+      { method: "GET", path: "/api/config/setup/library-roots", body: { media_root: "/media", movies_root: "/media/Movies", tv_root: "/media/TV" } },
+      { method: "GET", path: "/api/config/setup/execution-preferences", body: executionPreferences() },
+      { method: "GET", path: "/api/config/setup/processing-rules", body: processingRules() },
+      {
+        method: "GET",
+        path: "/api/system/logs",
+        body: {
+          retention_days: 7,
+          log_dir: "/data/logs",
+          items: [
+            {
+              timestamp: "2026-04-27T12:31:00Z",
+              level: "error",
+              component: "api",
+              logger: "encodr.config",
+              message: "processing rules save rejected",
+              event: "processing_rules_save_failed",
+              fields: { event: "processing_rules_save_failed", reason: "validation_error" },
+            },
+          ],
+        },
+      },
+      {
+        method: "PUT",
+        path: "/api/config/setup/processing-rules",
+        status: 500,
+        body: { detail: "Rules save rejected" },
+      },
+    ]);
+
+    renderApp({ route: "/config", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^settings$/i })).toBeInTheDocument();
+
+    await userEvent.selectOptions(screen.getByLabelText(/^Movies target video codec$/i), "h264");
+    await userEvent.click(screen.getByRole("button", { name: /save movies rules/i }));
+
+    const alert = await screen.findByRole("alert");
+    expect(alert).toHaveTextContent(/unable to save processing rules/i);
+    expect(alert).toHaveTextContent(/rules save rejected/i);
+    expect(alert).toHaveTextContent(/review recent events in diagnostics/i);
   });
 
   it("refreshes stale update status when the settings updates card is shown", async () => {

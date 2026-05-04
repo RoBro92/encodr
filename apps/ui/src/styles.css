@@ -2945,6 +2945,17 @@ pre {
   color: #94a3b8;
 }
 
+.settings-log-event {
+  color: #cbd5f5;
+  font-size: 0.78rem;
+}
+
+.settings-log-event code {
+  color: #dbeafe;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.75rem;
+}
+
 .settings-log-row:hover {
   background: rgba(30, 41, 59, 0.5);
 }

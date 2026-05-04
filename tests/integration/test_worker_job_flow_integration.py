@@ -4,11 +4,10 @@ from pathlib import Path
 
 import pytest
 
-from app.executor.loop import LocalWorkerLoop
-from app.executor.service import WorkerExecutionService
 from encodr_core.config import load_config_bundle
 from encodr_core.verification import OutputVerifier
 from encodr_db.models import ComplianceState, FileLifecycleState, Job, JobStatus
+from encodr_db.runtime import LocalWorkerLoop, WorkerExecutionService
 from tests.helpers.db import create_migrated_session_factory
 from tests.helpers.filesystem import create_filesystem_layout
 from tests.helpers.jobs import (

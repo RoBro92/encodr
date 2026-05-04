@@ -7,6 +7,7 @@ import pytest
 from encodr_core.config import load_config_bundle
 from encodr_db.models import AuditEventType, JobStatus, ManualReviewDecisionType
 from encodr_db.repositories import AuditEventRepository, JobRepository, ManualReviewDecisionRepository, TrackedFileRepository
+from encodr_shared.diagnostics import read_log_events
 from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
@@ -68,6 +69,12 @@ def test_approve_decision_persists_and_is_audited(
     assert payload["decision"]["decision_type"] == "approved"
     assert payload["job"]["status"] == "pending"
     assert payload["review_item"]["review_status"] == "resolved"
+    logs = _diagnostic_events(context, "review_item_approved")
+    assert len(logs) == 1
+    assert logs[0].level == "info"
+    assert logs[0].fields["tracked_file_id"] == planned.tracked_file_id
+    assert logs[0].fields["job_id"] == payload["job"]["id"]
+    assert logs[0].fields["status"] == "approved"
 
     with session_factory() as session:
         latest = ManualReviewDecisionRepository(session).get_latest_for_tracked_file(planned.tracked_file_id)
@@ -114,6 +121,17 @@ def test_reject_and_hold_decisions_persist_correctly(
     assert reject_response.json()["job"]["status"] == "pending"
     assert reject_response.json()["review_item"]["review_status"] == "rejected"
     assert hold_response.json()["review_item"]["review_status"] == "held"
+    reject_logs = _diagnostic_events(context, "review_item_rejected")
+    hold_logs = _diagnostic_events(context, "review_item_held")
+    assert len(reject_logs) == 1
+    assert len(hold_logs) == 1
+    assert reject_logs[0].level == "info"
+    assert hold_logs[0].level == "info"
+    assert reject_logs[0].fields["tracked_file_id"] == reject_context.tracked_file_id
+    assert reject_logs[0].fields["job_id"] == reject_response.json()["job"]["id"]
+    assert reject_logs[0].fields["status"] == "rejected"
+    assert hold_logs[0].fields["tracked_file_id"] == hold_context.tracked_file_id
+    assert hold_logs[0].fields["status"] == "held"
 
     with session_factory() as session:
         jobs = JobRepository(session).list_jobs(tracked_file_id=reject_context.tracked_file_id)
@@ -402,3 +420,12 @@ def build_context(
 def authenticate(context) -> object:
     bootstrap_admin(context.client)
     return login_user(context.client)
+
+
+def _diagnostic_events(context, event: str):
+    return read_log_events(
+        context.bundle.app.data_dir / "logs",
+        component="api",
+        event=event,
+        limit=1000,
+    )

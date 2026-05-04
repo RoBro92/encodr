@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
@@ -38,6 +39,7 @@ from app.schemas.jobs import (
     RetryJobRequest,
 )
 from app.services.errors import ApiServiceError
+from app.services.diagnostics import exception_fields
 from app.services.files import FilesService
 from app.services.library import LibraryService
 from app.services.jobs import JobsService
@@ -54,12 +56,26 @@ router = APIRouter(
     prefix="/jobs",
     tags=["jobs"],
 )
+logger = logging.getLogger("encodr.api.jobs")
 
 ARTWORK_EXTENSIONS = (".jpg", ".jpeg", ".png", ".webp")
 
 
 def _raise_service_error(error: ApiServiceError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _log_service_error(event: str, error: ApiServiceError, **fields: object) -> None:
+    extra = {
+        "event": event,
+        "status": error.status_code,
+        **exception_fields(error),
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+    if error.status_code >= 500:
+        logger.error("API action failed", extra=extra)
+    else:
+        logger.warning("API action failed", extra=extra)
 
 
 def get_review_service(
@@ -188,6 +204,7 @@ def clear_queue(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_jobs_clear_queue_failed", error)
         _raise_service_error(error)
 
 
@@ -211,6 +228,7 @@ def clear_failed_jobs(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_failed_jobs_clear_failed", error, job_ids=payload.job_ids if payload is not None else None)
         _raise_service_error(error)
 
 
@@ -235,6 +253,7 @@ def resolve_failed_jobs(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_failed_jobs_resolve_failed", error, job_ids=payload.job_ids, action=payload.action)
         _raise_service_error(error)
 
 
@@ -273,6 +292,7 @@ def delete_job_backup(
         return JobBackupResponse.from_model(job)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_backup_delete_failed", error, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -293,6 +313,7 @@ def restore_job_backup(
         return JobBackupResponse.from_model(job)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_backup_restore_failed", error, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -314,6 +335,7 @@ def start_bulk_queue_operation(
         return BulkQueueOperationResponse.from_model(operation)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_bulk_queue_start_failed", error)
         _raise_service_error(error)
 
 
@@ -383,6 +405,7 @@ def get_job_detail(
             pass
         return JobDetailResponse(**detail)
     except ApiServiceError as error:
+        _log_service_error("api_job_detail_failed", error, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -446,6 +469,13 @@ def create_job(
         return JobDetailResponse.from_model(job)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error(
+            "api_job_create_failed",
+            error,
+            tracked_file_id=payload.tracked_file_id,
+            file_id=payload.tracked_file_id,
+            plan_snapshot_id=payload.plan_snapshot_id,
+        )
         _raise_service_error(error)
 
 
@@ -467,6 +497,7 @@ def retry_job(
         return JobDetailResponse.from_model(job)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_job_retry_failed", error, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -484,6 +515,7 @@ def cancel_job(
         return JobDetailResponse.from_model(job)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_job_cancel_failed", error, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -577,6 +609,12 @@ def create_batch_jobs(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error(
+            "api_batch_jobs_create_failed",
+            error,
+            preferred_worker_id=payload.preferred_worker_id,
+            pinned_worker_id=payload.pinned_worker_id,
+        )
         _raise_service_error(error)
 
 
@@ -674,4 +712,10 @@ def create_dry_run_jobs(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error(
+            "api_dry_run_jobs_create_failed",
+            error,
+            preferred_worker_id=payload.preferred_worker_id,
+            pinned_worker_id=payload.pinned_worker_id,
+        )
         _raise_service_error(error)

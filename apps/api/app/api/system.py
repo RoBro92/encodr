@@ -108,6 +108,8 @@ def check_update_status(
 def get_diagnostic_logs(
     component: str | None = None,
     level: str | None = None,
+    event: str | None = None,
+    redact_paths: bool = True,
     limit: int = 100,
     config_bundle: ConfigBundle = Depends(get_config_bundle),
     current_user: User = Depends(require_admin_user),
@@ -118,11 +120,13 @@ def get_diagnostic_logs(
         log_dir,
         component=component or None,
         level=level or None,
+        event=event or None,
+        redact_paths=redact_paths,
         limit=max(1, min(limit, 500)),
     )
     return DiagnosticLogsResponse(
         retention_days=config_bundle.app.diagnostics.retention_days,
-        log_dir=log_dir.as_posix(),
+        log_dir="[PATH]" if redact_paths else log_dir.as_posix(),
         items=[DiagnosticLogEventResponse(**asdict(item)) for item in items],
     )
 
@@ -131,7 +135,7 @@ def get_diagnostic_logs(
 def download_diagnostic_bundle(
     request: Request,
     time_range: str = "last_day",
-    redact_paths: bool = False,
+    redact_paths: bool = True,
     config_bundle: ConfigBundle = Depends(get_config_bundle),
     session_factory=Depends(get_session_factory),
     current_user: User = Depends(require_admin_user),

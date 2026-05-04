@@ -1,13 +1,13 @@
 from __future__ import annotations
 
 from datetime import datetime, timezone
+import errno
+import logging
 from pathlib import Path
 
 from sqlalchemy import create_engine
 from sqlalchemy.orm import Session, sessionmaker
 
-from app.executor.loop import LocalWorkerLoop
-from app.executor.service import WorkerExecutionService
 from encodr_core.config import load_config_bundle
 from encodr_core.execution import (
     ExecutionCancelledError,
@@ -26,6 +26,7 @@ from encodr_core.verification import OutputVerifier, VerificationResult, Verific
 from encodr_db import Base
 from encodr_db.models import ComplianceState, FileLifecycleState, Job, JobStatus, ReplacementStatus as DbReplacementStatus, VerificationStatus as DbVerificationStatus
 from encodr_db.repositories import JobRepository, PlanSnapshotRepository, ProbeSnapshotRepository, TrackedFileRepository
+from encodr_db.runtime import LocalWorkerLoop, WorkerExecutionService
 import encodr_db.runtime.worker as worker_runtime
 
 FIXTURES_DIR = Path(__file__).resolve().parents[1] / "fixtures" / "ffprobe"
@@ -414,14 +415,8 @@ def test_output_larger_than_input_guard_sends_result_to_review(tmp_path: Path) -
         assert source_path.read_text(encoding="utf-8") == "original"
 
 
-def test_output_larger_guard_uses_source_file_size_when_probe_metrics_are_missing(tmp_path: Path, monkeypatch) -> None:
-    logged_warnings: list[dict[str, object]] = []
-
-    def capture_warning(message: str, *args, **kwargs) -> None:
-        logged_warnings.append({"message": message, **dict(kwargs.get("extra") or {})})
-
-    monkeypatch.setattr(worker_runtime.logger, "warning", capture_warning)
-
+def test_output_larger_guard_uses_source_file_size_when_probe_metrics_are_missing(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.WARNING, logger="encodr.worker.loop")
     with database_session() as session:
         bundle = load_config_bundle(project_root=REPO_ROOT)
         source_path = tmp_path / "Movies" / "Animated Episode.mkv"
@@ -457,11 +452,66 @@ def test_output_larger_guard_uses_source_file_size_when_probe_metrics_are_missin
         assert result.output_size_bytes == 1860
         assert refreshed_job.status == JobStatus.MANUAL_REVIEW
         assert staged_path.exists()
-        assert any(
-            record.get("event") == "output_growth_guard_triggered"
-            and record.get("output_growth_guard_percent") == 5
-            for record in logged_warnings
+        warning_record = next(
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "output_growth_guard_triggered"
         )
+        assert warning_record.levelno == logging.WARNING
+        assert getattr(warning_record, "diagnostic_type", None) == "worker_runtime"
+        assert getattr(warning_record, "output_growth_guard_percent", None) == 5
+
+
+def test_replacement_permission_denied_logs_error_with_errno_and_reason(tmp_path: Path, caplog) -> None:
+    caplog.set_level(logging.ERROR, logger="encodr.worker.loop")
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Example Remux Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        staged_path = tmp_path / "scratch" / "output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        replacement = ReplacementResult(
+            status=ReplacementStatus.FAILED,
+            final_output_path=source_path,
+            original_backup_path=source_path.with_name("Example Remux Film (2024).encodr-backup.mkv"),
+            failure_message="Failed to move the source file to its backup path.",
+            details={
+                "operation": "move_source_to_backup",
+                "errno": errno.EACCES,
+                "reason": "permission denied",
+                "permission_hint": "Check NAS share ownership, group membership, and write permissions.",
+            },
+        )
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+            replacement_service=StaticReplacementService(replacement),
+        )
+        jobs = JobRepository(session)
+        jobs.mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        assert result.status == "failed"
+        error_record = next(
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "replacement_failed"
+        )
+        assert error_record.levelno == logging.ERROR
+        assert getattr(error_record, "diagnostic_type", None) == "worker_runtime"
+        assert getattr(error_record, "replacement_errno", None) == errno.EACCES
+        assert getattr(error_record, "replacement_reason", None) == "permission denied"
 
 
 def test_non_video_savings_do_not_trip_compression_safety(tmp_path: Path) -> None:

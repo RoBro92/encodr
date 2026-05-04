@@ -6,12 +6,14 @@ import json
 import logging
 from pathlib import Path
 import threading
+from time import monotonic
 from typing import Any
 
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, sessionmaker
 
 from app.services.errors import ApiConflictError, ApiServiceError, ApiValidationError
+from app.services.diagnostics import elapsed_ms, exception_fields
 from app.services.files import FilesService
 from app.services.jobs import JobsService
 from app.services.library import LibraryService, VIDEO_EXTENSIONS
@@ -85,6 +87,7 @@ class BulkQueueService:
         return operation, True
 
     def process_operation(self, operation_id: str) -> None:
+        started_at = monotonic()
         state = {
             "queued": 0,
             "skipped": 0,
@@ -102,6 +105,7 @@ class BulkQueueService:
                     extra={
                         "event": "bulk_queue_operation_started",
                         "operation_id": operation_id,
+                        "status": "running",
                         "scope": operation.scope,
                         "batch_size": operation.batch_size,
                     },
@@ -133,6 +137,7 @@ class BulkQueueService:
                     stage="completed",
                     status_text="No processable media files were found.",
                     state=state,
+                    duration_ms=elapsed_ms(started_at),
                 )
                 return
 
@@ -146,6 +151,7 @@ class BulkQueueService:
                         stage="completed",
                         status_text="Bulk queue operation was cancelled.",
                         state=state,
+                        duration_ms=elapsed_ms(started_at),
                     )
                     return
                 self._update_operation(
@@ -167,6 +173,7 @@ class BulkQueueService:
                             stage="completed",
                             status_text="Bulk queue operation was cancelled.",
                             state=state,
+                            duration_ms=elapsed_ms(started_at),
                         )
                         return
                     item = self._queue_one_file(source_path, options)
@@ -196,6 +203,7 @@ class BulkQueueService:
                 stage="completed",
                 status_text="Completed",
                 state=state,
+                duration_ms=elapsed_ms(started_at),
             )
         except Exception as error:  # noqa: BLE001
             logger.exception(
@@ -203,7 +211,9 @@ class BulkQueueService:
                 extra={
                     "event": "bulk_queue_operation_failed",
                     "operation_id": operation_id,
-                    "error": _safe_message(str(error)),
+                    "status": "failed",
+                    "duration_ms": elapsed_ms(started_at),
+                    **exception_fields(error),
                 },
             )
             try:
@@ -214,6 +224,7 @@ class BulkQueueService:
                     status_text="Bulk queue operation failed.",
                     state=state,
                     error_summary=str(error),
+                    duration_ms=elapsed_ms(started_at),
                 )
             except Exception:  # noqa: BLE001
                 logger.exception(
@@ -313,7 +324,8 @@ class BulkQueueService:
                     extra={
                         "event": "bulk_queue_batch_failed",
                         "source_path": source_path.as_posix(),
-                        "error": _safe_message(str(error)),
+                        "status": "failed",
+                        **exception_fields(error),
                     },
                 )
                 return {
@@ -328,7 +340,8 @@ class BulkQueueService:
                     extra={
                         "event": "bulk_queue_batch_failed",
                         "source_path": source_path.as_posix(),
-                        "error": _safe_message(str(error)),
+                        "status": "failed",
+                        **exception_fields(error),
                     },
                 )
                 return {
@@ -366,6 +379,7 @@ class BulkQueueService:
         status_text: str,
         state: dict[str, Any],
         error_summary: str | None = None,
+        duration_ms: int | None = None,
     ) -> None:
         with self.session_factory() as session:
             operation = self._get_operation(session, operation_id)
@@ -404,6 +418,7 @@ class BulkQueueService:
                     "blocked_count": int(state.get("blocked", 0)),
                     "failed_count": int(state.get("failed", 0)),
                     "error_summary": safe_error_summary,
+                    "duration_ms": duration_ms,
                 },
             )
 

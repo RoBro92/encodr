@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import errno
 import json
 from datetime import datetime
 from pathlib import Path
@@ -13,6 +14,7 @@ from encodr_db.repositories import ManualReviewDecisionRepository, TrackedFileRe
 from encodr_db.runtime import WorkerExecutionService
 from encodr_core.verification import OutputVerifier
 from encodr_shared.scheduling import DAY_ORDER
+from encodr_shared.diagnostics import read_log_events
 from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
@@ -564,14 +566,20 @@ def test_system_and_worker_status_endpoints_return_useful_data(
     storage_response = context.client.get("/api/system/storage", headers=auth.headers)
     runtime_response = context.client.get("/api/system/runtime", headers=auth.headers)
     worker_response = context.client.get("/api/worker/status", headers=auth.headers)
+    logs_response = context.client.get("/api/system/logs", headers=auth.headers)
+    raw_logs_response = context.client.get("/api/system/logs", params={"redact_paths": "false"}, headers=auth.headers)
 
     assert storage_response.status_code == 200
     assert runtime_response.status_code == 200
     assert worker_response.status_code == 200
+    assert logs_response.status_code == 200
+    assert raw_logs_response.status_code == 200
     assert storage_response.json()["scratch"]["path"] == layout.scratch_dir.as_posix()
     assert runtime_response.json()["db_reachable"] is True
     assert worker_response.json()["worker_name"] == "worker-local"
     assert worker_response.json()["local_only"] is True
+    assert logs_response.json()["log_dir"] == "[PATH]"
+    assert raw_logs_response.json()["log_dir"] == (context.bundle.app.data_dir / "logs").as_posix()
 
 
 def test_invalid_source_path_handling_is_clear_and_safe(
@@ -1157,6 +1165,13 @@ def test_direct_job_creation_rejects_encodr_backup_target(
 
     assert response.status_code == 409
     assert "backup files" in response.json()["detail"].lower()
+    failure_logs = _diagnostic_events(context, "api_job_create_failed")
+    assert len(failure_logs) == 1
+    assert failure_logs[0].level == "warning"
+    assert failure_logs[0].fields["status"] == 409
+    assert failure_logs[0].fields["reason"] == response.json()["detail"]
+    assert failure_logs[0].fields["exception_type"] == "ApiConflictError"
+    assert failure_logs[0].fields["plan_snapshot_id"] == planned.plan_snapshot_id
     with session_factory() as session:
         assert session.query(Job).count() == 0
 
@@ -1373,6 +1388,74 @@ def test_bulk_queue_processes_500_files_in_batches_and_reports_progress(
     assert counting_factory.commit_count > 500
 
 
+def test_bulk_queue_logs_started_completed_and_failed_state_transitions(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    source_path = layout.create_source_file("Movies/Logged Bulk Film (2024).mkv", contents="film")
+    context.app.state.bulk_queue_service.probe_client_factory = lambda: StaticProbeClient(
+        media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    )
+
+    with session_factory() as session:
+        operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(selected_paths=[source_path.as_posix()]),
+        )
+        operation_id = operation.id
+        session.commit()
+
+    assert created is True
+    context.app.state.bulk_queue_service.process_operation(operation_id)
+
+    started_logs = [
+        event for event in _diagnostic_events(context, "bulk_queue_operation_started") if event.fields.get("operation_id") == operation_id
+    ]
+    completed_logs = [
+        event for event in _diagnostic_events(context, "bulk_queue_operation_completed") if event.fields.get("operation_id") == operation_id
+    ]
+    assert len(started_logs) == 1
+    assert len(completed_logs) == 1
+    assert started_logs[0].fields["operation_id"] == operation_id
+    assert started_logs[0].fields["status"] == "running"
+    assert completed_logs[0].fields["operation_id"] == operation_id
+    assert completed_logs[0].fields["status"] == "completed"
+    assert completed_logs[0].fields["duration_ms"] >= 0
+    assert completed_logs[0].fields["queued_count"] == 1
+
+    with session_factory() as session:
+        failed_operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(selected_paths=[source_path.as_posix(), (layout.source_dir / "Movies" / "Missing.mkv").as_posix()]),
+        )
+        failed_operation_id = failed_operation.id
+        session.commit()
+
+    assert created is True
+
+    def raise_permission_denied(operation_id: str):  # type: ignore[no-untyped-def]
+        del operation_id
+        raise PermissionError(errno.EACCES, "Permission denied", source_path.as_posix())
+
+    monkeypatch.setattr(context.app.state.bulk_queue_service, "_resolve_selection", raise_permission_denied)
+
+    context.app.state.bulk_queue_service.process_operation(failed_operation_id)
+
+    failed_logs = [
+        event
+        for event in _diagnostic_events(context, "bulk_queue_operation_failed")
+        if event.level == "error" and event.fields.get("operation_id") == failed_operation_id
+    ]
+    assert len(failed_logs) == 1
+    assert failed_logs[0].fields["operation_id"] == failed_operation_id
+    assert failed_logs[0].fields["status"] == "failed"
+    assert failed_logs[0].fields["exception_type"] == "PermissionError"
+    assert failed_logs[0].fields["errno"] == errno.EACCES
+    assert "Permission denied" in failed_logs[0].fields["reason"]
+
+
 def test_duplicate_bulk_queue_start_reuses_active_operation(
     tmp_path: Path,
     repo_root: Path,
@@ -1393,6 +1476,40 @@ def test_duplicate_bulk_queue_start_reuses_active_operation(
     with session_factory() as session:
         assert session.query(BulkQueueOperation).count() == 1
         assert session.query(Job).count() == 0
+
+
+def test_folder_browse_permission_denied_logs_errno_and_reason(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, _session_factory, layout, _bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+    denied_folder = layout.source_dir / "Restricted"
+    denied_folder.mkdir(parents=True)
+
+    original_iterdir = Path.iterdir
+
+    def permission_denied_iterdir(path: Path):  # type: ignore[no-untyped-def]
+        if path == denied_folder.resolve():
+            raise PermissionError(errno.EACCES, "Permission denied", path.as_posix())
+        return original_iterdir(path)
+
+    monkeypatch.setattr(Path, "iterdir", permission_denied_iterdir)
+
+    response = context.client.get(
+        "/api/files/browse",
+        params={"path": denied_folder.as_posix()},
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 400
+    assert "permission" in response.json()["detail"].lower()
+    permission_logs = _diagnostic_events(context, "library_browse_permission_denied")
+    assert len(permission_logs) == 1
+    assert permission_logs[0].level == "error"
+    assert permission_logs[0].fields["errno"] == errno.EACCES
+    assert "Permission denied" in permission_logs[0].fields["reason"]
 
 
 def build_context(
@@ -1424,6 +1541,15 @@ def build_context(
 def authenticate(context) -> object:
     bootstrap_admin(context.client)
     return login_user(context.client)
+
+
+def _diagnostic_events(context, event: str):
+    return read_log_events(
+        context.bundle.app.data_dir / "logs",
+        component="api",
+        event=event,
+        limit=1000,
+    )
 
 
 def bulk_queue_payload(

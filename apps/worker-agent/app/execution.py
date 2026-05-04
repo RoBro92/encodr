@@ -29,6 +29,14 @@ from encodr_core.verification import OutputVerifier, VerificationResult, Verific
 logger = logging.getLogger("encodr.worker_agent.execution")
 
 
+def _worker_log_extra(event: str, **fields: object) -> dict[str, object]:
+    return {
+        "event": event,
+        "diagnostic_type": "worker_runtime",
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+
+
 class RemoteExecutionService:
     def __init__(
         self,
@@ -87,6 +95,16 @@ class RemoteExecutionService:
             started_at=datetime.now(timezone.utc),
         )
         if blocked_result is not None:
+            logger.warning(
+                "remote job skipped because target is an encodr artifact",
+                extra=_worker_log_extra(
+                    "worker_job_skipped",
+                    job_id=job_id,
+                    source_path=str(source_path),
+                    reason=blocked_result.failure_message,
+                    failure_category=blocked_result.failure_category,
+                ),
+            )
             return blocked_result
         try:
             result = self.runner.execute_plan(
@@ -121,6 +139,21 @@ class RemoteExecutionService:
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
+            logger.error(
+                "ffmpeg execution failed",
+                extra=_worker_log_extra(
+                    "ffmpeg_failed",
+                    job_id=job_id,
+                    source_path=str(source_path),
+                    exit_code=error.details.get("exit_code"),
+                    requested_backend=error.details.get("requested_backend"),
+                    attempted_backend=error.details.get("actual_backend") or error.details.get("requested_backend"),
+                    actual_backend=error.details.get("actual_backend"),
+                    actual_accelerator=error.details.get("actual_accelerator"),
+                    backend_fallback_used=bool(error.details.get("backend_fallback_used", False)),
+                    reason=error.message,
+                ),
+            )
             result = ExecutionResult(
                 mode="failed",
                 status="failed",
@@ -141,6 +174,17 @@ class RemoteExecutionService:
             )
         except Exception as error:
             completed_at = datetime.now(timezone.utc)
+            logger.error(
+                "remote execution failed unexpectedly",
+                extra=_worker_log_extra(
+                    "worker_job_failed",
+                    job_id=job_id,
+                    source_path=str(source_path),
+                    failure_category="execution_failed",
+                    reason=str(error),
+                    exception_type=type(error).__name__,
+                ),
+            )
             result = ExecutionResult(
                 mode="failed",
                 status="failed",
@@ -195,6 +239,15 @@ class RemoteExecutionService:
             started_at=started_at,
         )
         if blocked_result is not None:
+            logger.warning(
+                "remote dry run skipped because target is an encodr artifact",
+                extra=_worker_log_extra(
+                    "worker_job_skipped",
+                    source_path=str(source_path),
+                    reason=blocked_result.failure_message,
+                    failure_category=blocked_result.failure_category,
+                ),
+            )
             return blocked_result
         if progress_callback is not None:
             progress_callback(
@@ -251,6 +304,15 @@ class RemoteExecutionService:
                 completed_at=datetime.now(timezone.utc),
             )
         except ProbeBinaryNotFoundError as error:
+            logger.error(
+                "ffprobe dependency failed",
+                extra=_worker_log_extra(
+                    "ffprobe_failed",
+                    source_path=str(source_path),
+                    failure_category="analysis_dependency_missing",
+                    reason=error.message,
+                ),
+            )
             return ExecutionResult(
                 mode="dry_run",
                 status="failed",
@@ -266,6 +328,15 @@ class RemoteExecutionService:
                 completed_at=datetime.now(timezone.utc),
             )
         except ProbeError as error:
+            logger.error(
+                "ffprobe analysis failed",
+                extra=_worker_log_extra(
+                    "ffprobe_failed",
+                    source_path=str(source_path),
+                    failure_category="analysis_probe_failed",
+                    reason=error.message,
+                ),
+            )
             return ExecutionResult(
                 mode="dry_run",
                 status="failed",
@@ -281,6 +352,16 @@ class RemoteExecutionService:
                 completed_at=datetime.now(timezone.utc),
             )
         except Exception as error:
+            logger.error(
+                "analysis job failed unexpectedly",
+                extra=_worker_log_extra(
+                    "worker_job_failed",
+                    source_path=str(source_path),
+                    failure_category="analysis_failed",
+                    reason=str(error),
+                    exception_type=type(error).__name__,
+                ),
+            )
             return ExecutionResult(
                 mode="dry_run",
                 status="failed",
@@ -411,6 +492,22 @@ class RemoteExecutionService:
         }
         if not verification.passed:
             failure_message = verification.failures[0].message if verification.failures else "Output verification failed."
+            logger.error(
+                "output verification failed",
+                extra=_worker_log_extra(
+                    "verification_failed",
+                    job_id=job_id,
+                    staged_output_path=str(staged_result.output_path),
+                    requested_backend=staged_result.requested_backend,
+                    actual_backend=staged_result.actual_backend,
+                    failure_category="verification_failed",
+                    reason=failure_message,
+                    verification_failures=[
+                        failure.model_dump(mode="json") if hasattr(failure, "model_dump") else failure
+                        for failure in verification.failures
+                    ],
+                ),
+            )
             return ExecutionResult(
                 mode=staged_result.mode,
                 status="failed",
@@ -467,12 +564,12 @@ class RemoteExecutionService:
 
         logger.info(
             "replacement started",
-            extra={
-                "event": "replacement_started",
-                "job_id": job_id,
-                "source_path": str(media_file.file_path),
-                "staged_output_path": str(staged_result.output_path),
-            },
+            extra=_worker_log_extra(
+                "replacement_started",
+                job_id=job_id,
+                source_path=str(media_file.file_path),
+                staged_output_path=str(staged_result.output_path),
+            ),
         )
         try:
             replacement = self.replacement_service.place_verified_output(
@@ -497,16 +594,19 @@ class RemoteExecutionService:
         if replacement.status != ReplacementStatus.SUCCEEDED:
             logger.error(
                 "replacement failed",
-                extra={
-                    "event": "replacement_failed",
-                    "job_id": job_id,
-                    "source_path": str(media_file.file_path),
-                    "staged_output_path": str(staged_result.output_path),
-                    "final_output_path": str(replacement.final_output_path) if replacement.final_output_path is not None else None,
-                    "original_backup_path": str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
-                    "replacement_details": replacement.details,
-                    "replacement_failure_message": replacement.failure_message,
-                },
+                extra=_worker_log_extra(
+                    "replacement_failed",
+                    job_id=job_id,
+                    source_path=str(media_file.file_path),
+                    staged_output_path=str(staged_result.output_path),
+                    final_output_path=str(replacement.final_output_path) if replacement.final_output_path is not None else None,
+                    original_backup_path=str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
+                    replacement_operation=replacement.details.get("operation"),
+                    replacement_errno=replacement.details.get("errno"),
+                    replacement_reason=replacement.details.get("reason") or replacement.details.get("exception_message"),
+                    replacement_details=replacement.details,
+                    replacement_failure_message=replacement.failure_message,
+                ),
             )
             return ExecutionResult(
                 mode=staged_result.mode,
@@ -537,16 +637,20 @@ class RemoteExecutionService:
             "input_size_bytes": source_size,
             "output_size_bytes": file_size_or_none(replacement.final_output_path) or staged_metrics["output_size_bytes"],
         }
-        logger.info(
+        replacement_log = logger.warning if replacement.details.get("backup_delete_failed") or replacement.details.get("staged_cleanup_failed") else logger.info
+        replacement_log(
             "replacement succeeded",
-            extra={
-                "event": "replacement_succeeded",
-                "job_id": job_id,
-                "source_path": str(media_file.file_path),
-                "final_output_path": str(replacement.final_output_path) if replacement.final_output_path is not None else None,
-                "original_backup_path": str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
-                "replacement_details": replacement.details,
-            },
+            extra=_worker_log_extra(
+                "replacement_succeeded",
+                job_id=job_id,
+                source_path=str(media_file.file_path),
+                final_output_path=str(replacement.final_output_path) if replacement.final_output_path is not None else None,
+                original_backup_path=str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
+                replacement_operation=replacement.details.get("operation"),
+                replacement_errno=replacement.details.get("errno"),
+                replacement_reason=replacement.details.get("reason") or replacement.details.get("exception_message"),
+                replacement_details=replacement.details,
+            ),
         )
         return ExecutionResult(
             mode=staged_result.mode,
@@ -604,11 +708,11 @@ class RemoteExecutionService:
         if failure.category == "output_larger_than_input":
             logger.warning(
                 "output growth guard triggered",
-                extra={
-                    "event": "output_growth_guard_triggered",
-                    "job_id": job_id,
+                extra=_worker_log_extra(
+                    "output_growth_guard_triggered",
+                    job_id=job_id,
                     **_output_growth_details(plan=plan, metrics=metrics),
-                },
+                ),
             )
         completed_at = datetime.now(timezone.utc)
         return ExecutionResult(

@@ -35,7 +35,7 @@ from encodr_core.planning import ProcessingPlan, build_dry_run_analysis_payload,
 from encodr_core.probe import FFprobeClient, ProbeBinaryNotFoundError, ProbeError
 from encodr_core.replacement import ReplacementResult, ReplacementService, ReplacementStatus
 from encodr_core.verification import OutputVerifier, VerificationResult, VerificationStatus
-from encodr_db.models import Job, JobKind, Worker, WorkerHealthStatus, WorkerRegistrationStatus, WorkerType
+from encodr_db.models import Job, JobKind, JobStatus, Worker, WorkerHealthStatus, WorkerRegistrationStatus, WorkerType
 from encodr_db.repositories import JobRepository, TrackedFileRepository, WorkerRepository
 from encodr_db.runtime.dispatch import job_allows_worker
 from encodr_shared import (
@@ -57,6 +57,14 @@ from encodr_shared import (
 
 logger = logging.getLogger("encodr.worker.loop")
 LOCAL_WORKER_CAPABILITY_SOURCE = "local_worker_runtime"
+
+
+def _worker_log_extra(event: str, **fields: object) -> dict[str, object]:
+    return {
+        "event": event,
+        "diagnostic_type": "worker_runtime",
+        **{key: value for key, value in fields.items() if value is not None},
+    }
 
 
 @dataclass(slots=True)
@@ -411,7 +419,13 @@ class WorkerExecutionService:
             tracked_file_repository.update_file_state_from_execution_result(job.tracked_file, plan, blocked_result)
             logger.warning(
                 "job skipped because target is an encodr artifact",
-                extra={"job_id": job.id, "source_path": str(media_file.file_path), "reason": blocked_result.failure_message},
+                extra=_worker_log_extra(
+                    "worker_job_skipped",
+                    job_id=job.id,
+                    source_path=str(media_file.file_path),
+                    reason=blocked_result.failure_message,
+                    failure_category=blocked_result.failure_category,
+                ),
             )
             session.flush()
             return blocked_result
@@ -456,6 +470,21 @@ class WorkerExecutionService:
             )
         except (FFmpegBinaryNotFoundError, FFmpegProcessError) as error:
             completed_at = datetime.now(timezone.utc)
+            logger.error(
+                "ffmpeg execution failed",
+                extra=_worker_log_extra(
+                    "ffmpeg_failed",
+                    job_id=job.id,
+                    source_path=str(media_file.file_path),
+                    exit_code=error.details.get("exit_code"),
+                    requested_backend=error.details.get("requested_backend"),
+                    attempted_backend=error.details.get("actual_backend") or error.details.get("requested_backend"),
+                    actual_backend=error.details.get("actual_backend"),
+                    actual_accelerator=error.details.get("actual_accelerator"),
+                    backend_fallback_used=bool(error.details.get("backend_fallback_used", False)),
+                    reason=error.message,
+                ),
+            )
             result = ExecutionResult(
                 mode="failed",
                 status="failed",
@@ -476,6 +505,17 @@ class WorkerExecutionService:
             )
         except Exception as error:
             completed_at = datetime.now(timezone.utc)
+            logger.error(
+                "worker execution failed unexpectedly",
+                extra=_worker_log_extra(
+                    "worker_job_failed",
+                    job_id=job.id,
+                    source_path=str(media_file.file_path),
+                    failure_category="execution_failed",
+                    reason=str(error),
+                    exception_type=type(error).__name__,
+                ),
+            )
             result = ExecutionResult(
                 mode="failed",
                 status="failed",
@@ -509,15 +549,22 @@ class WorkerExecutionService:
 
         job_repository.mark_result(job, result)
         tracked_file_repository.update_file_state_from_execution_result(job.tracked_file, plan, result)
-        logger.info(
+        execution_log = logger.error if result.status == "failed" else logger.info
+        execution_log(
             "job execution finished",
-            extra={
-                "job_id": job.id,
-                "status": result.status,
-                "failure_category": result.failure_category,
-                "replacement_status": result.replacement.status if result.replacement is not None else None,
-                "backup_path": str(result.original_backup_path) if result.original_backup_path is not None else None,
-            },
+            extra=_worker_log_extra(
+                "worker_job_finished" if result.status not in {"failed", "skipped"} else f"worker_job_{result.status}",
+                job_id=job.id,
+                status=result.status,
+                failure_category=result.failure_category,
+                failure_message=result.failure_message,
+                requested_backend=result.requested_backend,
+                actual_backend=result.actual_backend,
+                actual_accelerator=result.actual_accelerator,
+                backend_fallback_used=result.backend_fallback_used,
+                replacement_status=result.replacement.status if result.replacement is not None else None,
+                backup_path=str(result.original_backup_path) if result.original_backup_path is not None else None,
+            ),
         )
         session.flush()
         return result
@@ -550,7 +597,13 @@ class WorkerExecutionService:
             tracked_file_repository.update_file_state_from_plan_result(job.tracked_file, fallback_plan)
             logger.warning(
                 "dry run job skipped because target is an encodr artifact",
-                extra={"job_id": job.id, "source_path": str(source_path), "reason": blocked_result.failure_message},
+                extra=_worker_log_extra(
+                    "worker_job_skipped",
+                    job_id=job.id,
+                    source_path=str(source_path),
+                    reason=blocked_result.failure_message,
+                    failure_category=blocked_result.failure_category,
+                ),
             )
             session.flush()
             return blocked_result
@@ -615,6 +668,16 @@ class WorkerExecutionService:
             )
             applied_plan = plan
         except ProbeBinaryNotFoundError as error:
+            logger.error(
+                "ffprobe dependency failed",
+                extra=_worker_log_extra(
+                    "ffprobe_failed",
+                    job_id=job.id,
+                    source_path=str(source_path),
+                    failure_category="analysis_dependency_missing",
+                    reason=error.message,
+                ),
+            )
             result = ExecutionResult(
                 mode="dry_run",
                 status="failed",
@@ -631,6 +694,16 @@ class WorkerExecutionService:
             )
             applied_plan = fallback_plan
         except ProbeError as error:
+            logger.error(
+                "ffprobe analysis failed",
+                extra=_worker_log_extra(
+                    "ffprobe_failed",
+                    job_id=job.id,
+                    source_path=str(source_path),
+                    failure_category="analysis_probe_failed",
+                    reason=error.message,
+                ),
+            )
             result = ExecutionResult(
                 mode="dry_run",
                 status="failed",
@@ -647,6 +720,17 @@ class WorkerExecutionService:
             )
             applied_plan = fallback_plan
         except Exception as error:
+            logger.error(
+                "analysis job failed unexpectedly",
+                extra=_worker_log_extra(
+                    "worker_job_failed",
+                    job_id=job.id,
+                    source_path=str(source_path),
+                    failure_category="analysis_failed",
+                    reason=str(error),
+                    exception_type=type(error).__name__,
+                ),
+            )
             result = ExecutionResult(
                 mode="dry_run",
                 status="failed",
@@ -718,6 +802,22 @@ class WorkerExecutionService:
         }
         if not verification.passed:
             failure_message = verification.failures[0].message if verification.failures else "Output verification failed."
+            logger.error(
+                "output verification failed",
+                extra=_worker_log_extra(
+                    "verification_failed",
+                    job_id=job_id,
+                    staged_output_path=str(staged_result.output_path),
+                    requested_backend=staged_result.requested_backend,
+                    actual_backend=staged_result.actual_backend,
+                    failure_category="verification_failed",
+                    reason=failure_message,
+                    verification_failures=[
+                        failure.model_dump(mode="json") if hasattr(failure, "model_dump") else failure
+                        for failure in verification.failures
+                    ],
+                ),
+            )
             return ExecutionResult(
                 mode=staged_result.mode,
                 status="failed",
@@ -766,12 +866,12 @@ class WorkerExecutionService:
 
         logger.info(
             "replacement started",
-            extra={
-                "event": "replacement_started",
-                "job_id": job_id,
-                "source_path": str(media_file.file_path),
-                "staged_output_path": str(staged_result.output_path),
-            },
+            extra=_worker_log_extra(
+                "replacement_started",
+                job_id=job_id,
+                source_path=str(media_file.file_path),
+                staged_output_path=str(staged_result.output_path),
+            ),
         )
         try:
             replacement = self.replacement_service.place_verified_output(
@@ -796,16 +896,19 @@ class WorkerExecutionService:
         if replacement.status != ReplacementStatus.SUCCEEDED:
             logger.error(
                 "replacement failed",
-                extra={
-                    "event": "replacement_failed",
-                    "job_id": job_id,
-                    "source_path": str(media_file.file_path),
-                    "staged_output_path": str(staged_result.output_path),
-                    "final_output_path": str(replacement.final_output_path) if replacement.final_output_path is not None else None,
-                    "original_backup_path": str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
-                    "replacement_details": replacement.details,
-                    "replacement_failure_message": replacement.failure_message,
-                },
+                extra=_worker_log_extra(
+                    "replacement_failed",
+                    job_id=job_id,
+                    source_path=str(media_file.file_path),
+                    staged_output_path=str(staged_result.output_path),
+                    final_output_path=str(replacement.final_output_path) if replacement.final_output_path is not None else None,
+                    original_backup_path=str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
+                    replacement_operation=replacement.details.get("operation"),
+                    replacement_errno=replacement.details.get("errno"),
+                    replacement_reason=replacement.details.get("reason") or replacement.details.get("exception_message"),
+                    replacement_details=replacement.details,
+                    replacement_failure_message=replacement.failure_message,
+                ),
             )
             return ExecutionResult(
                 mode=staged_result.mode,
@@ -836,16 +939,20 @@ class WorkerExecutionService:
             "input_size_bytes": source_size,
             "output_size_bytes": file_size_or_none(replacement.final_output_path) or staged_metrics["output_size_bytes"],
         }
-        logger.info(
+        replacement_log = logger.warning if replacement.details.get("backup_delete_failed") or replacement.details.get("staged_cleanup_failed") else logger.info
+        replacement_log(
             "replacement succeeded",
-            extra={
-                "event": "replacement_succeeded",
-                "job_id": job_id,
-                "source_path": str(media_file.file_path),
-                "final_output_path": str(replacement.final_output_path) if replacement.final_output_path is not None else None,
-                "original_backup_path": str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
-                "replacement_details": replacement.details,
-            },
+            extra=_worker_log_extra(
+                "replacement_succeeded",
+                job_id=job_id,
+                source_path=str(media_file.file_path),
+                final_output_path=str(replacement.final_output_path) if replacement.final_output_path is not None else None,
+                original_backup_path=str(replacement.original_backup_path) if replacement.original_backup_path is not None else None,
+                replacement_operation=replacement.details.get("operation"),
+                replacement_errno=replacement.details.get("errno"),
+                replacement_reason=replacement.details.get("reason") or replacement.details.get("exception_message"),
+                replacement_details=replacement.details,
+            ),
         )
         return ExecutionResult(
             mode=staged_result.mode,
@@ -898,11 +1005,11 @@ class WorkerExecutionService:
         if failure.category == "output_larger_than_input":
             logger.warning(
                 "output growth guard triggered",
-                extra={
-                    "event": "output_growth_guard_triggered",
-                    "job_id": job_id,
+                extra=_worker_log_extra(
+                    "output_growth_guard_triggered",
+                    job_id=job_id,
                     **_output_growth_details(plan=plan, metrics=metrics),
-                },
+                ),
             )
         completed_at = datetime.now(timezone.utc)
         return ExecutionResult(
@@ -1115,6 +1222,14 @@ class LocalWorkerLoop:
             if claimed_job is None:
                 completed_at = datetime.now(timezone.utc)
                 session.commit()
+                logger.info(
+                    "worker job claim skipped",
+                    extra=_worker_log_extra(
+                        "worker_job_claim_skipped",
+                        job_id=job.id,
+                        reason="job was no longer claimable",
+                    ),
+                )
                 self.status_tracker.record_idle_run(
                     started_at=run_started_at,
                     completed_at=completed_at,
@@ -1125,6 +1240,18 @@ class LocalWorkerLoop:
                     completed_at=completed_at,
                 )
             job = claimed_job
+            logger.info(
+                "worker job claimed",
+                extra=_worker_log_extra(
+                    "worker_job_claimed",
+                    job_id=job.id,
+                    requested_backend=backend_preview["requested_backend"],
+                    selected_backend=backend_preview["actual_backend"],
+                    actual_accelerator=backend_preview["actual_accelerator"],
+                    backend_fallback_used=backend_preview["fallback_used"],
+                    backend_selection_reason=backend_preview["selection_reason"],
+                ),
+            )
             self.status_tracker.record_job_started(
                 job_id=job.id,
                 backend=str(
@@ -1138,7 +1265,20 @@ class LocalWorkerLoop:
             # progress updates can use separate sessions without blocking on this row.
             session.commit()
 
-            logger.info("processing job %s for %s", job.id, media_file.file_name)
+            logger.info(
+                "worker job started",
+                extra=_worker_log_extra(
+                    "worker_job_started",
+                    job_id=job.id,
+                    job_kind=job.job_kind.value,
+                    source_path=str(media_file.file_path),
+                    file_name=media_file.file_name,
+                    requested_backend=backend_preview["requested_backend"],
+                    selected_backend=backend_preview["actual_backend"],
+                    actual_accelerator=backend_preview["actual_accelerator"],
+                    backend_fallback_used=backend_preview["fallback_used"],
+                ),
+            )
             progress_reporter = self._build_progress_reporter(job_id=job.id, session=session)
             self._set_active_job(job.id)
             try:
@@ -1179,6 +1319,21 @@ class LocalWorkerLoop:
             jobs.apply_automatic_retry_policy(job, result)
             session.commit()
             final_status = job.status.value
+            completion_extra = _worker_log_extra(
+                "worker_job_failed" if final_status == JobStatus.FAILED.value else "worker_job_finished",
+                job_id=job.id,
+                final_status=final_status,
+                failure_message=result.failure_message,
+                failure_category=result.failure_category,
+                requested_backend=result.requested_backend,
+                actual_backend=result.actual_backend,
+                actual_accelerator=result.actual_accelerator,
+                backend_fallback_used=result.backend_fallback_used,
+            )
+            if final_status == JobStatus.FAILED.value:
+                logger.error("worker job failed", extra=completion_extra)
+            else:
+                logger.info("worker job finished", extra=completion_extra)
             self.status_tracker.record_processed_run(
                 job_id=job.id,
                 final_status=final_status,
@@ -1202,13 +1357,29 @@ class LocalWorkerLoop:
         session: Session,
     ) -> Callable[[ExecutionProgressUpdate], None]:
         dialect_name = session.bind.dialect.name if session.bind is not None else None
+        last_logged_stage: str | None = None
 
         def report(update: ExecutionProgressUpdate) -> None:
+            nonlocal last_logged_stage
             self.status_tracker.record_progress(
                 stage=update.stage,
                 percent=update.percent,
                 updated_at=update.updated_at,
             )
+            if update.stage != last_logged_stage:
+                logger.info(
+                    "worker job progress stage changed",
+                    extra=_worker_log_extra(
+                        "worker_job_progress",
+                        job_id=job_id,
+                        stage=update.stage,
+                        percent=update.percent,
+                        out_time_seconds=update.out_time_seconds,
+                        fps=update.fps,
+                        speed=update.speed,
+                    ),
+                )
+                last_logged_stage = update.stage
             if dialect_name == "sqlite":
                 progress_job = session.get(Job, job_id)
                 if progress_job is None:

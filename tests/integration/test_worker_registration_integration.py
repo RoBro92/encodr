@@ -8,8 +8,10 @@ import pytest
 from encodr_core.config import load_config_bundle
 from encodr_core.execution import ExecutionResult
 from encodr_core.replacement import ReplacementResult, ReplacementStatus
-from encodr_db.models import AuditEventType, AuditOutcome, FileLifecycleState, Job, JobStatus
+from encodr_db.models import AuditEventType, AuditOutcome, FileLifecycleState, Job, JobStatus, WorkerHealthStatus
 from encodr_db.repositories import AuditEventRepository, WorkerRepository
+from encodr_db.runtime import LOCAL_WORKER_CAPABILITY_SOURCE
+from encodr_shared.diagnostics import read_log_events
 from encodr_shared.versioning import read_version
 from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
@@ -54,6 +56,7 @@ def test_worker_registration_succeeds_with_valid_bootstrap_secret(
         assert worker is not None
         assert worker.auth_token_hash != payload["worker_token"]
         assert worker.last_health_status.value == "healthy"
+    assert _diagnostic_events(context, "worker_registered")[0].fields["worker_key"] == "remote-amd-01"
 
 
 def test_worker_registration_fails_with_invalid_secret(
@@ -66,6 +69,7 @@ def test_worker_registration_fails_with_invalid_secret(
     response = context.client.post("/api/worker/register", json=registration_payload("wrong-secret"))
 
     assert response.status_code == 401
+    assert _diagnostic_events(context, "worker_registration_failed")[0].fields["status"] == 401
 
     with session_factory() as session:
         events = AuditEventRepository(session).list_events(limit=10)
@@ -117,12 +121,79 @@ def test_worker_heartbeat_succeeds_with_valid_worker_token(
     payload = response.json()
     assert payload["worker_key"] == "remote-amd-01"
     assert payload["health_status"] == "degraded"
-
     with session_factory() as session:
         worker = WorkerRepository(session).get_by_key("remote-amd-01")
         assert worker is not None
         assert worker.last_health_status.value == "degraded"
         assert worker.runtime_payload["queue"] == "remote-amd"
+
+
+def test_local_worker_preferences_accept_vaapi_from_fresh_worker_runtime_when_cpu_fallback_disabled(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    with session_factory() as session:
+        worker = WorkerRepository(session).upsert_local_worker(
+            worker_key=context.bundle.workers.local.id,
+            display_name="Local worker",
+            enabled=True,
+            preferred_backend="intel_auto",
+            allow_cpu_fallback=True,
+            max_concurrent_jobs=1,
+            schedule_windows=None,
+            path_mappings=None,
+            scratch_path=str(context.bundle.workers.local.scratch_dir),
+            host_metadata={"hostname": "worker-runtime"},
+        )
+        worker.last_health_status = WorkerHealthStatus.HEALTHY
+        worker.last_heartbeat_at = datetime.now(timezone.utc)
+        worker.runtime_payload = {
+            "capability_source": LOCAL_WORKER_CAPABILITY_SOURCE,
+            "hardware_probes": [
+                {
+                    "backend": "intel_igpu",
+                    "preference_key": "prefer_intel_igpu",
+                    "preference_keys": ["prefer_intel_igpu", "intel_auto", "intel_qsv", "intel_vaapi"],
+                    "usable_by_ffmpeg": True,
+                    "status": "healthy",
+                    "message": "Intel VAAPI active; QSV unavailable: MFX session init failed",
+                    "details": {
+                        "qsv": {"usable": False, "reason_unavailable": "MFX session init failed"},
+                        "vaapi": {"usable": True},
+                        "selected_backend": "intel_vaapi",
+                    },
+                }
+            ],
+            "ffmpeg": {"discoverable": True, "status": "healthy"},
+            "ffprobe": {"discoverable": True, "status": "healthy"},
+            "scratch_status": {"status": "healthy"},
+            "media_paths": [{"status": "healthy"}],
+            "execution_backends": ["remux", "transcode"],
+            "hardware_acceleration": ["intel_igpu"],
+            "eligible": True,
+            "eligibility_summary": "The local worker can accept execution work.",
+        }
+        worker_id = worker.id
+        session.commit()
+
+    response = context.client.put(
+        f"/api/workers/{worker_id}/preferences",
+        json={
+            "display_name": "Local worker",
+            "preferred_backend": "intel_vaapi",
+            "allow_cpu_fallback": False,
+            "max_concurrent_jobs": 1,
+        },
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 200
+    assert response.json()["preferred_backend"] == "intel_vaapi"
+    assert response.json()["allow_cpu_fallback"] is False
 
 
 def test_worker_heartbeat_fails_with_invalid_token_and_is_audited(
@@ -230,6 +301,9 @@ def test_remote_worker_enable_disable_flow_is_audited(
     enable_response = context.client.post(f"/api/workers/{remote_id}/enable", headers=auth.headers)
     assert enable_response.status_code == 200
     assert enable_response.json()["status"] == "enabled"
+    assert _diagnostic_events(context, "worker_disabled")[0].fields["worker_id"] == remote_id
+    assert _diagnostic_events(context, "worker_enabled")[0].fields["worker_id"] == remote_id
+    assert _diagnostic_events(context, "worker_auth_worker_unavailable")[0].fields["worker_id"] == remote_id
 
     with session_factory() as session:
         events = AuditEventRepository(session).list_events(limit=20)
@@ -273,6 +347,11 @@ def test_remote_worker_onboarding_generates_pending_pairing_and_registration_use
     assert onboarding_payload["pairing_token"]
     assert "--pairing-token-stdin" in onboarding_payload["bootstrap_command"]
     assert onboarding_payload["pairing_token"] not in onboarding_payload["bootstrap_command"]
+    onboarding_events = _diagnostic_events(context, "worker_onboarding_created")
+    assert len(onboarding_events) == 1
+    assert onboarding_events[0].fields["worker_id"] == onboarding_payload["worker"]["id"]
+    raw_logs = (context.bundle.app.data_dir / "logs" / "api.jsonl").read_text(encoding="utf-8")
+    assert onboarding_payload["pairing_token"] not in raw_logs
     worker_id = onboarding_payload["worker"]["id"]
     worker_key = onboarding_payload["worker"]["worker_key"]
     pairing_token = onboarding_payload["pairing_token"]
@@ -423,6 +502,9 @@ def test_remote_worker_can_request_claim_and_submit_job_result(
     )
     assert result_response.status_code == 200
     assert result_response.json()["final_status"] == "completed"
+    assert _diagnostic_events(context, "remote_worker_job_assigned")[0].fields["job_id"] == job_id
+    assert _diagnostic_events(context, "remote_worker_job_claimed")[0].fields["job_id"] == job_id
+    assert _diagnostic_events(context, "remote_worker_job_result_received")[0].fields["job_id"] == job_id
 
     with session_factory() as session:
         worker = WorkerRepository(session).get_by_key("remote-amd-01")
@@ -870,6 +952,10 @@ def test_remote_worker_can_report_failure_after_claim(
     )
     assert failure_response.status_code == 200
     assert failure_response.json()["final_status"] == "failed"
+    failure_logs = _diagnostic_events(context, "remote_worker_job_failure_reported")
+    assert len(failure_logs) == 1
+    assert failure_logs[0].fields["job_id"] == job_id
+    assert failure_logs[0].fields["failure_category"] == "worker_agent_error"
 
     with session_factory() as session:
         worker = WorkerRepository(session).get_by_key("remote-amd-01")
@@ -1042,6 +1128,7 @@ def build_context(
 
     bundle = load_config_bundle(project_root=repo_root)
     bundle.app.scratch_dir = layout.scratch_dir
+    bundle.app.data_dir = layout.root / "data"
     bundle.workers.local.media_mounts = [layout.source_dir]
 
     ffmpeg_path = create_fake_binary(tmp_path / "bin" / "ffmpeg")
@@ -1069,3 +1156,12 @@ def create_fake_binary(path: Path) -> Path:
     path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     path.chmod(0o755)
     return path
+
+
+def _diagnostic_events(context, event: str | None = None):
+    return read_log_events(
+        context.bundle.app.data_dir / "logs",
+        component="api",
+        event=event,
+        limit=1000,
+    )

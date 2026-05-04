@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import os
 from pathlib import Path
 
@@ -67,6 +68,8 @@ AMF_QUALITY_FLAGS = {
     "efficient": ["-quality", "speed", "-qp_i", "24", "-qp_p", "26"],
 }
 
+logger = logging.getLogger("encodr.execution.backend")
+
 
 class BackendSelectionError(RuntimeError):
     def __init__(
@@ -109,7 +112,9 @@ def select_execution_backend(
     codec = (target_codec or "hevc").strip().lower()
 
     if requested_backend == "cpu":
-        return _cpu_selection(requested_backend=requested_backend, codec=codec)
+        selection = _cpu_selection(requested_backend=requested_backend, codec=codec)
+        _log_backend_selected(selection)
+        return selection
 
     probes = {probe.backend: probe for probe in probe_execution_backends(ffmpeg_path)}
     probe_key = probe_backend_for_preference(requested_backend)
@@ -121,10 +126,11 @@ def select_execution_backend(
         probe=requested_probe,
     )
     if selection is not None:
+        _log_backend_selected(selection)
         return selection
 
     if allow_cpu_fallback:
-        return _cpu_selection(
+        selection = _cpu_selection(
             requested_backend=requested_backend,
             codec=codec,
             fallback_used=True,
@@ -133,8 +139,34 @@ def select_execution_backend(
             )
             or f"Preferred backend '{requested_backend}' is unavailable, so Encodr is falling back to CPU execution.",
         )
+        logger.warning(
+            "backend fallback selected",
+            extra={
+                "event": "backend_fallback",
+                "diagnostic_type": "worker_runtime",
+                "configured_backend": preferred_backend,
+                "requested_backend": requested_backend,
+                "attempted_backend": requested_backend,
+                "selected_backend": selection.actual_backend,
+                "fallback_reason": selection.selection_reason,
+            },
+        )
+        _log_backend_selected(selection)
+        return selection
 
     reason = _selection_failure_reason(requested_backend, requested_probe) or f"Preferred backend '{requested_backend}' is not supported."
+    logger.error(
+        "backend unavailable",
+        extra={
+            "event": "backend_unavailable",
+            "diagnostic_type": "worker_runtime",
+            "configured_backend": preferred_backend,
+            "requested_backend": requested_backend,
+            "attempted_backend": requested_backend,
+            "allow_cpu_fallback": allow_cpu_fallback,
+            "reason": reason,
+        },
+    )
     raise BackendSelectionError(
         f"{reason} CPU fallback is disabled, so Encodr cannot execute this transcode safely.",
         requested_backend=requested_backend,
@@ -273,6 +305,18 @@ def _accelerated_selection(
             selection_reason = "Using Intel iGPU / VAAPI for hardware-accelerated video encoding."
             if qsv_reason:
                 selection_reason = f"{selection_reason} QSV unavailable: {qsv_reason}."
+                logger.warning(
+                    "backend fallback selected",
+                    extra={
+                        "event": "backend_fallback",
+                        "diagnostic_type": "worker_runtime",
+                        "configured_backend": requested_backend,
+                        "requested_backend": requested_backend,
+                        "attempted_backend": "intel_qsv",
+                        "selected_backend": "intel_vaapi",
+                        "fallback_reason": f"QSV unavailable: {qsv_reason}",
+                    },
+                )
             return SelectedExecutionBackend(
                 requested_backend=requested_backend,
                 actual_backend="intel_vaapi",
@@ -388,3 +432,19 @@ def _string_list(value: object) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item) for item in value if isinstance(item, str) and item.strip()]
+
+
+def _log_backend_selected(selection: SelectedExecutionBackend) -> None:
+    logger.info(
+        "backend selected",
+        extra={
+            "event": "backend_selected",
+            "diagnostic_type": "worker_runtime",
+            "requested_backend": selection.requested_backend,
+            "actual_backend": selection.actual_backend,
+            "actual_accelerator": selection.accelerator,
+            "fallback_used": selection.fallback_used,
+            "selection_reason": selection.selection_reason,
+            "device_path": selection.device_path,
+        },
+    )

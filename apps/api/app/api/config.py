@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, model_validator
 
@@ -10,6 +12,7 @@ from app.schemas.config import (
     LibraryRootsResponse,
     ProcessingRulesResponse,
 )
+from app.services.diagnostics import exception_fields
 from app.services.errors import ApiServiceError
 from app.services.library import LibraryService
 from app.services.setup import SetupStateService
@@ -22,10 +25,24 @@ router = APIRouter(
     tags=["config"],
     dependencies=[Depends(require_admin_user)],
 )
+logger = logging.getLogger("encodr.api.config")
 
 
 def _raise_service_error(error: ApiServiceError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _log_service_error(event: str, error: ApiServiceError, **fields: object) -> None:
+    extra = {
+        "event": event,
+        "status": error.status_code,
+        **exception_fields(error),
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+    if error.status_code >= 500:
+        logger.error("API action failed", extra=extra)
+    else:
+        logger.warning("API action failed", extra=extra)
 
 
 @router.get("/effective", response_model=EffectiveConfigResponse)
@@ -157,12 +174,22 @@ def update_library_roots(
             tv_root=payload.tv_root,
             allowed_roots=library_service.allowed_roots(),
         )
+        logger.info(
+            "library roots updated",
+            extra={
+                "event": "config_library_roots_updated",
+                "status": "updated",
+                "movies_root": state["movies_root"],
+                "tv_root": state["tv_root"],
+            },
+        )
         return LibraryRootsResponse(
             media_root=library_service.default_root().as_posix(),
             movies_root=state["movies_root"],
             tv_root=state["tv_root"],
         )
     except ApiServiceError as error:
+        _log_service_error("config_library_roots_update_failed", error)
         _raise_service_error(error)
 
 
@@ -193,8 +220,13 @@ def update_processing_rules(
             tv=payload.tv.model_dump(mode="json") if payload.tv is not None else None,
             tv_4k=payload.tv_4k.model_dump(mode="json") if payload.tv_4k is not None else None,
         )
+        logger.info(
+            "processing rules updated",
+            extra={"event": "config_processing_rules_updated", "status": "updated"},
+        )
         return ProcessingRulesResponse(**state)
     except ApiServiceError as error:
+        _log_service_error("config_processing_rules_update_failed", error)
         _raise_service_error(error)
 
 
@@ -223,6 +255,20 @@ def update_execution_preferences(
             preferred_backend=payload.preferred_backend,  # type: ignore[arg-type]
             allow_cpu_fallback=payload.allow_cpu_fallback,
         )
+        logger.info(
+            "execution preferences updated",
+            extra={
+                "event": "config_execution_preferences_updated",
+                "status": "updated",
+                "preferred_backend": state["preferred_backend"],
+                "allow_cpu_fallback": state["allow_cpu_fallback"],
+            },
+        )
         return ExecutionPreferencesResponse(**state)
     except ApiServiceError as error:
+        _log_service_error(
+            "config_execution_preferences_update_failed",
+            error,
+            preferred_backend=payload.preferred_backend,
+        )
         _raise_service_error(error)

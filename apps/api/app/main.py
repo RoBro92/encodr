@@ -67,6 +67,7 @@ def create_app(
         level=bundle.app.log_level.value,
         retention_days=bundle.app.diagnostics.retention_days,
     )
+    _enable_encodr_loggers()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
@@ -93,7 +94,16 @@ def create_app(
 
     @app.exception_handler(SQLAlchemyTimeoutError)
     async def sqlalchemy_timeout_handler(request: Request, exc: SQLAlchemyTimeoutError) -> JSONResponse:
-        logger.error("database connection pool exhausted", extra={"path": request.url.path}, exc_info=exc)
+        logger.error(
+            "database connection pool exhausted",
+            extra={
+                "event": "database_pool_exhausted",
+                "status": 503,
+                "path": request.url.path,
+                "exception_type": type(exc).__name__,
+            },
+            exc_info=exc,
+        )
         return JSONResponse(
             status_code=503,
             content={"detail": "The API is temporarily waiting for database connections. Please retry shortly."},
@@ -144,6 +154,14 @@ def create_app(
 
     app.include_router(router, prefix=bundle.app.api.base_path)
     return app
+
+
+def _enable_encodr_loggers() -> None:
+    manager = logging.getLogger().manager
+    for name in manager.loggerDict:
+        if name == "encodr" or name.startswith("encodr."):
+            logger = logging.getLogger(name)
+            logger.disabled = False
 
 
 app = create_app()

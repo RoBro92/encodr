@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import copy
 import ipaddress
+import logging
 import os
 import shlex
 import socket
@@ -75,6 +76,15 @@ from encodr_shared.worker_runtime import (
     resolve_backend_runtime_status,
     serialise_backend_probe,
 )
+
+logger = logging.getLogger("encodr.api.worker_service")
+
+
+def _worker_log_extra(event: str, **fields: object) -> dict[str, object]:
+    return {
+        "event": event,
+        **{key: value for key, value in fields.items() if value is not None},
+    }
 
 
 class WorkerService:
@@ -795,8 +805,29 @@ class WorkerService:
 
         payload = self._build_remote_job_payload(job, worker=worker)
         if payload is None:
+            logger.debug(
+                "remote worker poll returned no compatible job",
+                extra=_worker_log_extra(
+                    "remote_worker_job_poll_empty",
+                    worker_id=worker.id,
+                    worker_key=worker.worker_key,
+                    status="no_job",
+                ),
+            )
             return {"status": "no_job", "job": None}
 
+        logger.info(
+            "remote worker job assigned",
+            extra=_worker_log_extra(
+                "remote_worker_job_assigned",
+                worker_id=worker.id,
+                worker_key=worker.worker_key,
+                job_id=job.id,
+                tracked_file_id=job.tracked_file_id,
+                file_id=job.tracked_file_id,
+                status="assigned",
+            ),
+        )
         return {
             "status": "assigned",
             "job": payload,
@@ -856,6 +887,19 @@ class WorkerService:
         if claimed_job is None:
             raise ApiConflictError("Job is no longer eligible to be claimed.")
         claimed_at = claimed_job.started_at or datetime.now(timezone.utc)
+        logger.info(
+            "remote worker job claimed",
+            extra=_worker_log_extra(
+                "remote_worker_job_claimed",
+                worker_id=worker.id,
+                worker_key=worker.worker_key,
+                job_id=claimed_job.id,
+                tracked_file_id=claimed_job.tracked_file_id,
+                file_id=claimed_job.tracked_file_id,
+                status="claimed",
+                requested_backend=requested_backend,
+            ),
+        )
         return {
             "status": "claimed",
             "job_id": claimed_job.id,
@@ -929,6 +973,25 @@ class WorkerService:
         if runtime_summary is not None:
             worker.runtime_payload = self._runtime_payload_for_worker(worker, runtime_summary=runtime_summary)
 
+        log_extra = _worker_log_extra(
+            "remote_worker_job_result_received",
+            worker_id=worker.id,
+            worker_key=worker.worker_key,
+            job_id=job.id,
+            tracked_file_id=job.tracked_file_id,
+            file_id=job.tracked_file_id,
+            status=job.status.value,
+            failure_category=job.failure_category,
+            failure_message=job.failure_message,
+            requested_backend=result.requested_backend,
+            actual_backend=result.actual_backend,
+            actual_accelerator=result.actual_accelerator,
+            backend_fallback_used=result.backend_fallback_used,
+        )
+        if job.status == JobStatus.FAILED:
+            logger.error("remote worker result failed job", extra=log_extra)
+        else:
+            logger.info("remote worker result accepted", extra=log_extra)
         return {
             "job_id": job.id,
             "final_status": job.status.value,
@@ -1099,6 +1162,20 @@ class WorkerService:
         if runtime_summary is not None:
             worker.runtime_payload = self._runtime_payload_for_worker(worker, runtime_summary=runtime_summary)
 
+        logger.error(
+            "remote worker reported job failure",
+            extra=_worker_log_extra(
+                "remote_worker_job_failure_reported",
+                worker_id=worker.id,
+                worker_key=worker.worker_key,
+                job_id=job.id,
+                tracked_file_id=job.tracked_file_id,
+                file_id=job.tracked_file_id,
+                status=job.status.value,
+                failure_category=failure_category,
+                reason=failure_message,
+            ),
+        )
         return {
             "job_id": job.id,
             "final_status": job.status.value,
@@ -1139,6 +1216,23 @@ class WorkerService:
         )
         if runtime_summary is not None:
             worker.runtime_payload = self._runtime_payload_for_worker(worker, runtime_summary=runtime_summary)
+        logger.debug(
+            "remote worker progress reported",
+            extra=_worker_log_extra(
+                "remote_worker_job_progress_reported",
+                worker_id=worker.id,
+                worker_key=worker.worker_key,
+                job_id=job.id,
+                tracked_file_id=job.tracked_file_id,
+                file_id=job.tracked_file_id,
+                status=job.status.value,
+                stage=stage,
+                percent=percent,
+                out_time_seconds=out_time_seconds,
+                fps=fps,
+                speed=speed,
+            ),
+        )
         return {
             "job_id": job.id,
             "updated_at": job.progress_updated_at or datetime.now(timezone.utc),
@@ -1161,6 +1255,7 @@ class WorkerService:
         self._validate_local_backend_preferences(
             preferred_backend=preferred_backend,
             allow_cpu_fallback=allow_cpu_fallback,
+            session=session,
         )
         try:
             cleaned_schedule = normalise_schedule_windows(schedule_windows)
@@ -1202,6 +1297,7 @@ class WorkerService:
             self._validate_local_backend_preferences(
                 preferred_backend=preferred_backend,
                 allow_cpu_fallback=allow_cpu_fallback,
+                local_worker=worker,
             )
         try:
             cleaned_schedule = normalise_schedule_windows(schedule_windows)
@@ -1333,6 +1429,7 @@ class WorkerService:
             self._validate_local_backend_preferences(
                 preferred_backend=worker.preferred_backend,
                 allow_cpu_fallback=worker.allow_cpu_fallback,
+                local_worker=worker,
             )
         repository.set_enabled(worker, enabled=enabled)
         self.audit_service.record_event(
@@ -1656,13 +1753,29 @@ class WorkerService:
         *,
         preferred_backend: str,
         allow_cpu_fallback: bool,
+        local_worker: Worker | None = None,
+        session: Session | None = None,
     ) -> None:
-        runtime_probes = self._local_runtime_probes(
-            execution_preferences={
-                "preferred_backend": preferred_backend,
-                "allow_cpu_fallback": allow_cpu_fallback,
-            }
+        execution_preferences = {
+            "preferred_backend": preferred_backend,
+            "allow_cpu_fallback": allow_cpu_fallback,
+        }
+        if local_worker is None and session is not None:
+            local_worker = resolve_local_worker_configuration(
+                session,
+                config_bundle=self.config_bundle,
+                worker_name=self.local_worker_loop.worker_name,
+            ).worker
+        runtime_probes = (
+            self._local_runtime_probes_from_worker_payload(
+                local_worker,
+                execution_preferences=execution_preferences,
+            )
+            if self._local_worker_runtime_payload_is_fresh(local_worker)
+            else None
         )
+        if runtime_probes is None:
+            runtime_probes = self._local_runtime_probes(execution_preferences=execution_preferences)
         backend_status = runtime_probes.get("backend_runtime_status") or {}
         if normalise_backend_preference(preferred_backend) == "cpu":
             return

@@ -4,8 +4,8 @@ from pathlib import Path
 
 import pytest
 
-from app.executor.loop import LocalWorkerLoop
 from encodr_core.config import load_config_bundle
+from encodr_db.runtime import LocalWorkerLoop
 from tests.helpers.api import create_test_api_context
 from tests.helpers.db import create_migrated_session_factory
 
