@@ -340,6 +340,87 @@ describe("Encodr UI shell", () => {
     expect(routes[routes.length - 1]).toBe("/jobs?tab=completed");
   });
 
+  it("searches and filters completed jobs with server-backed pagination", async () => {
+    const completedJobs = [
+      {
+        ...jobDetail(),
+        id: "completed-job",
+        source_filename: "Completed Film (2024).mkv",
+        source_path: "/media/Movies/Completed Film (2024).mkv",
+        status: "completed",
+        duration_seconds: 120,
+      },
+      {
+        ...jobDetail(),
+        id: "skipped-job",
+        source_filename: "Skipped Film (2024).mkv",
+        source_path: "/media/Movies/Skipped Film (2024).mkv",
+        status: "skipped",
+        skipped_reason: "Already compliant.",
+        duration_seconds: 0,
+      },
+    ];
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=completed&limit=10&offset=0$/,
+        body: {
+          items: completedJobs,
+          limit: 10,
+          offset: 0,
+          total: 2,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=completed&search=.*&limit=10&offset=0$/,
+        body: {
+          items: [completedJobs[1]],
+          limit: 10,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=completed&status=skipped&search=Skipped&limit=10&offset=0$/,
+        body: {
+          items: [completedJobs[1]],
+          limit: 10,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: completedJobs,
+          limit: 100,
+          offset: 0,
+          total: 2,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs?tab=completed", initialSession: makeSession() });
+
+    expect(await screen.findByLabelText(/search completed jobs/i)).toBeInTheDocument();
+    expect(screen.getByText(/showing 1-2 of 2/i)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/search completed jobs/i), "Skipped");
+    await userEvent.selectOptions(screen.getByLabelText(/completed job status/i), "skipped");
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) =>
+        typeof url === "string"
+        && url.includes("/api/jobs?status_group=completed&status=skipped&search=Skipped&limit=10&offset=0"),
+      )).toBe(true);
+    });
+    expect(await screen.findByText(/showing 1-1 of 1/i)).toBeInTheDocument();
+  });
+
   it("uses URL status filters when loading jobs and review directly", async () => {
     const jobFetchMock = mockFetchRoutes([
       {

@@ -25,7 +25,7 @@ from app.services.setup import SetupStateService
 from encodr_core.config import ConfigBundle
 from encodr_db.models import JobStatus
 from encodr_db.repositories import JobRepository, UserRepository
-from encodr_db.runtime import resolve_local_worker_configuration
+from encodr_db.runtime import LOCAL_WORKER_CAPABILITY_SOURCE, resolve_local_worker_configuration
 from encodr_shared.worker_runtime import discover_runtime_devices, probe_execution_backends, serialise_backend_probe
 from encodr_shared.update import UpdateChecker
 
@@ -326,11 +326,6 @@ class SystemService:
         user_count = self.user_count()
         queue_health = self.queue_health_summary()
         storage = self.storage_status()
-        execution_backends = [
-            serialise_backend_probe(probe)
-            for probe in probe_execution_backends(self.config_bundle.app.media.ffmpeg_path)
-        ]
-        runtime_device_paths = discover_runtime_devices()
         local_worker = None
         if self.session_factory is not None:
             with self.session_factory() as session:
@@ -347,6 +342,13 @@ class SystemService:
             if local_worker is not None
             else {"preferred_backend": "cpu_only", "allow_cpu_fallback": True}
         )
+        worker_runtime_payload = (
+            local_worker.runtime_payload
+            if self._local_worker_runtime_payload_is_fresh(local_worker)
+            else None
+        )
+        execution_backends = self._execution_backends_for_runtime(worker_runtime_payload)
+        runtime_device_paths = self._runtime_device_paths_for_runtime(worker_runtime_payload)
         first_user_setup_required = user_count == 0 if user_count is not None else False
 
         warnings: list[str] = []
@@ -407,6 +409,36 @@ class SystemService:
             "execution_preferences": execution_preferences,
             "queue_health": queue_health,
         }
+
+    @staticmethod
+    def _local_worker_runtime_payload_is_fresh(worker) -> bool:
+        if worker is None or worker.last_heartbeat_at is None:
+            return False
+        heartbeat = worker.last_heartbeat_at
+        if heartbeat.tzinfo is None:
+            heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+        if heartbeat < datetime.now(timezone.utc) - timedelta(minutes=5):
+            return False
+        runtime_payload = worker.runtime_payload if isinstance(worker.runtime_payload, dict) else {}
+        return runtime_payload.get("capability_source") == LOCAL_WORKER_CAPABILITY_SOURCE
+
+    def _execution_backends_for_runtime(self, worker_runtime_payload: dict | None) -> list[dict[str, object]]:
+        if worker_runtime_payload is not None:
+            hardware_probes = worker_runtime_payload.get("hardware_probes")
+            if isinstance(hardware_probes, list) and hardware_probes:
+                return [serialise_backend_probe(probe) for probe in hardware_probes]
+        return [
+            serialise_backend_probe(probe)
+            for probe in probe_execution_backends(self.config_bundle.app.media.ffmpeg_path)
+        ]
+
+    @staticmethod
+    def _runtime_device_paths_for_runtime(worker_runtime_payload: dict | None) -> list[dict[str, object]]:
+        if worker_runtime_payload is not None:
+            runtime_device_paths = worker_runtime_payload.get("runtime_device_paths")
+            if isinstance(runtime_device_paths, list):
+                return runtime_device_paths
+        return discover_runtime_devices()
 
     def update_status(self, update_checker: UpdateChecker, *, refresh: bool = False) -> dict[str, object]:
         result = update_checker.check_now() if refresh else update_checker.current_status(auto_check=True)

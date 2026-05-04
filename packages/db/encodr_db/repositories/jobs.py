@@ -351,6 +351,7 @@ class JobRepository:
             "cancelled": JobStatus.CANCELLED,
         }
         job.status = status_map[result.status]
+        job.started_at = result.started_at
         job.completed_at = result.completed_at
         job.failure_message = result.failure_message
         job.failure_category = result.failure_category
@@ -655,6 +656,8 @@ class JobRepository:
             query = query.where(
                 Job.status.in_([JobStatus.FAILED, JobStatus.INTERRUPTED, JobStatus.CANCELLED, JobStatus.MANUAL_REVIEW])
             )
+        elif status_group == "completed":
+            query = query.where(Job.status.in_([JobStatus.COMPLETED, JobStatus.SKIPPED]))
         if job_kind is not None:
             query = query.where(Job.job_kind == job_kind)
         if tracked_file_id is not None:
