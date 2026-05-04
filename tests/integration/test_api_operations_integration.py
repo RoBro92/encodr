@@ -10,7 +10,7 @@ import pytest
 
 from encodr_core.config import load_config_bundle
 from encodr_db.models import BulkQueueOperation, FileLifecycleState, Job, JobKind, JobStatus, ManualReviewDecisionType, PlanSnapshot, ProbeSnapshot, TrackedFile
-from encodr_db.repositories import ManualReviewDecisionRepository, TrackedFileRepository, WorkerRepository
+from encodr_db.repositories import ManualReviewDecisionRepository, TrackedFileRepository, UserRepository, WorkerRepository
 from encodr_db.runtime import WorkerExecutionService
 from encodr_core.verification import OutputVerifier
 from encodr_shared.scheduling import DAY_ORDER
@@ -266,6 +266,97 @@ def test_retry_endpoint_allows_replacement_failure_manual_review_retry(
     assert payload["id"] != original_job_id
     assert payload["status"] == JobStatus.PENDING.value
     assert payload["attempt_count"] == 2
+
+
+def test_strip_only_recovery_endpoint_queues_remux_for_size_guard_failure(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Output Growth Film (2024).mkv", contents="retry")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "output_larger_than_input"
+        persisted.job.failure_message = "Encoded output is larger than the source file."
+        session.commit()
+        original_job_id = persisted.job.id
+
+    response = context.client.post(
+        f"/api/jobs/{original_job_id}/strip-only-recovery",
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["id"] != original_job_id
+    assert payload["status"] == JobStatus.PENDING.value
+    assert payload["attempt_count"] == 2
+
+    with session_factory() as session:
+        jobs = session.query(Job).order_by(Job.created_at.asc(), Job.attempt_count.asc()).all()
+        assert len(jobs) == 2
+        assert jobs[0].cleared_reason == "Video transcode skipped after failed size/quality guard; audio/subtitle cleanup only."
+        assert jobs[1].plan_snapshot.payload["action"] == "remux"
+        assert jobs[1].plan_snapshot.payload["video"]["transcode_required"] is False
+        assert jobs[1].completed_at is None
+
+
+def test_strip_only_recovery_endpoint_keeps_manual_review_behind_review_gate(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Protected Strip Recovery Film (2024).mkv", contents="retry")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.MANUAL_REVIEW
+        persisted.job.failure_category = "compression_safety_bitrate_floor"
+        persisted.job.failure_message = "Output video bitrate is below the compression safety floor."
+        persisted.job.tracked_file.is_protected = True
+        session.commit()
+        original_job_id = persisted.job.id
+
+    blocked_response = context.client.post(
+        f"/api/jobs/{original_job_id}/strip-only-recovery",
+        headers=auth.headers,
+    )
+
+    assert blocked_response.status_code == 409
+    assert "requires manual review" in blocked_response.json()["detail"]
+
+    with session_factory() as session:
+        original_job = session.get(Job, original_job_id)
+        admin = UserRepository(session).get_by_username("admin")
+        assert original_job is not None
+        assert admin is not None
+        ManualReviewDecisionRepository(session).add_decision(
+            tracked_file_id=original_job.tracked_file_id,
+            plan_snapshot_id=original_job.plan_snapshot_id,
+            job_id=original_job.id,
+            decision_type=ManualReviewDecisionType.APPROVED,
+            created_by_user=admin,
+            note="Approved strip-only recovery.",
+        )
+        session.commit()
+
+    approved_response = context.client.post(
+        f"/api/jobs/{original_job_id}/strip-only-recovery",
+        headers=auth.headers,
+    )
+
+    assert approved_response.status_code == 201
+    payload = approved_response.json()
+    assert payload["id"] != original_job_id
+    assert payload["status"] == JobStatus.PENDING.value
 
 
 def test_retry_endpoint_keeps_protected_replacement_failure_behind_review_gate(
@@ -1465,6 +1556,223 @@ def test_bulk_queue_logs_started_completed_and_failed_state_transitions(
     assert "Permission denied" in failed_logs[0].fields["reason"]
 
 
+def test_bulk_reprocess_selected_processed_file_ignores_existing_backup_file(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    source_path = layout.create_source_file("TV/Bluey/Bluey S01E01.mkv", contents="episode")
+    backup_path = layout.create_source_file("TV/Bluey/Bluey S01E01.encodr-backup.mkv", contents="backup")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    context.app.state.bulk_queue_service.probe_client_factory = lambda: StaticProbeClient(media)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.COMPLETED
+        persisted.job.original_backup_path = backup_path.as_posix()
+        session.commit()
+        operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(
+                selected_paths=[source_path.as_posix(), backup_path.as_posix()],
+                existing_backup_strategy="keep_existing_backup_if_present",
+                reprocess_mode="normal",
+            ),
+        )
+        operation_id = operation.id
+        session.commit()
+
+    assert created is True
+    context.app.state.bulk_queue_service.process_operation(operation_id)
+
+    with session_factory() as session:
+        operation = session.get(BulkQueueOperation, operation_id)
+        jobs = session.query(Job).order_by(Job.created_at.asc(), Job.attempt_count.asc()).all()
+        tracked_paths = {item.source_path for item in session.query(TrackedFile).all()}
+
+        assert operation is not None
+        assert operation.status == "completed"
+        assert operation.total_expected == 2
+        assert operation.queued_count == 1
+        assert operation.skipped_count == 1
+        assert operation.blocked_count == 0
+        assert operation.failed_count == 0
+        assert len(jobs) == 2
+        assert jobs[-1].status == JobStatus.PENDING
+        assert jobs[-1].tracked_file.source_path == source_path.as_posix()
+        assert jobs[-1].plan_snapshot.payload["replace"]["existing_backup_strategy"] == "keep_existing_backup"
+        assert backup_path.as_posix() not in tracked_paths
+
+
+def test_bulk_reprocess_existing_backup_record_without_file_creates_new_safe_job(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    source_path = layout.create_source_file("TV/Bluey/Bluey S01E01.mkv", contents="episode")
+    missing_backup_path = source_path.with_name(f"{source_path.stem}.encodr-backup{source_path.suffix}")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    context.app.state.bulk_queue_service.probe_client_factory = lambda: StaticProbeClient(media)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.COMPLETED
+        persisted.job.original_backup_path = missing_backup_path.as_posix()
+        session.commit()
+        operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(
+                selected_paths=[source_path.as_posix()],
+                existing_backup_strategy="keep_existing_backup_if_present",
+            ),
+        )
+        operation_id = operation.id
+        session.commit()
+
+    assert created is True
+    assert not missing_backup_path.exists()
+    context.app.state.bulk_queue_service.process_operation(operation_id)
+
+    with session_factory() as session:
+        operation = session.get(BulkQueueOperation, operation_id)
+        new_job = session.query(Job).order_by(Job.created_at.desc()).first()
+
+        assert operation is not None
+        assert operation.queued_count == 1
+        assert new_job is not None
+        assert new_job.plan_snapshot.payload["replace"]["existing_backup_strategy"] == "fail"
+
+
+def test_bulk_strip_only_reprocess_keeps_video_unchanged_and_reuses_stream_policy(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    source_path = layout.create_source_file("TV/Bluey/Bluey S01E02.mkv", contents="episode")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    media.video_streams[0].codec_name = "h264"
+    media.video_streams[0].bit_rate = 20_000_000
+    context.app.state.bulk_queue_service.probe_client_factory = lambda: StaticProbeClient(media)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        assert persisted.plan.action.value == "transcode"
+        persisted.job.status = JobStatus.COMPLETED
+        session.commit()
+        operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(
+                selected_paths=[source_path.as_posix()],
+                existing_backup_strategy="keep_existing_backup_if_present",
+                reprocess_mode="strip_only",
+            ),
+        )
+        operation_id = operation.id
+        session.commit()
+
+    assert created is True
+    context.app.state.bulk_queue_service.process_operation(operation_id)
+
+    with session_factory() as session:
+        operation = session.get(BulkQueueOperation, operation_id)
+        new_job = session.query(Job).order_by(Job.created_at.desc()).first()
+
+        assert operation is not None
+        assert operation.queued_count == 1
+        assert new_job is not None
+        assert new_job.status == JobStatus.PENDING
+        assert new_job.completed_at is None
+        assert new_job.plan_snapshot.payload["action"] == "remux"
+        assert new_job.plan_snapshot.payload["video"]["transcode_required"] is False
+        assert new_job.plan_snapshot.payload["video"]["handling"] == "preserve"
+        assert new_job.plan_snapshot.payload["selected_streams"]["audio_stream_indices"] == persisted.plan.selected_streams.audio_stream_indices
+        assert new_job.plan_snapshot.payload["selected_streams"]["subtitle_stream_indices"] == persisted.plan.selected_streams.subtitle_stream_indices
+        assert len(new_job.plan_snapshot.payload["selected_streams"]["audio_stream_indices"]) < len(media.audio_streams)
+        assert len(new_job.plan_snapshot.payload["selected_streams"]["subtitle_stream_indices"]) < len(media.subtitle_streams)
+
+
+def test_bulk_reprocess_many_processed_files_uses_bulk_queue_batches(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    media = parse_fixture("non4k_remux_languages.json")
+    source_paths = [
+        layout.create_source_file(f"TV/Bluey/Bluey S01E{episode:02d}.mkv", contents=f"episode {episode}")
+        for episode in range(1, 13)
+    ]
+    context.app.state.bulk_queue_service.probe_client_factory = lambda: StaticProbeClient(media)
+
+    with session_factory() as session:
+        for source_path in source_paths:
+            persisted = create_job(session, bundle, media_at_path(media, source_path), source_path=source_path.as_posix())
+            persisted.job.status = JobStatus.COMPLETED
+        session.commit()
+        operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(
+                selected_paths=[path.as_posix() for path in source_paths],
+                reprocess_mode="strip_only",
+            ),
+            batch_size=5,
+        )
+        operation_id = operation.id
+        session.commit()
+
+    assert created is True
+    context.app.state.bulk_queue_service.process_operation(operation_id)
+
+    with session_factory() as session:
+        operation = session.get(BulkQueueOperation, operation_id)
+
+        assert operation is not None
+        assert operation.status == "completed"
+        assert operation.total_expected == 12
+        assert operation.queued_count == 12
+        assert operation.failed_count == 0
+        assert operation.payload["batch_size"] == 5
+        assert session.query(Job).count() == 24
+
+
+def test_bulk_reprocess_blocks_duplicate_active_jobs(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    source_path = layout.create_source_file("TV/Bluey/Bluey S01E03.mkv", contents="episode")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    context.app.state.bulk_queue_service.probe_client_factory = lambda: StaticProbeClient(media)
+
+    with session_factory() as session:
+        create_job(session, bundle, media, source_path=source_path.as_posix())
+        session.commit()
+        operation, created = context.app.state.bulk_queue_service.create_operation(
+            session,
+            payload=bulk_queue_payload(
+                selected_paths=[source_path.as_posix()],
+                reprocess_mode="strip_only",
+            ),
+        )
+        operation_id = operation.id
+        session.commit()
+
+    assert created is True
+    context.app.state.bulk_queue_service.process_operation(operation_id)
+
+    with session_factory() as session:
+        operation = session.get(BulkQueueOperation, operation_id)
+        assert operation is not None
+        assert operation.queued_count == 0
+        assert operation.blocked_count == 1
+        assert operation.result_summary["items"][0]["message"] == "An active job already exists for this tracked file."
+        assert session.query(Job).count() == 1
+
+
 def test_duplicate_bulk_queue_start_reuses_active_operation(
     tmp_path: Path,
     repo_root: Path,
@@ -1566,6 +1874,8 @@ def bulk_queue_payload(
     source_path: str | None = None,
     folder_path: str | None = None,
     selected_paths: list[str] | None = None,
+    existing_backup_strategy: str = "fail",
+    reprocess_mode: str = "normal",
 ) -> SimpleNamespace:
     return SimpleNamespace(
         source_path=source_path,
@@ -1576,6 +1886,8 @@ def bulk_queue_payload(
         preferred_backend_override=None,
         schedule_windows=[],
         backup_policy="keep",
+        existing_backup_strategy=existing_backup_strategy,
+        reprocess_mode=reprocess_mode,
     )
 
 

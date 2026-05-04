@@ -194,6 +194,149 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByLabelText(/probe source path/i)).not.toBeInTheDocument();
   });
 
+  it("keeps the dashboard visible when live worker and running-job fields are missing", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      {
+        method: "GET",
+        path: "/api/worker/status",
+        body: workerStatus({
+          worker_name: null,
+          summary: null,
+          queue_health: null,
+          current_job_id: null,
+          current_progress_percent: null,
+        }),
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-running-missing-fields",
+              source_path: null,
+              source_filename: null,
+              worker_name: null,
+              status: "running",
+              progress_stage: null,
+              progress_percent: null,
+            },
+          ],
+          limit: 10,
+          offset: 0,
+        },
+      },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    expect(screen.getByText(/progress unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/worker not assigned/i)).toBeInTheDocument();
+  });
+
+  it("keeps the dashboard visible when a dashboard API request fails", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", status: 500, body: { detail: "analytics unavailable" } },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/dashboard data is partially unavailable/i);
+    expect(screen.getByRole("heading", { name: /active transcoding file/i })).toBeInTheDocument();
+  });
+
+  it("keeps the dashboard visible while the progress stream updates a running job", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
+      {
+        method: "GET",
+        path: "/api/jobs/progress-stream",
+        response: sseResponse([
+          {
+            ...jobDetail(),
+            id: "job-running",
+            source_filename: "Example Film (2024).mkv",
+            source_path: "/media/Movies/Example Film (2024).mkv",
+            worker_name: "worker-local",
+            status: "running",
+            progress_stage: "verifying",
+            progress_percent: 87,
+          },
+        ]),
+      },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/87% complete/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/^verifying$/i)).toBeInTheDocument();
+  });
+
+  it("does not crash when a streamed job transitions through active and terminal states", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      {
+        method: "GET",
+        path: "/api/worker/status",
+        body: workerStatus({ current_job_id: "job-transition", current_progress_percent: 12 }),
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-transition",
+              source_filename: "Transition Film (2024).mkv",
+              status: "running",
+              progress_stage: "transcoding",
+              progress_percent: 12,
+            },
+          ],
+          limit: 10,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/progress-stream",
+        response: sseResponse([
+          { ...jobDetail(), id: "job-transition", status: "running", progress_stage: "transcoding", progress_percent: 55 },
+          { ...jobDetail(), id: "job-transition", status: "completed", progress_stage: "completed", progress_percent: 100 },
+          { ...jobDetail(), id: "job-transition", status: "failed", failure_message: "guard failed" },
+        ]),
+      },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /active transcoding file/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    });
+  });
+
   it("opens dashboard outcome cards with URL status filters", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
@@ -1126,7 +1269,9 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("tab", { name: /^movies$/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /^tv$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /\+ add watcher/i })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /movies root directory/i })).toHaveValue("/media/Movies");
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: /movies root directory/i })).toHaveValue("/media/Movies");
+    });
     expect(screen.getByRole("heading", { name: /active watchers/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /processing dashboard/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /current folder/i })).not.toBeInTheDocument();
@@ -1458,6 +1603,7 @@ describe("Encodr UI shell", () => {
           body: JSON.stringify({
             folder_path: "/media/Movies",
             backup_policy: "keep",
+            existing_backup_strategy: "fail",
           }),
         }),
       );
@@ -1483,6 +1629,120 @@ describe("Encodr UI shell", () => {
     expect(screen.getByText(/^Failed$/i, { selector: ".metric-label" })).toBeInTheDocument();
     expect(screen.getByText(/manual review or protected-file approval/i)).toBeInTheDocument();
     expect(await screen.findByRole("status")).toHaveTextContent(/queue add complete/i);
+  });
+
+  it("shows safe rerun summary and starts strip-only cleanup through bulk queue", async () => {
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-active-rerun",
+              source_path: "/media/TV/Bluey/Bluey S01E02.mkv",
+              source_filename: "Bluey S01E02.mkv",
+              status: "running",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: {
+          media_root: "/media",
+          movies_root: "/media/Movies",
+          tv_root: "/media/TV",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/files/scan",
+        body: {
+          folder_path: "/media/TV/Bluey",
+          root_path: "/media",
+          directory_count: 1,
+          direct_directory_count: 1,
+          video_file_count: 2,
+          backup_file_count: 1,
+          likely_show_count: 1,
+          likely_season_count: 1,
+          likely_episode_count: 2,
+          likely_film_count: 0,
+          files: [
+            { name: "Bluey S01E01.mkv", path: "/media/TV/Bluey/Bluey S01E01.mkv", entry_type: "file", is_video: true },
+            { name: "Bluey S01E02.mkv", path: "/media/TV/Bluey/Bluey S01E02.mkv", entry_type: "file", is_video: true },
+          ],
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/bulk-queue",
+        body: {
+          ...bulkQueueOperation(),
+          total_expected: 3,
+          queued_count: 1,
+          skipped_count: 1,
+          blocked_count: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/bulk-queue/bulk-1",
+        body: {
+          ...bulkQueueOperation(),
+          total_expected: 3,
+          queued_count: 1,
+          skipped_count: 1,
+          blocked_count: 1,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/files", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^tv/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /scan folder/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /select all/i }));
+    await userEvent.click(screen.getByRole("button", { name: /strip audio\/subtitles only/i }));
+
+    const dialog = await screen.findByRole("dialog", { name: /strip audio\/subtitles only/i });
+    expect(within(dialog).getByText(/selected files:\s*2/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/skipped backup\/temp files:\s*1/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/already queued or running:\s*1/i)).toBeInTheDocument();
+    expect(within(dialog).getByText(/recommended for fixing audio\/subtitle policy changes/i)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: /start strip-only cleanup/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/bulk-queue"),
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.any(Headers),
+          body: JSON.stringify({
+            selected_paths: ["/media/TV/Bluey/Bluey S01E01.mkv", "/media/TV/Bluey/Bluey S01E02.mkv"],
+            backup_policy: "keep",
+            existing_backup_strategy: "keep_existing_backup_if_present",
+            reprocess_mode: "strip_only",
+          }),
+        }),
+      );
+    });
+
+    const progressDialog = await screen.findByRole("dialog", { name: /adding to queue/i });
+    expect(progressDialog).toBeInTheDocument();
+    expect(within(progressDialog).getByText(/1 queued, 1 skipped, 1 blocked, 0 failed/i)).toBeInTheDocument();
   });
 
   it("keeps bulk queue progress visible in the sidebar after the modal is closed", async () => {
@@ -1679,6 +1939,121 @@ describe("Encodr UI shell", () => {
         expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
       );
     });
+  });
+
+  it("offers strip-only recovery for output-too-large failed jobs instead of retry", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/files",
+        body: { items: [], limit: 25, offset: 0 },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/job-output-large",
+        body: {
+          ...jobDetail(),
+          id: "job-output-large",
+          status: "failed",
+          failure_category: "output_larger_than_input",
+          failure_code: "output_larger_than_input",
+          failure_message: "Encoded output is larger than the source file.",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-output-large",
+              status: "failed",
+              failure_category: "output_larger_than_input",
+              failure_code: "output_larger_than_input",
+              failure_message: "Encoded output is larger than the source file.",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/job-output-large/strip-only-recovery",
+        body: {
+          ...jobDetail(),
+          id: "job-output-large-recovery",
+          status: "pending",
+          plan_reason_messages: [
+            "Video transcode skipped after failed size/quality guard; audio/subtitle cleanup only.",
+          ],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs/job-output-large", initialSession: makeSession() });
+
+    expect(await screen.findByRole("button", { name: /skip transcode \/ strip only/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry job/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /skip transcode \/ strip only/i }));
+    const dialog = await screen.findByRole("dialog", { name: /skip transcode \/ strip only/i });
+    expect(within(dialog).getByText(/keeps the original video stream unchanged/i)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: /skip transcode \/ strip only/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/job-output-large/strip-only-recovery"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+  });
+
+  it("offers strip-only recovery for output-too-small compression safety failures", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/files",
+        body: { items: [], limit: 25, offset: 0 },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/job-too-small",
+        body: {
+          ...jobDetail(),
+          id: "job-too-small",
+          status: "manual_review",
+          failure_category: "compression_safety_bitrate_floor",
+          failure_code: "compression_safety_bitrate_floor",
+          failure_message: "Output video bitrate is below the compression safety floor.",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-too-small",
+              status: "manual_review",
+              failure_category: "compression_safety_bitrate_floor",
+              failure_code: "compression_safety_bitrate_floor",
+              failure_message: "Output video bitrate is below the compression safety floor.",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs/job-too-small", initialSession: makeSession() });
+
+    expect(await screen.findByRole("button", { name: /skip transcode \/ strip only/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry job/i })).not.toBeInTheDocument();
   });
 
   it("shows running job progress and worker details in the jobs queue", async () => {
@@ -2134,10 +2509,11 @@ describe("Encodr UI shell", () => {
       },
       {
         method: "POST",
-        path: /\/api\/jobs\/problem-job-[12]\/retry$/,
+        path: "/api/jobs/resolve-failed",
         body: {
-          ...jobDetail(),
-          status: "pending",
+          status: "queued",
+          affected_count: 2,
+          affected_job_ids: ["retry-job-1", "retry-job-2"],
         },
       },
     ]);
@@ -2157,11 +2533,15 @@ describe("Encodr UI shell", () => {
     await waitFor(() => {
       const retryCalls = fetchMock.mock.calls.filter(([url, init]) =>
         typeof url === "string"
-        && /\/api\/jobs\/problem-job-[12]\/retry$/.test(url)
+        && url.includes("/api/jobs/resolve-failed")
         && init?.method === "POST",
       );
-      expect(retryCalls).toHaveLength(2);
-      expect(retryCalls.every(([, init]) => init?.body === JSON.stringify({ existing_backup_strategy: "replace_backup" }))).toBe(true);
+      expect(retryCalls).toHaveLength(1);
+      expect(retryCalls[0]?.[1]?.body).toBe(JSON.stringify({
+        job_ids: ["problem-job-1", "problem-job-2"],
+        action: "retry",
+        existing_backup_strategy: "replace_backup",
+      }));
     });
   });
 
@@ -2305,6 +2685,78 @@ describe("Encodr UI shell", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("keeps the jobs page visible when create job returns an API conflict", async () => {
+    const trackedFile = {
+      id: "file-1",
+      source_path: "/media/Movies/Example Film (2024).mkv",
+      source_filename: "Example Film (2024).mkv",
+      source_extension: "mkv",
+      source_directory: "/media/Movies",
+      last_observed_size: 1024,
+      last_observed_modified_time: "2026-04-20T10:00:00Z",
+      fingerprint_placeholder: null,
+      is_4k: false,
+      lifecycle_state: "new",
+      compliance_state: "unknown",
+      is_protected: false,
+      operator_protected: false,
+      protected_source: null,
+      operator_protected_note: null,
+      requires_review: false,
+      review_status: null,
+      last_processed_policy_version: null,
+      last_processed_profile_name: null,
+      created_at: "2026-04-20T10:00:00Z",
+      updated_at: "2026-04-20T10:00:00Z",
+    };
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: /\/api\/files\?.*limit=25/,
+        body: {
+          items: [trackedFile],
+          limit: 25,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+          total: 0,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs",
+        status: 409,
+        body: { detail: "An active job already exists for this tracked file." },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText(/create job from tracked file/i));
+    await userEvent.click(await screen.findByRole("option", { name: /example film/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create job$/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+    expect(await screen.findByText(/job creation failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/active job already exists/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
   });
 
   it("shows an empty jobs state when the queue is clear", async () => {
@@ -3012,6 +3464,29 @@ function runningJobsResponse() {
     limit: 10,
     offset: 0,
   };
+}
+
+function sseResponse(items: Array<Record<string, unknown>>) {
+  const encoder = new TextEncoder();
+  return () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          window.setTimeout(() => {
+            for (const item of items) {
+              controller.enqueue(encoder.encode(`event: jobs\ndata: ${JSON.stringify({ items: [item] })}\n\n`));
+            }
+            controller.close();
+          }, 0);
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+        },
+      },
+    );
 }
 
 function workerStatus(overrides: Record<string, unknown> = {}) {

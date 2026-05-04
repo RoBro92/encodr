@@ -309,6 +309,8 @@ class BulkQueueService:
                     preferred_backend_override=options.get("preferred_backend_override"),
                     schedule_windows=options.get("schedule_windows") or None,
                     backup_policy=str(options.get("backup_policy") or "keep"),
+                    existing_backup_strategy=str(options.get("existing_backup_strategy") or "fail"),
+                    reprocess_mode=str(options.get("reprocess_mode") or "normal"),
                 )
                 result = results[0]
                 session.commit()
@@ -482,6 +484,8 @@ def _normalise_operation_payload(payload: Any, *, batch_size: int) -> dict[str, 
             for item in (getattr(payload, "schedule_windows", []) or [])
         ],
         "backup_policy": getattr(payload, "backup_policy", "keep") or "keep",
+        "existing_backup_strategy": getattr(payload, "existing_backup_strategy", "fail") or "fail",
+        "reprocess_mode": getattr(payload, "reprocess_mode", "normal") or "normal",
     }
     return {
         "selection": selection,

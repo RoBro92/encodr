@@ -244,6 +244,7 @@ def resolve_failed_jobs(
             session,
             job_ids=payload.job_ids,
             action=payload.action,
+            existing_backup_strategy=payload.existing_backup_strategy,
         )
         session.commit()
         return BulkJobActionResponse(
@@ -253,7 +254,13 @@ def resolve_failed_jobs(
         )
     except ApiServiceError as error:
         session.rollback()
-        _log_service_error("api_failed_jobs_resolve_failed", error, job_ids=payload.job_ids, action=payload.action)
+        _log_service_error(
+            "api_failed_jobs_resolve_failed",
+            error,
+            job_ids=payload.job_ids,
+            action=payload.action,
+            existing_backup_strategy=payload.existing_backup_strategy,
+        )
         _raise_service_error(error)
 
 
@@ -464,6 +471,8 @@ def create_job(
             preferred_backend_override=payload.preferred_backend_override,
             schedule_windows=[item.model_dump(mode="json") for item in payload.schedule_windows],
             backup_policy=payload.backup_policy,
+            existing_backup_strategy=payload.existing_backup_strategy,
+            reprocess_mode=payload.reprocess_mode,
         )
         session.commit()
         return JobDetailResponse.from_model(job)
@@ -498,6 +507,23 @@ def retry_job(
     except ApiServiceError as error:
         session.rollback()
         _log_service_error("api_job_retry_failed", error, job_id=job_id)
+        _raise_service_error(error)
+
+
+@router.post("/{job_id}/strip-only-recovery", response_model=JobDetailResponse, status_code=201)
+def recover_job_with_strip_only(
+    job_id: str,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> JobDetailResponse:
+    del current_user
+    try:
+        job = JobsService().recover_with_strip_only(session, job_id=job_id)
+        session.commit()
+        return JobDetailResponse.from_model(job)
+    except ApiServiceError as error:
+        session.rollback()
+        _log_service_error("api_job_strip_only_recovery_failed", error, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -583,6 +609,8 @@ def create_batch_jobs(
             preferred_backend_override=payload.preferred_backend_override,
             schedule_windows=schedule_windows,
             backup_policy=payload.backup_policy,
+            existing_backup_strategy=payload.existing_backup_strategy,
+            reprocess_mode=payload.reprocess_mode,
         )
         for result in batch_results:
             total_files += 1

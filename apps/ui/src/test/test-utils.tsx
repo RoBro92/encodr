@@ -43,6 +43,8 @@ type MockRoute = {
   path: string | RegExp;
   status?: number;
   body?: unknown;
+  headers?: Record<string, string>;
+  response?: Response | (() => Response | Promise<Response>);
 };
 
 export function mockFetchRoutes(routes: MockRoute[]) {
@@ -63,11 +65,16 @@ export function mockFetchRoutes(routes: MockRoute[]) {
       return candidate.path.test(url);
     });
 
+    if (route?.response) {
+      return typeof route.response === "function" ? route.response() : route.response;
+    }
+
     if (route) {
       return new Response(JSON.stringify(route.body ?? {}), {
         status: route.status ?? 200,
         headers: {
           "Content-Type": "application/json",
+          ...route.headers,
         },
       });
     }

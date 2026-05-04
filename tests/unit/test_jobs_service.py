@@ -5,7 +5,10 @@ from pathlib import Path
 import pytest
 
 from encodr_core.config import load_config_bundle
-from encodr_db.models import JobStatus
+from encodr_core.execution import build_execution_command_plan
+from encodr_core.planning import ProcessingPlan
+from encodr_db.models import JobStatus, ManualReviewDecisionType
+from encodr_db.repositories import ManualReviewDecisionRepository, UserRepository
 from tests.helpers.api import import_api_module
 from tests.helpers.db import create_schema_session_factory
 from tests.helpers.jobs import create_job, media_at_path, parse_fixture
@@ -127,6 +130,191 @@ def test_retry_job_can_set_existing_backup_strategy(tmp_path: Path, repo_root: P
         assert retry_job.attempt_count == persisted.job.attempt_count + 1
         assert retry_job.plan_snapshot_id != persisted.job.plan_snapshot_id
         assert retry_job.plan_snapshot.payload["replace"]["existing_backup_strategy"] == "replace_backup"
+        assert persisted.job.cleared_at is not None
+        assert persisted.job.cleared_reason == "Retry job created by operator."
+
+
+def test_strip_only_recovery_creates_remux_job_for_output_larger_failure(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Output Growth Film.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "output_larger_than_input"
+        persisted.job.failure_message = "Encoded output is larger than the source file."
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            recovery_job = jobs_module.JobsService().recover_with_strip_only(
+                session,
+                job_id=persisted.job.id,
+            )
+
+        recovery_plan = recovery_job.plan_snapshot.payload
+        assert recovery_job.id != persisted.job.id
+        assert recovery_job.status == JobStatus.PENDING
+        assert recovery_job.attempt_count == persisted.job.attempt_count + 1
+        assert recovery_job.backup_policy == "keep"
+        assert recovery_plan["action"] == "remux"
+        assert recovery_plan["summary"]["action"] == "remux"
+        assert recovery_plan["video"]["transcode_required"] is False
+        assert recovery_plan["video"]["preserve_original"] is True
+        assert recovery_plan["video"]["handling"] == "preserve"
+        assert recovery_plan["reasons"][0]["code"] == "operator_skipped_video_transcode_after_guard"
+        assert recovery_plan["reasons"][0]["message"] == jobs_module.STRIP_ONLY_RECOVERY_REASON
+        assert persisted.job.cleared_at is not None
+        assert persisted.job.cleared_reason == jobs_module.STRIP_ONLY_RECOVERY_REASON
+
+
+def test_strip_only_recovery_for_output_too_small_preserves_stream_policy_and_copies_video(
+    tmp_path: Path,
+    repo_root: Path,
+) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Too Small Film.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    media.video_streams[0].codec_name = "h264"
+    media.video_streams[0].bit_rate = 20_000_000
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        assert persisted.plan.action.value == "transcode"
+        persisted.job.status = JobStatus.MANUAL_REVIEW
+        persisted.job.failure_category = "compression_safety_bitrate_floor"
+        persisted.job.failure_message = "Output video bitrate is below the compression safety floor."
+        admin = UserRepository(session).create_user(username="admin", password_hash="hash")
+        ManualReviewDecisionRepository(session).add_decision(
+            tracked_file_id=persisted.job.tracked_file_id,
+            plan_snapshot_id=persisted.job.plan_snapshot_id,
+            job_id=persisted.job.id,
+            decision_type=ManualReviewDecisionType.APPROVED,
+            created_by_user=admin,
+            note="Approved strip-only recovery.",
+        )
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            recovery_job = jobs_module.JobsService().recover_with_strip_only(
+                session,
+                job_id=persisted.job.id,
+            )
+
+        recovery_plan = recovery_job.plan_snapshot.payload
+        assert recovery_plan["action"] == "remux"
+        assert recovery_plan["selected_streams"]["audio_stream_indices"] == persisted.plan.selected_streams.audio_stream_indices
+        assert recovery_plan["selected_streams"]["subtitle_stream_indices"] == persisted.plan.selected_streams.subtitle_stream_indices
+        assert len(recovery_plan["selected_streams"]["audio_stream_indices"]) < len(media.audio_streams)
+        assert len(recovery_plan["selected_streams"]["subtitle_stream_indices"]) < len(media.subtitle_streams)
+        assert recovery_job.tracked_file.lifecycle_state.value == "queued"
+
+        command_plan = build_execution_command_plan(
+            ProcessingPlan.model_validate(recovery_job.plan_snapshot.payload),
+            input_path=source_path,
+            scratch_dir=tmp_path,
+            job_id=recovery_job.id,
+        )
+        mapped_inputs = [
+            command_plan.command[index + 1]
+            for index, value in enumerate(command_plan.command)
+            if value == "-map"
+        ]
+        assert command_plan.mode == "remux"
+        assert command_plan.command[command_plan.command.index("-c:v") + 1] == "copy"
+        assert mapped_inputs == ["0:0", "0:1", "0:5", "0:4"]
+        assert "0:2" not in mapped_inputs
+        assert "0:3" not in mapped_inputs
+        assert "0:6" not in mapped_inputs
+        assert recovery_job.completed_at is None
+
+
+def test_strip_only_recovery_rejects_non_guard_failure(tmp_path: Path, repo_root: Path) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Worker Failure.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "worker_failed"
+        persisted.job.failure_message = "The worker stopped unexpectedly."
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            with pytest.raises(jobs_module.ApiConflictError) as error:
+                jobs_module.JobsService().recover_with_strip_only(
+                    session,
+                    job_id=persisted.job.id,
+                )
+
+        assert "strip-only recovery is only available" in str(error.value).lower()
+
+
+def test_resolve_problem_jobs_retries_backup_collisions_with_strategy(tmp_path: Path, repo_root: Path) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Bulk Backup Collision.mkv"
+    backup_path = tmp_path / "Bulk Backup Collision.encodr-backup.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    backup_path.write_text("backup", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "replacement_failed"
+        persisted.job.failure_message = "A backup file already exists for the source path."
+        persisted.job.original_backup_path = backup_path.as_posix()
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            retried = jobs_module.JobsService().resolve_problem_jobs(
+                session,
+                job_ids=[persisted.job.id],
+                action="retry",
+                existing_backup_strategy="keep_existing_backup",
+            )
+
+        assert len(retried) == 1
+        assert retried[0].plan_snapshot.payload["replace"]["existing_backup_strategy"] == "keep_existing_backup"
+        assert persisted.job.cleared_at is not None
+        assert persisted.job.cleared_reason == "Requeued by operator."
+
+
+def test_create_batch_jobs_can_keep_existing_backups_for_reruns(tmp_path: Path, repo_root: Path) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Bulk Rerun Film.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.COMPLETED
+        persisted.job.completed_at = persisted.job.created_at
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            result = jobs_module.JobsService().create_batch_jobs(
+                session,
+                planned_targets=[(source_path.as_posix(), persisted.job.tracked_file, persisted.job.plan_snapshot)],
+                existing_backup_strategy="keep_existing_backup",
+            )[0]
+
+        assert result["status"] == "created"
+        job = result["job"]
+        assert job.plan_snapshot_id != persisted.job.plan_snapshot_id
+        assert job.plan_snapshot.payload["replace"]["existing_backup_strategy"] == "keep_existing_backup"
 
 
 def test_retry_job_rejects_backup_strategy_for_other_failures(tmp_path: Path, repo_root: Path) -> None:
@@ -216,6 +404,8 @@ def test_resolve_problem_jobs_can_retry_matching_failures(tmp_path: Path, repo_r
         assert [job.status for job in retried] == [JobStatus.PENDING, JobStatus.PENDING]
         assert {job.tracked_file_id for job in retried} == {first.tracked_file_id, second.tracked_file_id}
         assert all(job.attempt_count == 2 for job in retried)
+        assert first.cleared_at is not None
+        assert second.cleared_at is not None
 
 
 def test_resolve_problem_jobs_marks_matching_failures_skipped(tmp_path: Path, repo_root: Path) -> None:

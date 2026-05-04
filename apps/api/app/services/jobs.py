@@ -17,7 +17,7 @@ from app.services.path_safety import (
 from encodr_core.config import ConfigBundle
 from encodr_core.execution import ExecutionResult
 from encodr_core.media import encodr_exclusion_reason
-from encodr_core.planning import ProcessingPlan
+from encodr_core.planning import PlanAction, PlanReason, ProcessingPlan, VideoHandling
 from encodr_db.models import (
     ComplianceState,
     FileLifecycleState,
@@ -31,10 +31,27 @@ from encodr_db.models import (
     User,
     WorkerType,
 )
-from encodr_db.repositories import JobRepository, ManualReviewDecisionRepository, TrackedFileRepository, WorkerRepository
+from encodr_db.repositories import (
+    JobRepository,
+    ManualReviewDecisionRepository,
+    PlanSnapshotRepository,
+    TrackedFileRepository,
+    WorkerRepository,
+)
 from encodr_db.runtime import LocalWorkerLoop
 
 logger = logging.getLogger("encodr.jobs")
+
+STRIP_ONLY_RECOVERY_REASON = "Video transcode skipped after failed size/quality guard; audio/subtitle cleanup only."
+STRIP_ONLY_RECOVERY_REASON_CODE = "operator_skipped_video_transcode_after_guard"
+STRIP_ONLY_REPROCESS_REASON = "Operator requested strip-only cleanup; video will be copied while audio/subtitle cleanup is applied."
+STRIP_ONLY_REPROCESS_REASON_CODE = "operator_requested_strip_only_cleanup"
+STRIP_ONLY_RECOVERY_FAILURE_CATEGORIES = {
+    "output_larger_than_input",
+    "compression_safety_bitrate_floor",
+    "compression_safety_exceeded",
+    "compression_safety_unmeasurable",
+}
 
 
 class JobsService:
@@ -123,6 +140,8 @@ class JobsService:
         analysis_payload: dict | None = None,
         ignore_worker_schedule: bool = False,
         backup_policy: str = "keep",
+        existing_backup_strategy: str = "fail",
+        reprocess_mode: str = "normal",
     ) -> Job:
         tracked_file, plan_snapshot = self._resolve_target(
             session,
@@ -142,6 +161,14 @@ class JobsService:
             plan_snapshot=plan_snapshot,
             allow_review_approved=allow_review_approved,
         )
+        if existing_backup_strategy != "fail" or reprocess_mode != "normal":
+            plan_snapshot = self._plan_snapshot_with_create_options(
+                session,
+                tracked_file=tracked_file,
+                plan_snapshot=plan_snapshot,
+                existing_backup_strategy=existing_backup_strategy,
+                reprocess_mode=reprocess_mode,
+            )
         job = self._create_job_from_plan(
             session,
             tracked_file,
@@ -224,6 +251,12 @@ class JobsService:
             ignore_worker_schedule=original_job.ignore_worker_schedule,
             backup_policy=original_job.backup_policy,
         )
+        repository.mark_cleared(
+            original_job,
+            cleared_at=datetime.now(timezone.utc),
+            reason="Retry job created by operator.",
+        )
+
         logger.info(
             "job retried",
             extra={
@@ -233,9 +266,91 @@ class JobsService:
                 "file_id": retry.tracked_file_id,
                 "status": retry.status.value,
                 "original_job_id": original_job.id,
+                "existing_backup_strategy": existing_backup_strategy,
             },
         )
         return retry
+
+    def recover_with_strip_only(
+        self,
+        session: Session,
+        *,
+        job_id: str,
+    ) -> Job:
+        original_job = self.get_job(session, job_id=job_id)
+        if original_job.status not in {JobStatus.FAILED, JobStatus.CANCELLED, JobStatus.MANUAL_REVIEW}:
+            raise ApiConflictError("Strip-only recovery is only available for failed, cancelled, or manual-review jobs.")
+        if not _job_can_recover_with_strip_only(original_job):
+            raise ApiConflictError(
+                "Strip-only recovery is only available for output size or compression safety guard failures."
+            )
+        if original_job.plan_snapshot is None or original_job.plan_snapshot.probe_snapshot is None:
+            raise ApiConflictError("No complete plan exists for this job.")
+
+        tracked_files = TrackedFileRepository(session)
+        tracked_files.lock_for_update(original_job.tracked_file_id)
+        session.refresh(original_job)
+        if original_job.tracked_file is not None:
+            session.refresh(original_job.tracked_file)
+        self._validate_processable_target(original_job.tracked_file)
+        self._validate_review_gate(
+            session,
+            tracked_file=original_job.tracked_file,
+            plan_snapshot=original_job.plan_snapshot,
+            allow_review_approved=True,
+        )
+
+        repository = JobRepository(session)
+        if repository.has_active_job_for_tracked_file(original_job.tracked_file_id):
+            raise ApiConflictError("An active job already exists for this tracked file.")
+
+        source_plan = ProcessingPlan.model_validate(original_job.plan_snapshot.payload)
+        recovery_plan = self._strip_only_recovery_plan(source_plan)
+        recovery_plan.replace.existing_backup_strategy = self._existing_backup_strategy_for_safe_recovery(original_job)
+        plan_snapshot = PlanSnapshotRepository(session).add_plan_snapshot(
+            original_job.tracked_file,
+            original_job.plan_snapshot.probe_snapshot,
+            recovery_plan,
+        )
+        recovery_job = self._create_job_from_plan(
+            session,
+            original_job.tracked_file,
+            plan_snapshot,
+            attempt_count=original_job.attempt_count + 1,
+            preferred_worker_id=original_job.preferred_worker_id,
+            pinned_worker_id=original_job.pinned_worker_id,
+            preferred_backend_override=original_job.preferred_backend_override,
+            schedule_windows=original_job.schedule_windows,
+            watched_job_id=original_job.watched_job_id,
+            job_kind=original_job.job_kind,
+            analysis_payload={
+                **(original_job.analysis_payload if isinstance(original_job.analysis_payload, dict) else {}),
+                "recovery_reason": STRIP_ONLY_RECOVERY_REASON,
+            },
+            ignore_worker_schedule=original_job.ignore_worker_schedule,
+            backup_policy="keep",
+        )
+        repository.mark_cleared(
+            original_job,
+            cleared_at=datetime.now(timezone.utc),
+            reason=STRIP_ONLY_RECOVERY_REASON,
+        )
+
+        logger.info(
+            "strip-only recovery queued",
+            extra={
+                "event": "job_strip_only_recovery_queued",
+                "job_id": recovery_job.id,
+                "tracked_file_id": recovery_job.tracked_file_id,
+                "file_id": recovery_job.tracked_file_id,
+                "status": recovery_job.status.value,
+                "original_job_id": original_job.id,
+                "reason": STRIP_ONLY_RECOVERY_REASON,
+                "failure_category": original_job.failure_category,
+                "existing_backup_strategy": recovery_plan.replace.existing_backup_strategy,
+            },
+        )
+        return recovery_job
 
     def cancel_job(
         self,
@@ -358,11 +473,20 @@ class JobsService:
         )
         return jobs
 
-    def resolve_problem_jobs(self, session: Session, *, job_ids: list[str], action: str) -> list[Job]:
+    def resolve_problem_jobs(
+        self,
+        session: Session,
+        *,
+        job_ids: list[str],
+        action: str,
+        existing_backup_strategy: str = "fail",
+    ) -> list[Job]:
         if not job_ids:
             raise ApiValidationError("Select at least one failed or cancelled job.")
         if action not in {"retry", "skip"}:
             raise ApiValidationError("Unsupported failed job resolution action.")
+        if action != "retry" and existing_backup_strategy != "fail":
+            raise ApiValidationError("Backup handling options are only available when retrying failed jobs.")
 
         selected_jobs = self._selected_problem_jobs(session, job_ids=job_ids)
         error_keys = {_job_problem_error_key(job) for job in selected_jobs}
@@ -374,7 +498,11 @@ class JobsService:
             raise ApiConflictError("Select jobs with the same error before using a bulk action.")
 
         if action == "retry":
-            return self._retry_problem_jobs(session, selected_jobs)
+            return self._retry_problem_jobs(
+                session,
+                selected_jobs,
+                existing_backup_strategy=existing_backup_strategy,
+            )
         return self._mark_problem_jobs_skipped(session, selected_jobs)
 
     def list_backups(
@@ -511,6 +639,8 @@ class JobsService:
         analysis_payload_factory: Callable[[str, TrackedFile, PlanSnapshot], dict | None] | None = None,
         ignore_worker_schedule: bool = False,
         backup_policy: str = "keep",
+        existing_backup_strategy: str = "fail",
+        reprocess_mode: str = "normal",
     ) -> list[dict[str, object]]:
         results: list[dict[str, object]] = []
         for source_path, tracked_file, plan_snapshot in planned_targets:
@@ -532,6 +662,8 @@ class JobsService:
                     ),
                     ignore_worker_schedule=ignore_worker_schedule,
                     backup_policy=backup_policy,
+                    existing_backup_strategy=existing_backup_strategy,
+                    reprocess_mode=reprocess_mode,
                 )
                 results.append({
                     "source_path": source_path,
@@ -733,7 +865,13 @@ class JobsService:
             jobs_by_id[job.id] = job
         return [jobs_by_id[job_id] for job_id in job_ids if job_id in jobs_by_id]
 
-    def _retry_problem_jobs(self, session: Session, selected_jobs: list[Job]) -> list[Job]:
+    def _retry_problem_jobs(
+        self,
+        session: Session,
+        selected_jobs: list[Job],
+        *,
+        existing_backup_strategy: str = "fail",
+    ) -> list[Job]:
         retry_targets: dict[str, Job] = {}
         for job in selected_jobs:
             current = retry_targets.get(job.tracked_file_id)
@@ -742,7 +880,13 @@ class JobsService:
 
         retried_jobs: list[Job] = []
         for job in retry_targets.values():
-            retried_jobs.append(self.retry_job(session, job_id=job.id))
+            retried_jobs.append(
+                self.retry_job(
+                    session,
+                    job_id=job.id,
+                    existing_backup_strategy=existing_backup_strategy,
+                )
+            )
 
         cleared_at = datetime.now(timezone.utc)
         repository = JobRepository(session)
@@ -756,6 +900,7 @@ class JobsService:
                 "requeued_job_ids": [job.id for job in retried_jobs],
                 "selected_count": len(selected_jobs),
                 "requeued_count": len(retried_jobs),
+                "existing_backup_strategy": existing_backup_strategy,
             },
         )
         return retried_jobs
@@ -804,25 +949,119 @@ class JobsService:
         if existing_backup_strategy not in {"replace_backup", "keep_existing_backup"}:
             raise ApiValidationError("Unsupported backup handling option for retry.")
 
-        plan = ProcessingPlan.model_validate(original_job.plan_snapshot.payload)
-        plan.replace.existing_backup_strategy = existing_backup_strategy
-        snapshot = PlanSnapshot(
-            tracked_file_id=original_job.tracked_file_id,
-            probe_snapshot_id=original_job.plan_snapshot.probe_snapshot_id,
-            action=plan.action,
-            confidence=plan.confidence,
-            policy_version=plan.policy_context.policy_version,
-            profile_name=plan.policy_context.selected_profile_name,
-            is_already_compliant=plan.is_already_compliant,
-            should_treat_as_protected=plan.should_treat_as_protected,
-            reasons=[reason.model_dump(mode="json") for reason in plan.reasons],
-            warnings=[warning.model_dump(mode="json") for warning in plan.warnings],
-            selected_streams=plan.selected_streams.model_dump(mode="json"),
-            payload=plan.model_dump(mode="json"),
+        return self._plan_snapshot_with_existing_backup_strategy(
+            session,
+            tracked_file=original_job.tracked_file,
+            plan_snapshot=original_job.plan_snapshot,
+            existing_backup_strategy=existing_backup_strategy,
         )
-        session.add(snapshot)
-        session.flush()
-        return snapshot
+
+    @staticmethod
+    def _plan_snapshot_with_existing_backup_strategy(
+        session: Session,
+        *,
+        tracked_file: TrackedFile,
+        plan_snapshot: PlanSnapshot,
+        existing_backup_strategy: str,
+    ) -> PlanSnapshot:
+        return JobsService._plan_snapshot_with_create_options(
+            session,
+            tracked_file=tracked_file,
+            plan_snapshot=plan_snapshot,
+            existing_backup_strategy=existing_backup_strategy,
+            reprocess_mode="normal",
+        )
+
+    @staticmethod
+    def _plan_snapshot_with_create_options(
+        session: Session,
+        *,
+        tracked_file: TrackedFile,
+        plan_snapshot: PlanSnapshot,
+        existing_backup_strategy: str,
+        reprocess_mode: str,
+    ) -> PlanSnapshot:
+        if reprocess_mode not in {"normal", "strip_only"}:
+            raise ApiValidationError("Unsupported reprocess mode.")
+        if existing_backup_strategy == "fail":
+            effective_backup_strategy = "fail"
+        elif existing_backup_strategy == "keep_existing_backup_if_present":
+            effective_backup_strategy = JobsService._existing_backup_strategy_for_current_file(tracked_file)
+        elif existing_backup_strategy in {"replace_backup", "keep_existing_backup"}:
+            effective_backup_strategy = existing_backup_strategy
+        else:
+            raise ApiValidationError("Unsupported backup handling option.")
+        if effective_backup_strategy == "fail" and reprocess_mode == "normal":
+            return plan_snapshot
+        plan = ProcessingPlan.model_validate(plan_snapshot.payload)
+        if reprocess_mode == "strip_only":
+            plan = JobsService._strip_only_reprocess_plan(plan)
+        plan.replace.existing_backup_strategy = effective_backup_strategy
+        if plan_snapshot.probe_snapshot is None:
+            raise ApiConflictError("No complete probe exists for this plan.")
+        return PlanSnapshotRepository(session).add_plan_snapshot(
+            tracked_file,
+            plan_snapshot.probe_snapshot,
+            plan,
+        )
+
+    @staticmethod
+    def _strip_only_recovery_plan(plan: ProcessingPlan) -> ProcessingPlan:
+        updated = plan.model_copy(deep=True)
+        updated.action = PlanAction.REMUX
+        updated.summary.action = PlanAction.REMUX
+        updated.should_treat_as_protected = False
+        updated.summary.should_treat_as_protected = False
+        updated.is_already_compliant = False
+        updated.summary.is_already_compliant = False
+        updated.video.transcode_required = False
+        updated.video.preserve_original = True
+        updated.video.handling = VideoHandling.PRESERVE
+        updated.video.max_allowed_video_reduction_percent = None
+        updated.reasons = [
+            PlanReason(
+                code=STRIP_ONLY_RECOVERY_REASON_CODE,
+                message=STRIP_ONLY_RECOVERY_REASON,
+            )
+        ]
+        return updated
+
+    @staticmethod
+    def _strip_only_reprocess_plan(plan: ProcessingPlan) -> ProcessingPlan:
+        updated = JobsService._strip_only_recovery_plan(plan)
+        updated.reasons = [
+            PlanReason(
+                code=STRIP_ONLY_REPROCESS_REASON_CODE,
+                message=STRIP_ONLY_REPROCESS_REASON,
+            )
+        ]
+        return updated
+
+    @staticmethod
+    def _existing_backup_strategy_for_current_file(tracked_file: TrackedFile) -> str:
+        source_path = Path(tracked_file.source_path)
+        expected_backup_path = source_path.with_name(
+            f"{source_path.stem}.encodr-backup{source_path.suffix}"
+        )
+        if expected_backup_path.exists():
+            return "keep_existing_backup"
+        return "fail"
+
+    @staticmethod
+    def _existing_backup_strategy_for_safe_recovery(job: Job) -> str:
+        if not job.original_backup_path:
+            return "fail"
+        backup_path = Path(job.original_backup_path)
+        if job.tracked_file is not None:
+            source_path = Path(job.tracked_file.source_path)
+            expected_backup_path = source_path.with_name(
+                f"{source_path.stem}.encodr-backup{source_path.suffix}"
+            )
+            if backup_path != expected_backup_path:
+                return "fail"
+        if backup_path.exists():
+            return "keep_existing_backup"
+        return "fail"
 
     def _create_job_from_plan(
         self,
@@ -898,6 +1137,45 @@ def _job_failed_because_backup_already_exists(job: Job) -> bool:
     return (
         job.failure_category == "replacement_failed"
         and "backup file already exists" in (job.failure_message or "").lower()
+    )
+
+
+def _job_can_recover_with_strip_only(job: Job) -> bool:
+    candidates = {
+        str(value).strip().lower()
+        for value in [getattr(job, "failure_code", None), job.failure_category]
+        if value
+    }
+    replacement_payload = job.replacement_payload if isinstance(job.replacement_payload, dict) else {}
+    details = replacement_payload.get("details") if isinstance(replacement_payload.get("details"), dict) else {}
+    for key in ["failure_code", "failure_category", "reason", "guard"]:
+        value = details.get(key)
+        if value:
+            candidates.add(str(value).strip().lower())
+    if candidates & STRIP_ONLY_RECOVERY_FAILURE_CATEGORIES:
+        return True
+
+    message = " ".join(
+        value
+        for value in [
+            job.failure_message,
+            job.replacement_failure_message,
+            job.interruption_reason,
+        ]
+        if value
+    ).lower()
+    return any(
+        phrase in message
+        for phrase in [
+            "larger than the source",
+            "larger than source",
+            "output is larger",
+            "output grew",
+            "too small",
+            "bitrate is below",
+            "bitrate below",
+            "compression safety",
+        ]
     )
 
 

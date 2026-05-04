@@ -442,6 +442,10 @@ export function retryJob(client: ApiClient, jobId: string, payload?: RetryJobPay
   });
 }
 
+export function recoverJobWithStripOnly(client: ApiClient, jobId: string): Promise<JobDetail> {
+  return client.request<JobDetail>(`/jobs/${jobId}/strip-only-recovery`, { method: "POST" });
+}
+
 export function runWorkerOnce(client: ApiClient): Promise<WorkerRunOnceResponse> {
   return client.request<WorkerRunOnceResponse>("/worker/run-once", { method: "POST" });
 }
