@@ -301,8 +301,8 @@ def _accelerated_selection(
             device_path = _first_device_path(vaapi)
             if device_path is None:
                 return None
-            qsv_reason = _qsv_unavailable_reason(probe.details)
             selection_reason = "Using Intel iGPU / VAAPI for hardware-accelerated video encoding."
+            qsv_reason = _qsv_unavailable_reason(probe.details) if requested_backend == "intel_auto" else None
             if qsv_reason:
                 selection_reason = f"{selection_reason} QSV unavailable: {qsv_reason}."
                 logger.warning(

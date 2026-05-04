@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.4.5 - 2026-05-04
+
+This hotfix tightens Intel runtime selection after live VAAPI/QSV validation and includes the stream-stripping work merged after 0.4.4.
+
+- fixed explicit `intel_vaapi` selection so it no longer reports a QSV fallback when VAAPI itself validates successfully with CPU fallback disabled
+- kept Intel auto mode behaviour intact: QSV is preferred only when its smoke test passes, otherwise validated VAAPI is selected before CPU fallback
+- added the Debian `libmfx-gen1.2` oneVPL Intel GPU implementation package to worker images when available, improving QSV runtime coverage beyond the dispatcher package alone
+- confirmed audio/subtitle stripping keeps only planned streams in both VAAPI transcode and remux/strip-only paths on a live multi-language episode copy
+- retained the existing verification guard that fails output when extra audio or subtitle streams survive
+- revalidated with:
+  - `pytest -q`
+  - `cd apps/ui && npm test -- --run`
+  - `cd apps/ui && npm run build`
+  - `python3 -m compileall apps packages tests encodr_cli.py`
+  - live LXC clean suite: `418 passed`
+  - live LXC stream tests: VAAPI transcode and remux/strip-only verification passed
+
 ## 0.4.4 - 2026-05-03
 
 This hotfix improves bulk recovery for failed and cancelled jobs, especially replacement failures caused by existing backup files.

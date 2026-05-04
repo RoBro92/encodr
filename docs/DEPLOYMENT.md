@@ -56,7 +56,7 @@ Encodr can expose detected hardware paths through an app-managed runtime Compose
 
 Intel hardware support is validated against the worker runtime before Encodr treats it as usable. Validation checks include `/dev/dri`, `vainfo`, an FFmpeg VAAPI smoke encode, and an FFmpeg QSV smoke encode. VAAPI is a normal Intel hardware backend, not a degraded fallback; QSV is preferred in Intel auto mode only when its oneVPL/QSV smoke test passes.
 
-For Proxmox LXC deployments, pass the Intel render node through to the LXC and then into Docker. A typical host/LXC setup exposes `/dev/dri/renderD128` and the matching `card*` node, then the Encodr runtime override mounts `/dev/dri` into the worker container. The worker image includes `intel-media-va-driver`, `libva2`, `libva-drm2`, `mesa-va-drivers`, `vainfo`, and the available oneVPL/MFX runtime packages.
+For Proxmox LXC deployments, pass the Intel render node through to the LXC and then into Docker. A typical host/LXC setup exposes `/dev/dri/renderD128` and the matching `card*` node, then the Encodr runtime override mounts `/dev/dri` into the worker container. The worker image includes `intel-media-va-driver`, `libva2`, `libva-drm2`, `mesa-va-drivers`, `vainfo`, and the available oneVPL/MFX runtime packages, including `libvpl2`, `libmfx-gen1.2`, and `libmfx1` when present in the base distribution.
 
 To inspect the active Compose config:
 

@@ -9,7 +9,7 @@ RUN apt-get update \
     && packages="ffmpeg libva-drm2 libva2 mesa-va-drivers vainfo" \
     && arch="$(dpkg --print-architecture)" \
     && if [ "$arch" = "amd64" ] || [ "$arch" = "i386" ]; then packages="$packages intel-media-va-driver"; fi \
-    && for package in libvpl2 libmfx1; do if apt-cache show "$package" >/dev/null 2>&1; then packages="$packages $package"; fi; done \
+    && for package in libvpl2 libmfx-gen1.2 libmfx1; do if apt-cache show "$package" >/dev/null 2>&1; then packages="$packages $package"; fi; done \
     && apt-get install -y --no-install-recommends $packages \
     && rm -rf /var/lib/apt/lists/*
 
