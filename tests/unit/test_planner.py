@@ -4,6 +4,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from encodr_core.config import load_config_bundle
+from encodr_core.media.models import UnknownStream
 from encodr_core.config.policy import PathProfileOverride
 from encodr_core.planning import PlanAction, build_processing_plan
 from encodr_core.probe import parse_ffprobe_json_output
@@ -153,6 +154,57 @@ def test_commentary_track_is_removed_from_audio_selection_intent() -> None:
     assert 2 in plan.audio.commentary_removed_stream_indices
     assert 2 not in plan.audio.selected_stream_indices
     assert plan.audio.required_language_codes == ["eng"]
+
+
+def test_audio_selection_keeps_ordered_preferred_languages_even_when_cap_is_lower() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    bundle.policy.audio.keep_languages = ["jpn", "eng"]
+    bundle.policy.audio.max_tracks_to_keep = 1
+    media = parse_fixture("multi_language.json")
+
+    plan = build_processing_plan(
+        media,
+        bundle,
+        source_path="/media/Movies/Example Multi-Language Film.mkv",
+    )
+
+    assert plan.audio.selected_stream_indices == [2, 1]
+    assert plan.audio.primary_stream_index == 2
+    assert plan.audio.required_language_codes == ["jpn", "eng"]
+
+
+def test_subtitle_selection_respects_ordered_preferred_languages_and_keeps_forced() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    bundle.policy.subtitles.keep_languages = ["fra", "eng"]
+    bundle.policy.subtitles.keep_forced_languages = ["eng"]
+    media = parse_fixture("multi_language.json")
+
+    plan = build_processing_plan(
+        media,
+        bundle,
+        source_path="/media/Movies/Example Multi-Language Film.mkv",
+    )
+
+    assert plan.subtitles.forced_stream_indices == [5]
+    assert plan.subtitles.main_stream_index == 6
+    assert plan.subtitles.selected_stream_indices == [5, 6, 4]
+    assert plan.subtitles.required_language_codes == ["eng", "fra"]
+    assert all(index not in plan.subtitles.dropped_stream_indices for index in [4, 5, 6])
+
+
+def test_unknown_streams_are_not_reported_as_selected() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    media = parse_fixture("non4k_remux_languages.json")
+    media.unknown_streams.append(UnknownStream(index=7, stream_order=7))
+    media.container.stream_count += 1
+
+    plan = build_processing_plan(
+        media,
+        bundle,
+        source_path="/media/Movies/Example Remux Film (2024).mkv",
+    )
+
+    assert plan.selected_streams.unknown_stream_indices == []
 
 
 def test_path_based_profile_override_resolution_uses_longest_match() -> None:

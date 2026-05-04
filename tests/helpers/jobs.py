@@ -72,6 +72,38 @@ def create_job(
     return PersistedJobContext(job=job, plan=plan, media_file=media_file)
 
 
+def media_for_plan_output(media_file: MediaFile, plan: ProcessingPlan) -> MediaFile:
+    output_media = media_file.model_copy(deep=True)
+    output_media.audio_streams = streams_in_plan_order(
+        output_media.audio_streams,
+        plan.selected_streams.audio_stream_indices,
+    )
+    primary_audio = (
+        plan.audio.primary_stream_index
+        if plan.audio.primary_stream_index is not None
+        else (
+            plan.selected_streams.audio_stream_indices[0]
+            if plan.selected_streams.audio_stream_indices
+            else None
+        )
+    )
+    for stream in output_media.audio_streams:
+        stream.disposition.default = stream.index == primary_audio
+
+    output_media.subtitle_streams = streams_in_plan_order(
+        output_media.subtitle_streams,
+        plan.selected_streams.subtitle_stream_indices,
+    )
+    for stream in output_media.subtitle_streams:
+        stream.disposition.default = stream.index == plan.subtitles.main_stream_index
+    return output_media
+
+
+def streams_in_plan_order(streams, selected_indices: list[int]):
+    by_index = {stream.index: stream for stream in streams}
+    return [by_index[index] for index in selected_indices if index in by_index]
+
+
 def create_planned_file(
     session: Session,
     bundle: ConfigBundle,

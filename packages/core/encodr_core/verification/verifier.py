@@ -13,6 +13,9 @@ from encodr_core.verification.models import (
     VerificationStatus,
 )
 from encodr_core.verification.rules import (
+    audio_default_disposition_matches_plan,
+    audio_stream_selection_matches_plan,
+    has_expected_selected_stream_shape,
     has_required_audio,
     has_required_subtitles,
     has_required_video,
@@ -21,6 +24,8 @@ from encodr_core.verification.rules import (
     retains_required_4k,
     retains_required_atmos,
     retains_required_surround,
+    subtitle_default_disposition_matches_plan,
+    subtitle_stream_selection_matches_plan,
 )
 
 
@@ -119,6 +124,41 @@ class OutputVerifier:
             code="subtitle_intent_satisfied",
             message="Required subtitle intent is present in the output.",
             passed=has_required_subtitles(plan, output_media),
+        )
+        self._add_check(
+            checks,
+            failures,
+            code="selected_stream_shape_satisfied",
+            message="Output contains only the streams selected by the plan.",
+            passed=has_expected_selected_stream_shape(plan, output_media),
+        )
+        self._add_check(
+            checks,
+            failures,
+            code="audio_stream_selection_satisfied",
+            message="Output audio streams match the selected plan order and metadata.",
+            passed=audio_stream_selection_matches_plan(source_media, plan, output_media),
+        )
+        self._add_check(
+            checks,
+            failures,
+            code="subtitle_stream_selection_satisfied",
+            message="Output subtitle streams match the selected plan order and metadata.",
+            passed=subtitle_stream_selection_matches_plan(source_media, plan, output_media),
+        )
+        self._add_check(
+            checks,
+            failures,
+            code="audio_default_disposition_satisfied",
+            message="Output audio default disposition matches the primary selected track.",
+            passed=audio_default_disposition_matches_plan(plan, output_media),
+        )
+        self._add_check(
+            checks,
+            failures,
+            code="subtitle_default_disposition_satisfied",
+            message="Output subtitle default disposition matches the selected primary subtitle.",
+            passed=subtitle_default_disposition_matches_plan(plan, output_media),
         )
         self._add_check(
             checks,

@@ -46,16 +46,7 @@ def build_execution_command_plan(
         "pipe:1",
     ]
 
-    for stream_index in plan.selected_streams.video_stream_indices:
-        command.extend(["-map", f"0:{stream_index}"])
-    for stream_index in plan.selected_streams.audio_stream_indices:
-        command.extend(["-map", f"0:{stream_index}"])
-    for stream_index in plan.selected_streams.subtitle_stream_indices:
-        command.extend(["-map", f"0:{stream_index}"])
-    for stream_index in plan.selected_streams.attachment_stream_indices:
-        command.extend(["-map", f"0:{stream_index}"])
-    for stream_index in plan.selected_streams.data_stream_indices:
-        command.extend(["-map", f"0:{stream_index}"])
+    append_selected_stream_maps(command, plan)
 
     if plan.action == PlanAction.REMUX:
         command.extend(
@@ -119,6 +110,7 @@ def build_execution_command_plan(
         fallback_used = backend_selection.fallback_used
         backend_selection_reason = backend_selection.selection_reason
 
+    command.extend(disposition_flags_for_selected_streams(plan))
     command.append(str(output_path))
     return ExecutionCommandPlan(
         mode=mode,
@@ -144,3 +136,44 @@ def build_temp_output_path(
     stem = input_path.stem
     token = job_id or "pending"
     return scratch_dir / f"{stem}.{token}.tmp.{suffix}"
+
+
+def append_selected_stream_maps(command: list[str], plan: ProcessingPlan) -> None:
+    for stream_index in plan.selected_streams.video_stream_indices:
+        command.extend(["-map", f"0:{stream_index}"])
+    for stream_index in plan.selected_streams.audio_stream_indices:
+        command.extend(["-map", f"0:{stream_index}"])
+    for stream_index in plan.selected_streams.subtitle_stream_indices:
+        command.extend(["-map", f"0:{stream_index}"])
+    for stream_index in plan.selected_streams.attachment_stream_indices:
+        command.extend(["-map", f"0:{stream_index}"])
+    for stream_index in plan.selected_streams.data_stream_indices:
+        command.extend(["-map", f"0:{stream_index}"])
+
+
+def disposition_flags_for_selected_streams(plan: ProcessingPlan) -> list[str]:
+    flags: list[str] = []
+    primary_audio = plan.audio.primary_stream_index
+    if primary_audio is None and plan.selected_streams.audio_stream_indices:
+        primary_audio = plan.selected_streams.audio_stream_indices[0]
+
+    for output_index, source_index in enumerate(plan.selected_streams.audio_stream_indices):
+        flags.extend(
+            [
+                f"-disposition:a:{output_index}",
+                "default" if source_index == primary_audio else "0",
+            ]
+        )
+
+    forced_subtitles = set(plan.subtitles.forced_stream_indices)
+    main_subtitle = plan.subtitles.main_stream_index
+    for output_index, source_index in enumerate(plan.selected_streams.subtitle_stream_indices):
+        if source_index in forced_subtitles:
+            disposition = "forced"
+        elif source_index == main_subtitle:
+            disposition = "default"
+        else:
+            disposition = "0"
+        flags.extend([f"-disposition:s:{output_index}", disposition])
+
+    return flags

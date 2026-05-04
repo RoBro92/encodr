@@ -12,7 +12,7 @@ from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
 from tests.helpers.filesystem import create_filesystem_layout
-from tests.helpers.jobs import StaticProbeClient, StagedRunner, create_job, media_at_path, parse_fixture
+from tests.helpers.jobs import StaticProbeClient, StagedRunner, create_job, media_at_path, media_for_plan_output, parse_fixture
 
 pytestmark = [pytest.mark.e2e, pytest.mark.smoke, pytest.mark.security]
 
@@ -42,7 +42,8 @@ def test_local_stack_vertical_slice(
     media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
 
     with session_factory() as session:
-        create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        output_media = media_for_plan_output(media, persisted.plan)
         session.commit()
 
     loop = LocalWorkerLoop(
@@ -50,7 +51,7 @@ def test_local_stack_vertical_slice(
         bundle,
         execution_service=WorkerExecutionService(
             runner=StagedRunner(output_path=layout.scratch_dir / "e2e-output.mkv"),
-            verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+            verifier=OutputVerifier(probe_client=StaticProbeClient(output_media)),
         ),
         poll_interval_seconds=0.01,
     )
