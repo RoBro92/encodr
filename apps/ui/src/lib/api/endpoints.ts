@@ -52,6 +52,7 @@ import type {
   ReviewDecisionResponse,
   ReviewItemDetail,
   ReviewListResponse,
+  ResolveFailedJobsPayload,
   RetryJobPayload,
   WorkerInventoryDetail,
   WorkerInventoryListResponse,
@@ -235,6 +236,16 @@ export function clearFailedJobs(
   return client.request<BulkJobActionResponse>("/jobs/clear-failed", {
     method: "POST",
     body: payload ? JSON.stringify(payload) : undefined,
+  });
+}
+
+export function resolveFailedJobs(
+  client: ApiClient,
+  payload: ResolveFailedJobsPayload,
+): Promise<BulkJobActionResponse> {
+  return client.request<BulkJobActionResponse>("/jobs/resolve-failed", {
+    method: "POST",
+    body: JSON.stringify(payload),
   });
 }
 

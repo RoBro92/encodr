@@ -77,7 +77,10 @@ def build_execution_command_plan(
         actual_backend = "cpu"
         actual_accelerator = "cpu"
         fallback_used = False
-        backend_selection_reason = "Remux and strip-only paths use CPU copy operations."
+        backend_selection_reason = (
+            "Remux and strip-only jobs copy streams without video encoding; "
+            "hardware encoders are not used for this job."
+        )
     else:
         backend_selection = select_execution_backend(
             ffmpeg_path=ffmpeg_path,

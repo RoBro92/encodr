@@ -359,6 +359,41 @@ def test_progress_stream_jobs_include_active_and_recent_terminal_only() -> None:
         assert old_terminal.id not in {job.id for job in stream_jobs}
 
 
+def test_list_jobs_completed_group_includes_completed_and_skipped_with_search() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+
+        def add_job(name: str, status: JobStatus):
+            source_path = Path(f"/media/Movies/{name}.mkv")
+            media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+            tracked_file = tracked_files.upsert_by_path(source_path.as_posix(), media_file=media)
+            probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+            plan = build_processing_plan(media, bundle, source_path=source_path.as_posix())
+            plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+            job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+            job.status = status
+            job.completed_at = datetime(2026, 4, 29, 12, 0, tzinfo=timezone.utc)
+            return job
+
+        completed = add_job("Completed Match", JobStatus.COMPLETED)
+        skipped = add_job("Skipped Match", JobStatus.SKIPPED)
+        failed = add_job("Failed Match", JobStatus.FAILED)
+        other_completed = add_job("Other Completed", JobStatus.COMPLETED)
+        session.flush()
+
+        grouped = jobs.list_jobs(status_group="completed", search="match")
+        total = jobs.count_jobs(status_group="completed", search="match")
+
+        assert {job.id for job in grouped} == {completed.id, skipped.id}
+        assert failed.id not in {job.id for job in grouped}
+        assert other_completed.id not in {job.id for job in grouped}
+        assert total == 2
+
+
 def test_scan_records_are_listed_newest_first() -> None:
     with database_session() as session:
         scans = ScanRecordRepository(session)
@@ -908,6 +943,42 @@ def test_expired_backup_cleanup_deletes_retained_backup(tmp_path: Path) -> None:
         assert deleted == [job]
         assert backup_path.exists() is False
         assert job.backup_deleted_at == completed_at + timedelta(days=1, seconds=1)
+
+
+def test_mark_result_uses_result_started_at_for_duration() -> None:
+    with database_session() as session:
+        tracked_files = TrackedFileRepository(session)
+        probes = ProbeSnapshotRepository(session)
+        plans = PlanSnapshotRepository(session)
+        jobs = JobRepository(session)
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        media = parse_fixture("film_1080p.json")
+
+        tracked_file = tracked_files.upsert_by_path(media.file_path, media_file=media)
+        probe_snapshot = probes.add_probe_snapshot(tracked_file, media)
+        plan = build_processing_plan(media, bundle, source_path=media.file_path)
+        plan_snapshot = plans.add_plan_snapshot(tracked_file, probe_snapshot, plan)
+        job = jobs.create_job_from_plan(tracked_file, plan_snapshot)
+        stale_started_at = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
+        result_started_at = datetime(2026, 4, 22, 12, 0, tzinfo=timezone.utc)
+        completed_at = datetime(2026, 4, 22, 12, 2, tzinfo=timezone.utc)
+        job.status = JobStatus.RUNNING
+        job.started_at = stale_started_at
+
+        jobs.mark_result(
+            job,
+            ExecutionResult(
+                mode="transcode",
+                status="completed",
+                command=[],
+                verification=VerificationResult(status="passed", passed=True),
+                replacement=ReplacementResult(status="not_required"),
+                started_at=result_started_at,
+                completed_at=completed_at,
+            ),
+        )
+
+        assert job.started_at == result_started_at
 
 
 def test_failed_execution_uses_exponential_backoff_before_manual_review() -> None:

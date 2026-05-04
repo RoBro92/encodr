@@ -197,6 +197,11 @@ class BulkJobClearRequest(BaseModel):
     job_ids: list[str] | None = None
 
 
+class BulkJobResolveRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1)
+    action: Literal["retry", "skip"]
+
+
 class RetryJobRequest(BaseModel):
     existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
 
@@ -300,6 +305,7 @@ class JobSummaryResponse(BaseModel):
     cancellation_requested_at: datetime | None = None
     cancellation_reason: str | None = None
     backup_policy: str
+    original_backup_path: str | None = None
     backup_retention_until: datetime | None = None
     backup_deleted_at: datetime | None = None
     backup_restored_at: datetime | None = None
@@ -382,6 +388,7 @@ class JobSummaryResponse(BaseModel):
             cancellation_requested_at=job.cancellation_requested_at,
             cancellation_reason=job.cancellation_reason,
             backup_policy=job.backup_policy,
+            original_backup_path=job.original_backup_path,
             backup_retention_until=job.backup_retention_until,
             backup_deleted_at=job.backup_deleted_at,
             backup_restored_at=job.backup_restored_at,
@@ -395,7 +402,6 @@ class JobSummaryResponse(BaseModel):
 class JobDetailResponse(JobSummaryResponse):
     output_path: str | None = None
     final_output_path: str | None = None
-    original_backup_path: str | None = None
     execution_command: list[str] | None = None
     execution_stdout: str | None = None
     execution_stderr: str | None = None
@@ -414,7 +420,6 @@ class JobDetailResponse(JobSummaryResponse):
             **summary.model_dump(),
             output_path=job.output_path,
             final_output_path=job.final_output_path,
-            original_backup_path=job.original_backup_path,
             execution_command=job.execution_command,
             execution_stdout=job.execution_stdout,
             execution_stderr=job.execution_stderr,

@@ -340,6 +340,87 @@ describe("Encodr UI shell", () => {
     expect(routes[routes.length - 1]).toBe("/jobs?tab=completed");
   });
 
+  it("searches and filters completed jobs with server-backed pagination", async () => {
+    const completedJobs = [
+      {
+        ...jobDetail(),
+        id: "completed-job",
+        source_filename: "Completed Film (2024).mkv",
+        source_path: "/media/Movies/Completed Film (2024).mkv",
+        status: "completed",
+        duration_seconds: 120,
+      },
+      {
+        ...jobDetail(),
+        id: "skipped-job",
+        source_filename: "Skipped Film (2024).mkv",
+        source_path: "/media/Movies/Skipped Film (2024).mkv",
+        status: "skipped",
+        skipped_reason: "Already compliant.",
+        duration_seconds: 0,
+      },
+    ];
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=completed&limit=10&offset=0$/,
+        body: {
+          items: completedJobs,
+          limit: 10,
+          offset: 0,
+          total: 2,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=completed&search=.*&limit=10&offset=0$/,
+        body: {
+          items: [completedJobs[1]],
+          limit: 10,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=completed&status=skipped&search=Skipped&limit=10&offset=0$/,
+        body: {
+          items: [completedJobs[1]],
+          limit: 10,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: completedJobs,
+          limit: 100,
+          offset: 0,
+          total: 2,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs?tab=completed", initialSession: makeSession() });
+
+    expect(await screen.findByLabelText(/search completed jobs/i)).toBeInTheDocument();
+    expect(screen.getByText(/showing 1-2 of 2/i)).toBeInTheDocument();
+
+    await userEvent.type(screen.getByLabelText(/search completed jobs/i), "Skipped");
+    await userEvent.selectOptions(screen.getByLabelText(/completed job status/i), "skipped");
+
+    await waitFor(() => {
+      expect(fetchMock.mock.calls.some(([url]) =>
+        typeof url === "string"
+        && url.includes("/api/jobs?status_group=completed&status=skipped&search=Skipped&limit=10&offset=0"),
+      )).toBe(true);
+    });
+    expect(await screen.findByText(/showing 1-1 of 1/i)).toBeInTheDocument();
+  });
+
   it("uses URL status filters when loading jobs and review directly", async () => {
     const jobFetchMock = mockFetchRoutes([
       {
@@ -1668,7 +1749,7 @@ describe("Encodr UI shell", () => {
     });
   });
 
-  it("paginates failed and cancelled jobs with search and selected clearing", async () => {
+  it("paginates failed and cancelled jobs with search and selected resolution", async () => {
     const problemJobs = Array.from({ length: 11 }, (_, index) => ({
       ...jobDetail(),
       id: `problem-job-${index + 1}`,
@@ -1725,9 +1806,9 @@ describe("Encodr UI shell", () => {
       },
       {
         method: "POST",
-        path: "/api/jobs/clear-failed",
+        path: "/api/jobs/resolve-failed",
         body: {
-          status: "cleared",
+          status: "queued",
           affected_count: 10,
           affected_job_ids: problemJobs.slice(0, 10).map((job) => job.id),
         },
@@ -1753,15 +1834,15 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByText(/problem film 11 \(2024\)\.mkv/i)).not.toBeInTheDocument();
 
     await userEvent.click(screen.getByRole("button", { name: /select all visible problem jobs/i }));
-    await userEvent.click(screen.getByRole("button", { name: /clear selected \(10\)/i }));
-    await userEvent.click(await screen.findByRole("button", { name: /^clear selected$/i }));
+    await userEvent.click(screen.getByRole("button", { name: /resolve selected \(10\)/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^retry selected$/i }));
 
     await waitFor(() => {
       expect(fetchMock).toHaveBeenCalledWith(
-        expect.stringContaining("/api/jobs/clear-failed"),
+        expect.stringContaining("/api/jobs/resolve-failed"),
         expect.objectContaining({
           method: "POST",
-          body: JSON.stringify({ job_ids: problemJobs.slice(0, 10).map((job) => job.id) }),
+          body: JSON.stringify({ job_ids: problemJobs.slice(0, 10).map((job) => job.id), action: "retry" }),
           headers: expect.any(Headers),
         }),
       );
@@ -1829,10 +1910,123 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("link", { name: /backup collision \(2024\)\.mkv/i })).toBeInTheDocument();
     await userEvent.click(screen.getByLabelText(/select problem job backup collision/i));
     await userEvent.click(screen.getByLabelText(/select problem job worker failure/i));
-    await userEvent.click(screen.getByRole("button", { name: /clear selected \(2\)/i }));
+    await userEvent.click(screen.getByRole("button", { name: /resolve selected \(2\)/i }));
 
     expect(await screen.findByRole("dialog", { name: /mixed problem selection/i })).toBeInTheDocument();
     expect(screen.getByText(/select jobs with the same error/i)).toBeInTheDocument();
+  });
+
+  it("marks selected failed jobs skipped instead of hiding them", async () => {
+    const problemJobs = [
+      {
+        ...jobDetail(),
+        id: "problem-job-1",
+        source_filename: "Backup Collision One (2024).mkv",
+        source_path: "/media/Movies/Backup Collision One (2024).mkv",
+        status: "failed",
+        failure_code: "backup_already_exists",
+        failure_category: "replacement_failed",
+        failure_message: "A backup file already exists for the source path.",
+      },
+    ];
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=problem&limit=10&offset=0$/,
+        body: {
+          items: problemJobs,
+          limit: 10,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: problemJobs,
+          limit: 100,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/resolve-failed",
+        body: {
+          status: "skipped",
+          affected_count: 1,
+          affected_job_ids: ["problem-job-1"],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs?tab=problem", initialSession: makeSession() });
+
+    expect(await screen.findByRole("link", { name: /backup collision one \(2024\)\.mkv/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText(/select problem job backup collision/i));
+    await userEvent.click(screen.getByRole("button", { name: /resolve selected \(1\)/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^mark skipped$/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/resolve-failed"),
+        expect.objectContaining({
+          method: "POST",
+          body: JSON.stringify({ job_ids: ["problem-job-1"], action: "skip" }),
+          headers: expect.any(Headers),
+        }),
+      );
+    });
+  });
+
+  it("does not offer backup replacement options after the backup was deleted", async () => {
+    const problemJobs = [
+      {
+        ...jobDetail(),
+        id: "problem-job-1",
+        source_filename: "Deleted Backup Collision (2024).mkv",
+        source_path: "/media/Movies/Deleted Backup Collision (2024).mkv",
+        status: "failed",
+        failure_code: "backup_already_exists",
+        failure_category: "replacement_failed",
+        failure_message: "A backup file already exists for the source path.",
+        original_backup_path: "/media/Movies/Deleted Backup Collision (2024).encodr-backup.mkv",
+        backup_deleted_at: "2026-05-03T23:56:05Z",
+      },
+    ];
+    mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?status_group=problem&limit=10&offset=0$/,
+        body: {
+          items: problemJobs,
+          limit: 10,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: problemJobs,
+          limit: 100,
+          offset: 0,
+          total: 1,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs?tab=problem", initialSession: makeSession() });
+
+    expect(await screen.findByRole("link", { name: /deleted backup collision \(2024\)\.mkv/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText(/select problem job deleted backup collision/i));
+
+    expect(screen.queryByRole("button", { name: /backup options/i })).not.toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /resolve selected \(1\)/i })).toBeInTheDocument();
   });
 
   it("retries selected backup-collision jobs with an explicit backup strategy", async () => {
@@ -1846,6 +2040,7 @@ describe("Encodr UI shell", () => {
         failure_code: "backup_already_exists",
         failure_category: "replacement_failed",
         failure_message: "A backup file already exists for the source path.",
+        original_backup_path: "/media/Movies/Backup Collision One (2024).encodr-backup.mkv",
       },
       {
         ...jobDetail(),
@@ -1856,6 +2051,7 @@ describe("Encodr UI shell", () => {
         failure_code: "backup_already_exists",
         failure_category: "replacement_failed",
         failure_message: "A backup file already exists for the source path.",
+        original_backup_path: "/media/Movies/Backup Collision Two (2024).encodr-backup.mkv",
       },
     ];
     const fetchMock = mockFetchRoutes([

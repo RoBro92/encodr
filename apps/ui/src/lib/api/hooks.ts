@@ -60,6 +60,7 @@ import {
   probeFile,
   dryRunSelection,
   rejectReviewItem,
+  resolveFailedJobs,
   retryJob,
   restoreJobBackup,
   runWorkerOnce,
@@ -91,6 +92,7 @@ import type {
   ProbeOrPlanPayload,
   ProcessingRuleValues,
   ReviewDecisionPayload,
+  ResolveFailedJobsPayload,
   RetryJobPayload,
   RemoteWorkerOnboardingPayload,
   WatchedJobPayload,
@@ -454,6 +456,21 @@ export function useClearFailedJobsMutation() {
     onSuccess: async () => {
       await Promise.all([
         queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["analytics"] }),
+      ]);
+    },
+  });
+}
+
+export function useResolveFailedJobsMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (payload: ResolveFailedJobsPayload) => resolveFailedJobs(apiClient, payload),
+    onSuccess: async () => {
+      await Promise.all([
+        queryClient.invalidateQueries({ queryKey: ["jobs"] }),
+        queryClient.invalidateQueries({ queryKey: ["worker"] }),
         queryClient.invalidateQueries({ queryKey: ["analytics"] }),
       ]);
     },
