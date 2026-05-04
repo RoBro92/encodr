@@ -194,6 +194,149 @@ describe("Encodr UI shell", () => {
     expect(screen.queryByLabelText(/probe source path/i)).not.toBeInTheDocument();
   });
 
+  it("keeps the dashboard visible when live worker and running-job fields are missing", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      {
+        method: "GET",
+        path: "/api/worker/status",
+        body: workerStatus({
+          worker_name: null,
+          summary: null,
+          queue_health: null,
+          current_job_id: null,
+          current_progress_percent: null,
+        }),
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-running-missing-fields",
+              source_path: null,
+              source_filename: null,
+              worker_name: null,
+              status: "running",
+              progress_stage: null,
+              progress_percent: null,
+            },
+          ],
+          limit: 10,
+          offset: 0,
+        },
+      },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    expect(screen.getByText(/progress unavailable/i)).toBeInTheDocument();
+    expect(screen.getByText(/worker not assigned/i)).toBeInTheDocument();
+  });
+
+  it("keeps the dashboard visible when a dashboard API request fails", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", status: 500, body: { detail: "analytics unavailable" } },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    expect(await screen.findByRole("alert")).toHaveTextContent(/dashboard data is partially unavailable/i);
+    expect(screen.getByRole("heading", { name: /active transcoding file/i })).toBeInTheDocument();
+  });
+
+  it("keeps the dashboard visible while the progress stream updates a running job", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      { method: "GET", path: "/api/jobs", body: runningJobsResponse() },
+      {
+        method: "GET",
+        path: "/api/jobs/progress-stream",
+        response: sseResponse([
+          {
+            ...jobDetail(),
+            id: "job-running",
+            source_filename: "Example Film (2024).mkv",
+            source_path: "/media/Movies/Example Film (2024).mkv",
+            worker_name: "worker-local",
+            status: "running",
+            progress_stage: "verifying",
+            progress_percent: 87,
+          },
+        ]),
+      },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByText(/87% complete/i)).toBeInTheDocument();
+    });
+    expect(screen.getByText(/^verifying$/i)).toBeInTheDocument();
+  });
+
+  it("does not crash when a streamed job transitions through active and terminal states", async () => {
+    mockFetchRoutes([
+      { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
+      {
+        method: "GET",
+        path: "/api/worker/status",
+        body: workerStatus({ current_job_id: "job-transition", current_progress_percent: 12 }),
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-transition",
+              source_filename: "Transition Film (2024).mkv",
+              status: "running",
+              progress_stage: "transcoding",
+              progress_percent: 12,
+            },
+          ],
+          limit: 10,
+          offset: 0,
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/progress-stream",
+        response: sseResponse([
+          { ...jobDetail(), id: "job-transition", status: "running", progress_stage: "transcoding", progress_percent: 55 },
+          { ...jobDetail(), id: "job-transition", status: "completed", progress_stage: "completed", progress_percent: 100 },
+          { ...jobDetail(), id: "job-transition", status: "failed", failure_message: "guard failed" },
+        ]),
+      },
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/system/storage", body: storageStatus() },
+    ]);
+
+    renderApp({ route: "/", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /active transcoding file/i })).toBeInTheDocument();
+    await waitFor(() => {
+      expect(screen.getByRole("heading", { name: /^dashboard$/i })).toBeInTheDocument();
+    });
+  });
+
   it("opens dashboard outcome cards with URL status filters", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/analytics/dashboard", body: analyticsDashboard() },
@@ -3319,6 +3462,29 @@ function runningJobsResponse() {
     limit: 10,
     offset: 0,
   };
+}
+
+function sseResponse(items: Array<Record<string, unknown>>) {
+  const encoder = new TextEncoder();
+  return () =>
+    new Response(
+      new ReadableStream({
+        start(controller) {
+          window.setTimeout(() => {
+            for (const item of items) {
+              controller.enqueue(encoder.encode(`event: jobs\ndata: ${JSON.stringify({ items: [item] })}\n\n`));
+            }
+            controller.close();
+          }, 0);
+        },
+      }),
+      {
+        status: 200,
+        headers: {
+          "Content-Type": "text/event-stream",
+        },
+      },
+    );
 }
 
 function workerStatus(overrides: Record<string, unknown> = {}) {

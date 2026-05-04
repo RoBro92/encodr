@@ -330,17 +330,21 @@ function parseJobProgressEvent(
 }
 
 function applyJobProgressUpdates(queryClient: QueryClient, items: JobSummary[]) {
-  if (items.length === 0) {
+  const validItems = items.filter(isProgressJobSummary);
+  if (validItems.length === 0) {
     return;
   }
 
-  const updates = new Map(items.map((item) => [item.id, item]));
+  const updates = new Map(validItems.map((item) => [item.id, item]));
   for (const query of queryClient.getQueryCache().findAll({ queryKey: ["jobs"] })) {
     const queryKey = query.queryKey;
     if (queryKey[1] === "detail") {
       continue;
     }
-    const filters = isJobFilterQueryKey(queryKey[1]) ? queryKey[1] : {};
+    if (!isJobFilterQueryKey(queryKey[1])) {
+      continue;
+    }
+    const filters = queryKey[1];
     queryClient.setQueryData<JobListResponse>(queryKey, (current) => {
       if (!current?.items) {
         return current;
@@ -357,7 +361,7 @@ function applyJobProgressUpdates(queryClient: QueryClient, items: JobSummary[]) 
         changed = true;
         return matchesJobFilters(merged, filters) ? [merged] : [];
       });
-      for (const update of items) {
+      for (const update of validItems) {
         if (!seen.has(update.id) && matchesJobFilters(update, filters)) {
           nextItems.unshift(update);
           changed = true;
@@ -367,17 +371,21 @@ function applyJobProgressUpdates(queryClient: QueryClient, items: JobSummary[]) 
     });
   }
 
-  for (const update of items) {
+  for (const update of validItems) {
     queryClient.setQueryData<JobDetail>(["jobs", "detail", update.id], (current) =>
       current ? { ...current, ...update } : current,
     );
   }
 
-  if (items.some((item) => TERMINAL_JOB_STATUSES.has(item.status))) {
+  if (validItems.some((item) => TERMINAL_JOB_STATUSES.has(item.status))) {
     void queryClient.invalidateQueries({ queryKey: ["jobs"], refetchType: "active" });
     void queryClient.invalidateQueries({ queryKey: ["worker", "status"], refetchType: "active" });
     void queryClient.invalidateQueries({ queryKey: ["analytics", "dashboard"], refetchType: "active" });
   }
+}
+
+function isProgressJobSummary(item: JobSummary): item is JobSummary {
+  return Boolean(item && typeof item.id === "string" && item.id && typeof item.status === "string" && item.status);
 }
 
 function isJobFilterQueryKey(value: unknown): value is Record<string, string | number | undefined> {
@@ -839,6 +847,7 @@ export function useAnalyticsDashboardQuery() {
     queryKey: ["analytics", "dashboard"],
     queryFn: () => getAnalyticsDashboard(apiClient),
     enabled: isAuthenticated,
+    retry: false,
   });
 }
 
