@@ -32,6 +32,7 @@ type SystemNode = {
 
 type DashboardWidgetBoundaryProps = {
   title: string;
+  resetKey: string | number;
   children: ReactNode;
 };
 
@@ -39,7 +40,7 @@ type DashboardWidgetBoundaryState = {
   failed: boolean;
 };
 
-class DashboardWidgetBoundary extends Component<DashboardWidgetBoundaryProps, DashboardWidgetBoundaryState> {
+export class DashboardWidgetBoundary extends Component<DashboardWidgetBoundaryProps, DashboardWidgetBoundaryState> {
   state: DashboardWidgetBoundaryState = { failed: false };
 
   static getDerivedStateFromError(): DashboardWidgetBoundaryState {
@@ -48,6 +49,12 @@ class DashboardWidgetBoundary extends Component<DashboardWidgetBoundaryProps, Da
 
   componentDidCatch(error: Error, info: ErrorInfo) {
     console.warn("Dashboard widget failed to render.", { error, componentStack: info.componentStack });
+  }
+
+  componentDidUpdate(previousProps: DashboardWidgetBoundaryProps) {
+    if (this.state.failed && previousProps.resetKey !== this.props.resetKey) {
+      this.setState({ failed: false });
+    }
   }
 
   render() {
@@ -123,6 +130,20 @@ export function DashboardPage() {
   const activeJob = pickActiveJob(runningJobs, worker?.current_job_id);
   const activeProgress = clampProgress(activeJob?.progress_percent ?? worker?.current_progress_percent ?? null);
   const systemNodes = buildSystemNodes(runtime, storage, worker);
+  const historicalMetricsResetKey = analyticsQuery.dataUpdatedAt;
+  const transcodingOutcomesResetKey = `${analyticsQuery.dataUpdatedAt}:${runningJobsQuery.dataUpdatedAt}`;
+  const activeFileResetKey = [
+    workerQuery.dataUpdatedAt,
+    runningJobsQuery.dataUpdatedAt,
+    activeJob?.id ?? "none",
+    activeJob?.status ?? "none",
+    activeProgress ?? "none",
+  ].join(":");
+  const systemNodesResetKey = [
+    workerQuery.dataUpdatedAt,
+    runtimeQuery.dataUpdatedAt,
+    storageQuery.dataUpdatedAt,
+  ].join(":");
 
   return (
     <div className="page-stack">
@@ -157,7 +178,7 @@ export function DashboardPage() {
         </section>
       ) : null}
 
-      <DashboardWidgetBoundary title="Historical metrics">
+      <DashboardWidgetBoundary title="Historical metrics" resetKey={historicalMetricsResetKey}>
         <section className="dashboard-analytics-row" aria-label="Historical processing metrics">
           <Link className="dashboard-metric-card dashboard-card-link" to={`${APP_ROUTES.jobs}?status=completed&tab=completed`}>
             <span className="metric-label">Files Processed</span>
@@ -178,7 +199,7 @@ export function DashboardPage() {
       </DashboardWidgetBoundary>
 
       <section className="dashboard-command-grid" aria-label="Transcoding command center">
-        <DashboardWidgetBoundary title="Transcoding outcomes">
+        <DashboardWidgetBoundary title="Transcoding outcomes" resetKey={transcodingOutcomesResetKey}>
           <article className="dashboard-widget">
             <div className="dashboard-widget-header">
               <div>
@@ -207,7 +228,7 @@ export function DashboardPage() {
           </article>
         </DashboardWidgetBoundary>
 
-        <DashboardWidgetBoundary title="Active file">
+        <DashboardWidgetBoundary title="Active file" resetKey={activeFileResetKey}>
           <article className="dashboard-widget dashboard-active-file-card">
             <div className="dashboard-widget-header">
               <div>
@@ -246,7 +267,7 @@ export function DashboardPage() {
         </DashboardWidgetBoundary>
       </section>
 
-      <DashboardWidgetBoundary title="System nodes">
+      <DashboardWidgetBoundary title="System nodes" resetKey={systemNodesResetKey}>
         <section className="dashboard-widget">
           <div className="dashboard-widget-header">
             <div>

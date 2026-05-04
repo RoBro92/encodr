@@ -10,7 +10,7 @@ import pytest
 
 from encodr_core.config import load_config_bundle
 from encodr_db.models import BulkQueueOperation, FileLifecycleState, Job, JobKind, JobStatus, ManualReviewDecisionType, PlanSnapshot, ProbeSnapshot, TrackedFile
-from encodr_db.repositories import ManualReviewDecisionRepository, TrackedFileRepository, WorkerRepository
+from encodr_db.repositories import ManualReviewDecisionRepository, TrackedFileRepository, UserRepository, WorkerRepository
 from encodr_db.runtime import WorkerExecutionService
 from encodr_core.verification import OutputVerifier
 from encodr_shared.scheduling import DAY_ORDER
@@ -304,6 +304,59 @@ def test_strip_only_recovery_endpoint_queues_remux_for_size_guard_failure(
         assert jobs[1].plan_snapshot.payload["action"] == "remux"
         assert jobs[1].plan_snapshot.payload["video"]["transcode_required"] is False
         assert jobs[1].completed_at is None
+
+
+def test_strip_only_recovery_endpoint_keeps_manual_review_behind_review_gate(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Protected Strip Recovery Film (2024).mkv", contents="retry")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.MANUAL_REVIEW
+        persisted.job.failure_category = "compression_safety_bitrate_floor"
+        persisted.job.failure_message = "Output video bitrate is below the compression safety floor."
+        persisted.job.tracked_file.is_protected = True
+        session.commit()
+        original_job_id = persisted.job.id
+
+    blocked_response = context.client.post(
+        f"/api/jobs/{original_job_id}/strip-only-recovery",
+        headers=auth.headers,
+    )
+
+    assert blocked_response.status_code == 409
+    assert "requires manual review" in blocked_response.json()["detail"]
+
+    with session_factory() as session:
+        original_job = session.get(Job, original_job_id)
+        admin = UserRepository(session).get_by_username("admin")
+        assert original_job is not None
+        assert admin is not None
+        ManualReviewDecisionRepository(session).add_decision(
+            tracked_file_id=original_job.tracked_file_id,
+            plan_snapshot_id=original_job.plan_snapshot_id,
+            job_id=original_job.id,
+            decision_type=ManualReviewDecisionType.APPROVED,
+            created_by_user=admin,
+            note="Approved strip-only recovery.",
+        )
+        session.commit()
+
+    approved_response = context.client.post(
+        f"/api/jobs/{original_job_id}/strip-only-recovery",
+        headers=auth.headers,
+    )
+
+    assert approved_response.status_code == 201
+    payload = approved_response.json()
+    assert payload["id"] != original_job_id
+    assert payload["status"] == JobStatus.PENDING.value
 
 
 def test_retry_endpoint_keeps_protected_replacement_failure_behind_review_gate(

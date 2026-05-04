@@ -293,6 +293,12 @@ class JobsService:
         if original_job.tracked_file is not None:
             session.refresh(original_job.tracked_file)
         self._validate_processable_target(original_job.tracked_file)
+        self._validate_review_gate(
+            session,
+            tracked_file=original_job.tracked_file,
+            plan_snapshot=original_job.plan_snapshot,
+            allow_review_approved=True,
+        )
 
         repository = JobRepository(session)
         if repository.has_active_job_for_tracked_file(original_job.tracked_file_id):

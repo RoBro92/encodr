@@ -7,7 +7,8 @@ import pytest
 from encodr_core.config import load_config_bundle
 from encodr_core.execution import build_execution_command_plan
 from encodr_core.planning import ProcessingPlan
-from encodr_db.models import JobStatus
+from encodr_db.models import JobStatus, ManualReviewDecisionType
+from encodr_db.repositories import ManualReviewDecisionRepository, UserRepository
 from tests.helpers.api import import_api_module
 from tests.helpers.db import create_schema_session_factory
 from tests.helpers.jobs import create_job, media_at_path, parse_fixture
@@ -190,6 +191,15 @@ def test_strip_only_recovery_for_output_too_small_preserves_stream_policy_and_co
         persisted.job.status = JobStatus.MANUAL_REVIEW
         persisted.job.failure_category = "compression_safety_bitrate_floor"
         persisted.job.failure_message = "Output video bitrate is below the compression safety floor."
+        admin = UserRepository(session).create_user(username="admin", password_hash="hash")
+        ManualReviewDecisionRepository(session).add_decision(
+            tracked_file_id=persisted.job.tracked_file_id,
+            plan_snapshot_id=persisted.job.plan_snapshot_id,
+            job_id=persisted.job.id,
+            decision_type=ManualReviewDecisionType.APPROVED,
+            created_by_user=admin,
+            note="Approved strip-only recovery.",
+        )
         session.commit()
 
         with import_api_module("app.services.jobs") as jobs_module:
