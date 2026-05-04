@@ -282,6 +282,7 @@ def test_worker_image_includes_intel_vaapi_runtime_packages(repo_root: Path) -> 
         "libva-drm2",
         "mesa-va-drivers",
         "libvpl2",
+        "libmfx-gen1.2",
     ]:
         assert package_name in dockerfile
         assert package_name in agent_dockerfile

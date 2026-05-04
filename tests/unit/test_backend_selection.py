@@ -160,7 +160,8 @@ def test_qsv_mode_requires_qsv_when_fallback_disabled(monkeypatch) -> None:
         )
 
 
-def test_vaapi_mode_ignores_failed_qsv_when_vaapi_passes(monkeypatch) -> None:
+def test_vaapi_mode_ignores_failed_qsv_when_vaapi_passes(monkeypatch, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="encodr.execution.backend")
     monkeypatch.setattr(
         "encodr_core.execution.backend_selection.probe_execution_backends",
         lambda _path: [
@@ -188,3 +189,8 @@ def test_vaapi_mode_ignores_failed_qsv_when_vaapi_passes(monkeypatch) -> None:
     assert selection.actual_backend == "intel_vaapi"
     assert selection.accelerator == "vaapi"
     assert selection.fallback_used is False
+    assert selection.selection_reason == "Using Intel iGPU / VAAPI for hardware-accelerated video encoding."
+    assert not any(
+        getattr(record, "event", None) == "backend_fallback"
+        for record in caplog.records
+    )
