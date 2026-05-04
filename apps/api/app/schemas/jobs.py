@@ -402,7 +402,6 @@ class JobSummaryResponse(BaseModel):
 class JobDetailResponse(JobSummaryResponse):
     output_path: str | None = None
     final_output_path: str | None = None
-    original_backup_path: str | None = None
     execution_command: list[str] | None = None
     execution_stdout: str | None = None
     execution_stderr: str | None = None
@@ -421,7 +420,6 @@ class JobDetailResponse(JobSummaryResponse):
             **summary.model_dump(),
             output_path=job.output_path,
             final_output_path=job.final_output_path,
-            original_backup_path=job.original_backup_path,
             execution_command=job.execution_command,
             execution_stdout=job.execution_stdout,
             execution_stderr=job.execution_stderr,
