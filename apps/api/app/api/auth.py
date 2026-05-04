@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request, status
 from sqlalchemy.orm import Session
 
@@ -23,10 +25,12 @@ from app.schemas.auth import (
 from app.schemas.user import CurrentUserResponse
 from app.services.audit import AuditService
 from app.services.auth import AuthService
+from app.services.diagnostics import exception_fields
 from encodr_db.repositories import UserRepository
 from encodr_db.models import User
 
 router = APIRouter(prefix="/auth", tags=["auth"])
+logger = logging.getLogger("encodr.api.auth")
 
 
 def get_auth_service(
@@ -70,9 +74,27 @@ def bootstrap_admin(
             password=payload.password,
         )
         session.commit()
+        logger.info(
+            "bootstrap admin created",
+            extra={
+                "event": "auth_bootstrap_admin_created",
+                "status": status.HTTP_201_CREATED,
+                "user_id": user.id,
+                "username": user.username,
+            },
+        )
         return BootstrapAdminResponse(user=CurrentUserResponse.from_user(user))
     except BootstrapDisabledError as error:
         session.commit()
+        logger.warning(
+            "bootstrap admin blocked",
+            extra={
+                "event": "auth_bootstrap_admin_failed",
+                "status": status.HTTP_403_FORBIDDEN,
+                "username": payload.username,
+                **exception_fields(error),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
 
 
@@ -91,12 +113,40 @@ def login(
             password=payload.password,
         )
         session.commit()
+        user = UserRepository(session).get_by_username(payload.username)
+        logger.info(
+            "login succeeded",
+            extra={
+                "event": "auth_login_succeeded",
+                "status": status.HTTP_200_OK,
+                "user_id": user.id if user is not None else None,
+                "username": user.username if user is not None else payload.username,
+            },
+        )
         return response
     except AuthenticationFailedError as error:
         session.commit()
+        logger.warning(
+            "login failed",
+            extra={
+                "event": "auth_login_failed",
+                "status": status.HTTP_401_UNAUTHORIZED,
+                "username": payload.username,
+                **exception_fields(error),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(error)) from error
     except InactiveUserError as error:
         session.commit()
+        logger.warning(
+            "login failed",
+            extra={
+                "event": "auth_login_failed",
+                "status": status.HTTP_403_FORBIDDEN,
+                "username": payload.username,
+                **exception_fields(error),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
 
 
@@ -109,6 +159,15 @@ def logout(
 ) -> LogoutResponse:
     auth_service.logout(session, request=request, user=current_user)
     session.commit()
+    logger.info(
+        "logout succeeded",
+        extra={
+            "event": "auth_logout_succeeded",
+            "status": status.HTTP_200_OK,
+            "user_id": current_user.id,
+            "username": current_user.username,
+        },
+    )
     return LogoutResponse()
 
 
@@ -126,12 +185,35 @@ def refresh(
             refresh_token=payload.refresh_token,
         )
         session.commit()
+        logger.info(
+            "refresh succeeded",
+            extra={
+                "event": "auth_refresh_succeeded",
+                "status": status.HTTP_200_OK,
+            },
+        )
         return response
     except InvalidTokenError as error:
         session.commit()
+        logger.warning(
+            "refresh failed",
+            extra={
+                "event": "auth_refresh_failed",
+                "status": status.HTTP_401_UNAUTHORIZED,
+                **exception_fields(error),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=str(error)) from error
     except InactiveUserError as error:
         session.commit()
+        logger.warning(
+            "refresh failed",
+            extra={
+                "event": "auth_refresh_failed",
+                "status": status.HTTP_403_FORBIDDEN,
+                **exception_fields(error),
+            },
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail=str(error)) from error
 
 

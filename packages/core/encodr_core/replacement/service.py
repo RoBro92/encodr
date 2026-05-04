@@ -421,6 +421,7 @@ def _replacement_failure_details(
         "final_output_path": final_output_path.as_posix() if final_output_path is not None else None,
         "original_backup_path": original_backup_path.as_posix() if original_backup_path is not None else None,
         "errno": error_number,
+        "reason": _replacement_error_reason(error),
         "exception_type": type(error).__name__,
         "exception_message": str(error),
         "source_exists": source_path.exists(),
@@ -432,3 +433,9 @@ def _replacement_failure_details(
             else None
         ),
     }
+
+
+def _replacement_error_reason(error: BaseException) -> str:
+    if isinstance(error, OSError) and error.strerror:
+        return error.strerror
+    return str(error)

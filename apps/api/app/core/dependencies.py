@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections.abc import Generator
+import logging
 
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -15,6 +16,7 @@ from encodr_db.repositories import AuditEventRepository, UserRepository, WorkerR
 from encodr_db.runtime import LocalWorkerLoop
 
 bearer_scheme = HTTPBearer(auto_error=False)
+logger = logging.getLogger("encodr.api.auth")
 
 
 def get_session_factory(request: Request) -> sessionmaker:
@@ -60,11 +62,13 @@ def get_orchestration_service(request: Request) -> OrchestrationService:
 
 
 def require_current_user(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     session: Session = Depends(get_session),
     token_service: TokenService = Depends(get_token_service),
 ) -> User:
     if credentials is None:
+        _log_auth_denial("auth_missing_credentials", request=request, status_code=status.HTTP_401_UNAUTHORIZED)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication is required.",
@@ -74,6 +78,13 @@ def require_current_user(
     try:
         claims = token_service.decode_access_token(credentials.credentials)
     except Exception as error:
+        _log_auth_denial(
+            "auth_invalid_credentials",
+            request=request,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            reason="access_token_decode_failed",
+            exception_type=type(error).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials.",
@@ -82,6 +93,13 @@ def require_current_user(
 
     user = UserRepository(session).get_by_id(claims.user_id)
     if user is None or not user.is_active:
+        _log_auth_denial(
+            "auth_invalid_credentials",
+            request=request,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            user_id=claims.user_id,
+            reason="user_missing_or_inactive",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials.",
@@ -90,8 +108,16 @@ def require_current_user(
     return user
 
 
-def require_admin_user(current_user: User = Depends(require_current_user)) -> User:
+def require_admin_user(request: Request, current_user: User = Depends(require_current_user)) -> User:
     if current_user.role != UserRole.ADMIN:
+        _log_auth_denial(
+            "auth_admin_access_denied",
+            request=request,
+            status_code=status.HTTP_403_FORBIDDEN,
+            user_id=current_user.id,
+            username=current_user.username,
+            reason="role_not_admin",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator access is required.",
@@ -100,11 +126,13 @@ def require_admin_user(current_user: User = Depends(require_current_user)) -> Us
 
 
 def require_current_user_once(
+    request: Request,
     credentials: HTTPAuthorizationCredentials | None = Depends(bearer_scheme),
     session_factory: sessionmaker = Depends(get_session_factory),
     token_service: TokenService = Depends(get_token_service),
 ) -> User:
     if credentials is None:
+        _log_auth_denial("auth_missing_credentials", request=request, status_code=status.HTTP_401_UNAUTHORIZED)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Authentication is required.",
@@ -114,6 +142,13 @@ def require_current_user_once(
     try:
         claims = token_service.decode_access_token(credentials.credentials)
     except Exception as error:
+        _log_auth_denial(
+            "auth_invalid_credentials",
+            request=request,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            reason="access_token_decode_failed",
+            exception_type=type(error).__name__,
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid authentication credentials.",
@@ -123,6 +158,13 @@ def require_current_user_once(
     with session_factory() as session:
         user = UserRepository(session).get_by_id(claims.user_id)
         if user is None or not user.is_active:
+            _log_auth_denial(
+                "auth_invalid_credentials",
+                request=request,
+                status_code=status.HTTP_401_UNAUTHORIZED,
+                user_id=claims.user_id,
+                reason="user_missing_or_inactive",
+            )
             raise HTTPException(
                 status_code=status.HTTP_401_UNAUTHORIZED,
                 detail="Invalid authentication credentials.",
@@ -132,8 +174,16 @@ def require_current_user_once(
         return user
 
 
-def require_admin_user_once(current_user: User = Depends(require_current_user_once)) -> User:
+def require_admin_user_once(request: Request, current_user: User = Depends(require_current_user_once)) -> User:
     if current_user.role != UserRole.ADMIN:
+        _log_auth_denial(
+            "auth_admin_access_denied",
+            request=request,
+            status_code=status.HTTP_403_FORBIDDEN,
+            user_id=current_user.id,
+            username=current_user.username,
+            reason="role_not_admin",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Administrator access is required.",
@@ -148,6 +198,7 @@ def require_authenticated_worker(
     worker_token_service: WorkerTokenService = Depends(get_worker_token_service),
 ) -> Worker:
     if credentials is None:
+        _log_auth_denial("worker_auth_missing_credentials", request=request, status_code=status.HTTP_401_UNAUTHORIZED)
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Worker authentication is required.",
@@ -166,14 +217,40 @@ def require_authenticated_worker(
             details={"reason": "invalid_worker_token"},
         )
         session.commit()
+        _log_auth_denial(
+            "worker_auth_invalid_credentials",
+            request=request,
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            reason="invalid_worker_token",
+        )
         raise HTTPException(
             status_code=status.HTTP_401_UNAUTHORIZED,
             detail="Invalid worker credentials.",
             headers={"WWW-Authenticate": "Bearer"},
         )
     if not worker.enabled or worker.registration_status != WorkerRegistrationStatus.REGISTERED:
+        _log_auth_denial(
+            "worker_auth_worker_unavailable",
+            request=request,
+            status_code=status.HTTP_403_FORBIDDEN,
+            worker_id=worker.id,
+            worker_key=worker.worker_key,
+            reason="worker_disabled_or_unregistered",
+        )
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="The worker is disabled or not registered.",
         )
     return worker
+
+
+def _log_auth_denial(event: str, *, request: Request, status_code: int, **fields: object) -> None:
+    logger.warning(
+        "authentication denied",
+        extra={
+            "event": event,
+            "status": status_code,
+            "path": request.url.path,
+            **{key: value for key, value in fields.items() if value is not None},
+        },
+    )

@@ -188,6 +188,7 @@ class OrchestrationService:
         return self._watched_job_payload(watched)
 
     def run_once(self) -> OrchestrationSummary:
+        started_at = time.monotonic()
         summary = OrchestrationSummary()
         with self.session_factory() as session:
             summary.expired_backups += len(
@@ -200,6 +201,20 @@ class OrchestrationService:
             summary.staged_files += watcher_summary.staged_files
             summary.interrupted_jobs += self._handle_worker_interruptions(session)
             session.commit()
+        logger.info(
+            "orchestration run completed",
+            extra={
+                "event": "orchestration_run_completed",
+                "status": "completed",
+                "duration_ms": _elapsed_ms(started_at),
+                "scanned_watchers": summary.scanned_watchers,
+                "queued_jobs": summary.queued_jobs,
+                "staged_files": summary.staged_files,
+                "promoted_jobs": summary.promoted_jobs,
+                "interrupted_jobs": summary.interrupted_jobs,
+                "expired_backups": summary.expired_backups,
+            },
+        )
         return summary
 
     def _refresh_scheduled_jobs(self, session: Session) -> int:
@@ -392,8 +407,16 @@ class BackgroundOrchestrationLoop:
         while not self._stop_event.is_set():
             try:
                 self.orchestration_service.run_once()
-            except Exception:  # noqa: BLE001
-                logger.exception("orchestration loop failed")
+            except Exception as error:  # noqa: BLE001
+                logger.exception(
+                    "orchestration loop failed",
+                    extra={
+                        "event": "orchestration_loop_failed",
+                        "status": "failed",
+                        "exception_type": type(error).__name__,
+                        "reason": str(error),
+                    },
+                )
             self._stop_event.wait(self.poll_interval_seconds)
 
     def stop(self) -> None:
@@ -401,9 +424,16 @@ class BackgroundOrchestrationLoop:
         if self._thread is not None and self._thread.is_alive():
             self._thread.join(timeout=2.0)
             if self._thread.is_alive():
-                logger.warning("orchestration loop did not stop within timeout")
+                logger.warning(
+                    "orchestration loop did not stop within timeout",
+                    extra={"event": "orchestration_loop_stop_timeout", "status": "timeout"},
+                )
                 return
         self._thread = None
+
+
+def _elapsed_ms(started_at: float) -> int:
+    return max(0, int((time.monotonic() - started_at) * 1000))
 
 
 def _parse_datetime(value: Any) -> datetime:

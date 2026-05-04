@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+import logging
 from pathlib import Path
 
 from fastapi import Request
@@ -51,6 +52,8 @@ from encodr_core.planning import PlanReason, ProcessingPlan
 from encodr_core.planning.enums import PlanAction, VideoHandling
 from encodr_core.replacement import ReplacementService
 from encodr_core.verification import VerificationResult
+
+logger = logging.getLogger("encodr.review")
 
 REVIEW_STATUS_OPEN = "open"
 REVIEW_STATUS_APPROVED = "approved"
@@ -533,6 +536,27 @@ class ReviewService:
                 "decision_type": decision.decision_type.value,
                 "note": note,
                 **(details or {}),
+            },
+        )
+        status_by_decision = {
+            ManualReviewDecisionType.APPROVED: "approved",
+            ManualReviewDecisionType.REJECTED: "rejected",
+            ManualReviewDecisionType.HELD: "held",
+            ManualReviewDecisionType.MARK_PROTECTED: "protected",
+            ManualReviewDecisionType.CLEAR_PROTECTED: "unprotected",
+        }
+        status = status_by_decision.get(decision.decision_type, decision.decision_type.value)
+        logger.info(
+            "review decision recorded",
+            extra={
+                "event": f"review_item_{status}",
+                "tracked_file_id": item.tracked_file.id,
+                "file_id": item.tracked_file.id,
+                "job_id": decision.job_id,
+                "status": status,
+                "decision_id": decision.id,
+                "decision_type": decision.decision_type.value,
+                "plan_snapshot_id": decision.plan_snapshot_id,
             },
         )
         return decision

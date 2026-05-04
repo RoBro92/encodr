@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import inspect
+import logging
 import stat
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -20,6 +21,16 @@ from app.config import WorkerAgentSettings
 from app.execution import RemoteExecutionService
 from encodr_core.execution import ExecutionProgressUpdate
 from encodr_shared import clean_runtime_summary_payload, coerce_backend_preference, collect_runtime_telemetry
+
+logger = logging.getLogger("encodr.worker_agent.service")
+
+
+def _worker_log_extra(event: str, **fields: object) -> dict[str, object]:
+    return {
+        "event": event,
+        "diagnostic_type": "worker_runtime",
+        **{key: value for key, value in fields.items() if value is not None},
+    }
 
 
 @dataclass(frozen=True, slots=True)
@@ -249,6 +260,14 @@ class WorkerAgentService:
             session = self._reregister_after_auth_failure(error)
             assignment = self.api_client.request_job(worker_token=session.worker_token)
         if assignment.get("status") != "assigned" or assignment.get("job") is None:
+            logger.info(
+                "remote worker job skipped",
+                extra=_worker_log_extra(
+                    "worker_job_skipped",
+                    worker_key=session.worker_key,
+                    reason=str(assignment.get("status") or "no_job"),
+                ),
+            )
             return None
 
         job = assignment["job"]
@@ -272,6 +291,19 @@ class WorkerAgentService:
                 "selection_reason": None,
             }
         self.api_client.claim_job(worker_token=session.worker_token, job_id=job_id)
+        logger.info(
+            "remote worker job claimed",
+            extra=_worker_log_extra(
+                "worker_job_claimed",
+                worker_key=session.worker_key,
+                job_id=job_id,
+                requested_backend=backend_preview.get("requested_backend"),
+                selected_backend=backend_preview.get("actual_backend"),
+                actual_accelerator=backend_preview.get("actual_accelerator"),
+                backend_fallback_used=backend_preview.get("fallback_used"),
+                backend_selection_reason=backend_preview.get("selection_reason"),
+            ),
+        )
         cancellation_state: dict[str, object] = {"requested": False, "reason": None}
         progress_reporter = self._build_progress_reporter(
             worker_token=session.worker_token,
@@ -315,6 +347,19 @@ class WorkerAgentService:
                     updated_at=datetime.now(timezone.utc),
                 )
             )
+            logger.info(
+                "remote worker job started",
+                extra=_worker_log_extra(
+                    "worker_job_started",
+                    worker_key=session.worker_key,
+                    job_id=job_id,
+                    job_kind=str(job.get("job_kind") or "execution"),
+                    requested_backend=backend_preview.get("requested_backend"),
+                    selected_backend=backend_preview.get("actual_backend"),
+                    actual_accelerator=backend_preview.get("actual_accelerator"),
+                    backend_fallback_used=backend_preview.get("fallback_used"),
+                ),
+            )
             result = self.execution_service.execute(**execute_kwargs)
             response = self.api_client.submit_job_result(
                 worker_token=session.worker_token,
@@ -333,8 +378,36 @@ class WorkerAgentService:
                     ),
                 },
             )
+            log_extra = _worker_log_extra(
+                "worker_job_failed" if result.status == "failed" else "worker_job_finished",
+                worker_key=session.worker_key,
+                job_id=job_id,
+                final_status=response.get("final_status") or result.status,
+                failure_message=result.failure_message,
+                failure_category=result.failure_category,
+                requested_backend=result.requested_backend,
+                actual_backend=result.actual_backend,
+                actual_accelerator=result.actual_accelerator,
+                backend_fallback_used=result.backend_fallback_used,
+            )
+            if result.status == "failed":
+                logger.error("remote worker job failed", extra=log_extra)
+            else:
+                logger.info("remote worker job finished", extra=log_extra)
             return response
         except Exception as error:
+            logger.error(
+                "remote worker job failed unexpectedly",
+                extra=_worker_log_extra(
+                    "worker_job_failed",
+                    worker_key=session.worker_key,
+                    job_id=job_id,
+                    failure_category="worker_agent_error",
+                    reason=str(error),
+                    exception_type=type(error).__name__,
+                    current_backend=backend_preview.get("actual_backend") or backend_preview.get("requested_backend"),
+                ),
+            )
             self._best_effort_report_failure(
                 session=session,
                 job_id=job_id,
@@ -422,11 +495,27 @@ class WorkerAgentService:
     ):
         last_sent_at: datetime | None = None
         last_percent: int | None = None
+        last_logged_stage: str | None = None
 
         def report(update) -> None:
-            nonlocal last_sent_at, last_percent
+            nonlocal last_sent_at, last_percent, last_logged_stage
             now = datetime.now(timezone.utc)
             current_percent = int(update.percent) if update.percent is not None else None
+            if update.stage != last_logged_stage:
+                logger.info(
+                    "remote worker job progress stage changed",
+                    extra=_worker_log_extra(
+                        "worker_job_progress",
+                        job_id=job_id,
+                        current_backend=current_backend,
+                        stage=update.stage,
+                        percent=update.percent,
+                        out_time_seconds=update.out_time_seconds,
+                        fps=update.fps,
+                        speed=update.speed,
+                    ),
+                )
+                last_logged_stage = update.stage
             should_send = (
                 last_sent_at is None
                 or update.stage != "encoding"

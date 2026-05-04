@@ -498,6 +498,21 @@ def test_command_reset_admin_reports_clear_error_when_api_container_unavailable(
     assert "postgresql+psycopg://encodr:[redacted]@postgres:5432/encodr" in output
 
 
+def test_cli_error_redaction_handles_no_user_dsn_and_freeform_tokens() -> None:
+    output = encodr_cli.redact_sensitive_text(
+        "redis://:redis-password@redis:6379/0 Bearer live-token-123 "
+        "https://updates.example/latest?api_key=live-key&channel=stable",
+        sensitive_values=[],
+    )
+
+    assert "redis-password" not in output
+    assert "live-token-123" not in output
+    assert "live-key" not in output
+    assert "redis://[redacted]:[redacted]@redis:6379/0" in output
+    assert "Bearer [redacted]" in output
+    assert "api_key=[redacted]" in output
+
+
 def test_command_reset_admin_reads_password_from_stdin(
     tmp_path: Path,
     repo_root: Path,

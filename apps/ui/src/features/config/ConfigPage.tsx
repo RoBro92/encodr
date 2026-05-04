@@ -125,6 +125,7 @@ const QUALITY_PRESET_LIMITS: Record<"movies" | "tv", Record<Exclude<QualityPrese
 };
 
 const COMMON_LANGUAGE_OPTIONS = ["eng", "jpn", "spa", "fra", "deu", "ita"];
+const DIAGNOSTIC_EVENT_FIELD_KEYS = ["event", "event_name", "eventName"] as const;
 
 const RULESET_ORDER: RulesetKey[] = ["movies", "movies_4k", "tv", "tv_4k"];
 
@@ -155,6 +156,7 @@ export function ConfigPage() {
   const [isDiagnosticsModalOpen, setIsDiagnosticsModalOpen] = useState(false);
   const [diagnosticLevel, setDiagnosticLevel] = useState("");
   const [diagnosticComponent, setDiagnosticComponent] = useState("");
+  const [diagnosticEvent, setDiagnosticEvent] = useState("");
   const [diagnosticRange, setDiagnosticRange] = useState("last_day");
   const [diagnosticRedactPaths, setDiagnosticRedactPaths] = useState(true);
   const [diagnosticDownloadError, setDiagnosticDownloadError] = useState<string | null>(null);
@@ -167,6 +169,8 @@ export function ConfigPage() {
   const diagnosticLogsQuery = useDiagnosticLogsQuery({
     level: diagnosticLevel || undefined,
     component: diagnosticComponent || undefined,
+    event: diagnosticEvent.trim() || undefined,
+    redact_paths: diagnosticRedactPaths ? "true" : "false",
     limit: 100,
   });
   const { mutate: refreshUpdateStatus } = useCheckUpdateStatusMutation();
@@ -286,10 +290,10 @@ export function ConfigPage() {
       </header>
 
       {updateRootsMutation.error instanceof Error ? (
-        <ErrorPanel title="Unable to save folders" message={updateRootsMutation.error.message} />
+        <ErrorPanel title="Unable to save folders" message={withDiagnosticsHint(updateRootsMutation.error.message)} />
       ) : null}
       {updateRulesMutation.error instanceof Error ? (
-        <ErrorPanel title="Unable to save processing rules" message={updateRulesMutation.error.message} />
+        <ErrorPanel title="Unable to save processing rules" message={withDiagnosticsHint(updateRulesMutation.error.message)} />
       ) : null}
       {storage.warnings.length > 0 ? (
         <div className="settings-page-warning" role="alert">
@@ -396,6 +400,7 @@ export function ConfigPage() {
           retentionDays={diagnosticLogsQuery.data?.retention_days ?? 7}
           diagnosticLevel={diagnosticLevel}
           diagnosticComponent={diagnosticComponent}
+          diagnosticEvent={diagnosticEvent}
           diagnosticRange={diagnosticRange}
           diagnosticRedactPaths={diagnosticRedactPaths}
           diagnosticDownloadError={diagnosticDownloadError}
@@ -404,6 +409,7 @@ export function ConfigPage() {
           logsLoading={diagnosticLogsQuery.isLoading || diagnosticLogsQuery.isFetching}
           onLevelChange={setDiagnosticLevel}
           onComponentChange={setDiagnosticComponent}
+          onEventChange={setDiagnosticEvent}
           onRangeChange={setDiagnosticRange}
           onRedactPathsChange={setDiagnosticRedactPaths}
           onRefresh={() => void diagnosticLogsQuery.refetch()}
@@ -568,6 +574,7 @@ function DiagnosticsModal({
   retentionDays,
   diagnosticLevel,
   diagnosticComponent,
+  diagnosticEvent,
   diagnosticRange,
   diagnosticRedactPaths,
   diagnosticDownloadError,
@@ -576,6 +583,7 @@ function DiagnosticsModal({
   logsLoading,
   onLevelChange,
   onComponentChange,
+  onEventChange,
   onRangeChange,
   onRedactPathsChange,
   onRefresh,
@@ -585,6 +593,7 @@ function DiagnosticsModal({
   retentionDays: number;
   diagnosticLevel: string;
   diagnosticComponent: string;
+  diagnosticEvent: string;
   diagnosticRange: string;
   diagnosticRedactPaths: boolean;
   diagnosticDownloadError: string | null;
@@ -593,6 +602,7 @@ function DiagnosticsModal({
   logsLoading: boolean;
   onLevelChange: (value: string) => void;
   onComponentChange: (value: string) => void;
+  onEventChange: (value: string) => void;
   onRangeChange: (value: string) => void;
   onRedactPathsChange: (value: boolean) => void;
   onRefresh: () => void;
@@ -693,6 +703,15 @@ function DiagnosticsModal({
                   <option value="debug">Debug</option>
                 </select>
               </label>
+              <label className="field diagnostics-field">
+                <span>Event</span>
+                <input
+                  type="search"
+                  value={diagnosticEvent}
+                  onChange={(event) => onEventChange(event.target.value)}
+                  placeholder="job_created"
+                />
+              </label>
             </div>
             <div className="diagnostics-refresh-group">
               <button className="button button-secondary button-small" type="button" onClick={onRefresh}>
@@ -758,20 +777,29 @@ function DiagnosticLogList({ items, loading }: { items: DiagnosticLogEvent[]; lo
       {loading ? <div className="settings-log-console-empty">Loading recent logs...</div> : null}
       {!loading && items.length === 0 ? <div className="settings-log-console-empty">No matching log events yet.</div> : null}
       {!loading
-        ? items.map((item, index) => (
-            <div key={`${item.timestamp}-${item.component}-${index}`} className={`settings-log-row settings-log-row-${item.level}`}>
-              <div className="settings-log-row-main">
-                <time dateTime={item.timestamp}>{formatDiagnosticTimestamp(item.timestamp)}</time>
-                <strong>{formatDiagnosticLevel(item.level)}</strong>
-                <em>{item.component}</em>
-                <span>{item.message}</span>
+        ? items.map((item, index) => {
+            const eventName = readDiagnosticEventName(item);
+            const detailFields = omitDiagnosticEventFields(item.fields);
+            return (
+              <div key={`${item.timestamp}-${item.component}-${index}`} className={`settings-log-row settings-log-row-${item.level}`}>
+                <div className="settings-log-row-main">
+                  <time dateTime={item.timestamp}>{formatDiagnosticTimestamp(item.timestamp)}</time>
+                  <strong>{formatDiagnosticLevel(item.level)}</strong>
+                  <em>{item.component}</em>
+                  <span>{item.message}</span>
+                </div>
+                <div className="settings-log-row-meta">
+                  <span>{item.logger}</span>
+                  {eventName ? (
+                    <span className="settings-log-event">
+                      Event: <code>{eventName}</code>
+                    </span>
+                  ) : null}
+                  <DiagnosticFieldList fields={detailFields} />
+                </div>
               </div>
-              <div className="settings-log-row-meta">
-                <span>{item.logger}</span>
-                <DiagnosticFieldList fields={item.fields} />
-              </div>
-            </div>
-          ))
+            );
+          })
         : null}
     </div>
   );
@@ -802,6 +830,28 @@ function formatDiagnosticFieldValue(value: unknown) {
     return String(value);
   }
   return JSON.stringify(value, null, 2);
+}
+
+function readDiagnosticEventName(item: DiagnosticLogEvent) {
+  if (typeof item.event === "string" && item.event.trim().length > 0) {
+    return item.event;
+  }
+  const fields = item.fields;
+  for (const key of DIAGNOSTIC_EVENT_FIELD_KEYS) {
+    const value = fields[key];
+    if (typeof value === "string" && value.trim().length > 0) {
+      return value;
+    }
+  }
+  return null;
+}
+
+function omitDiagnosticEventFields(fields: Record<string, unknown>) {
+  return Object.fromEntries(Object.entries(fields).filter(([key]) => !DIAGNOSTIC_EVENT_FIELD_KEYS.includes(key as (typeof DIAGNOSTIC_EVENT_FIELD_KEYS)[number])));
+}
+
+function withDiagnosticsHint(message: string) {
+  return `${message} Review recent events in Diagnostics.`;
 }
 
 function formatDiagnosticLevel(value: string) {

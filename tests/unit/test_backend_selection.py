@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 import pytest
 
 from encodr_core.execution.backend_selection import BackendSelectionError, select_execution_backend
@@ -45,7 +47,8 @@ def test_intel_backend_uses_qsv_when_smoke_test_passes(monkeypatch) -> None:
     ]
 
 
-def test_intel_backend_falls_back_to_vaapi_when_qsv_fails(monkeypatch) -> None:
+def test_intel_backend_falls_back_to_vaapi_when_qsv_fails(monkeypatch, caplog) -> None:
+    caplog.set_level(logging.INFO, logger="encodr.execution.backend")
     monkeypatch.setattr(
         "encodr_core.execution.backend_selection.probe_execution_backends",
         lambda _path: [
@@ -81,6 +84,22 @@ def test_intel_backend_falls_back_to_vaapi_when_qsv_fails(monkeypatch) -> None:
     assert selection.video_encoder == "h264_vaapi"
     assert selection.device_path == "/dev/dri/renderD128"
     assert selection.selection_reason == "Using Intel iGPU / VAAPI for hardware-accelerated video encoding. QSV unavailable: MFX session init failed."
+    fallback_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "backend_fallback"
+    )
+    selected_record = next(
+        record
+        for record in caplog.records
+        if getattr(record, "event", None) == "backend_selected"
+    )
+    assert fallback_record.levelno == logging.WARNING
+    assert getattr(fallback_record, "attempted_backend", None) == "intel_qsv"
+    assert getattr(fallback_record, "selected_backend", None) == "intel_vaapi"
+    assert "MFX session init failed" in str(getattr(fallback_record, "fallback_reason", ""))
+    assert selected_record.levelno == logging.INFO
+    assert getattr(selected_record, "actual_backend", None) == "intel_vaapi"
 
 
 def test_intel_auto_falls_back_to_cpu_when_hardware_fails_and_cpu_allowed(monkeypatch) -> None:

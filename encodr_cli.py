@@ -1217,8 +1217,18 @@ def redact_sensitive_text(value: str, *, sensitive_values: list[str]) -> str:
         if secret:
             redacted = redacted.replace(secret, "[redacted]")
     redacted = re.sub(
-        r"([A-Za-z][A-Za-z0-9+.-]*://[^:/\s@]+:)([^@\s]+)(@)",
-        r"\1[redacted]\3",
+        r"([A-Za-z][A-Za-z0-9+.-]*://)([^@\s/]*):([^@\s]*)(@)",
+        lambda match: f"{match.group(1)}{match.group(2) or '[redacted]'}:[redacted]{match.group(4)}",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)\b(bearer|basic)\s+[A-Za-z0-9._~+/=-]+",
+        r"\1 [redacted]",
+        redacted,
+    )
+    redacted = re.sub(
+        r"(?i)([?&](?:password|passwd|secret|token|api[_-]?key|authorization|pairing)=)[^&#\s]+",
+        r"\1[redacted]",
         redacted,
     )
     redacted = re.sub(

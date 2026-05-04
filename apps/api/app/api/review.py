@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -13,6 +15,7 @@ from app.schemas.review import (
     ReviewListResponse,
 )
 from app.services.audit import AuditService
+from app.services.diagnostics import exception_fields
 from app.services.errors import ApiServiceError
 from app.services.review import ReviewService
 from encodr_core.config import ConfigBundle
@@ -23,6 +26,7 @@ router = APIRouter(
     tags=["review"],
     dependencies=[Depends(require_admin_user)],
 )
+logger = logging.getLogger("encodr.api.review")
 
 
 def get_review_service(
@@ -33,6 +37,19 @@ def get_review_service(
 
 def _raise_service_error(error: ApiServiceError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _log_service_error(event: str, error: ApiServiceError, **fields: object) -> None:
+    extra = {
+        "event": event,
+        "status": error.status_code,
+        **exception_fields(error),
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+    if error.status_code >= 500:
+        logger.error("API action failed", extra=extra)
+    else:
+        logger.warning("API action failed", extra=extra)
 
 
 @router.get("/items", response_model=ReviewListResponse)
@@ -76,6 +93,7 @@ def get_review_item(
         item = service.get_item(session, item_id=item_id)
         return service.to_detail_response(item)
     except ApiServiceError as error:
+        _log_service_error("api_review_item_detail_failed", error, tracked_file_id=item_id, file_id=item_id)
         _raise_service_error(error)
 
 
@@ -104,6 +122,7 @@ def approve_review_item(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_review_approve_failed", error, tracked_file_id=item_id, file_id=item_id)
         _raise_service_error(error)
 
 
@@ -132,6 +151,7 @@ def reject_review_item(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_review_reject_failed", error, tracked_file_id=item_id, file_id=item_id)
         _raise_service_error(error)
 
 
@@ -159,6 +179,7 @@ def hold_review_item(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_review_hold_failed", error, tracked_file_id=item_id, file_id=item_id)
         _raise_service_error(error)
 
 
@@ -186,6 +207,7 @@ def mark_review_item_protected(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_review_mark_protected_failed", error, tracked_file_id=item_id, file_id=item_id)
         _raise_service_error(error)
 
 
@@ -213,4 +235,5 @@ def clear_review_item_protected(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_review_clear_protected_failed", error, tracked_file_id=item_id, file_id=item_id)
         _raise_service_error(error)

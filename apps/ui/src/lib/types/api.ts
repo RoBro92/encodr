@@ -676,6 +676,7 @@ export type DiagnosticLogEvent = {
   level: string;
   component: string;
   logger: string;
+  event: string | null;
   message: string;
   fields: Record<string, unknown>;
 };

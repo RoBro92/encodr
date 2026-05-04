@@ -86,6 +86,7 @@ class DiagnosticLogEventResponse(BaseModel):
     level: str
     component: str
     logger: str
+    event: str | None = None
     message: str
     fields: dict = Field(default_factory=dict)
 

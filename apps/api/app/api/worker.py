@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -43,6 +45,7 @@ from app.schemas.worker import (
     WorkerStatusResponse,
 )
 from app.services.audit import AuditService
+from app.services.diagnostics import exception_fields
 from app.services.errors import ApiServiceError
 from app.services.worker import WorkerService
 from encodr_core.config import ConfigBundle
@@ -51,6 +54,7 @@ from encodr_db.runtime import LocalWorkerLoop
 
 worker_router = APIRouter(prefix="/worker", tags=["worker"])
 workers_router = APIRouter(prefix="/workers", tags=["workers"])
+logger = logging.getLogger("encodr.api.worker")
 
 
 def get_worker_service(
@@ -73,6 +77,19 @@ def get_worker_service(
 def _raise_service_error(error: ApiServiceError) -> None:
     headers = {"WWW-Authenticate": "Bearer"} if error.status_code == 401 else None
     raise HTTPException(status_code=error.status_code, detail=str(error), headers=headers) from error
+
+
+def _log_service_error(event: str, error: ApiServiceError, **fields: object) -> None:
+    extra = {
+        "event": event,
+        "status": error.status_code,
+        **exception_fields(error),
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+    if error.status_code >= 500:
+        logger.error("API action failed", extra=extra)
+    else:
+        logger.warning("API action failed", extra=extra)
 
 
 @worker_router.post("/register", response_model=WorkerRegistrationResponse, status_code=201)
@@ -99,12 +116,23 @@ def register_worker(
             request=request,
         )
         session.commit()
+        logger.info(
+            "worker registered",
+            extra={
+                "event": "worker_registered",
+                "worker_id": registration.get("worker_id"),
+                "worker_key": registration.get("worker_key"),
+                "status": registration.get("registration_status"),
+                "health_status": registration.get("health_status"),
+            },
+        )
         return WorkerRegistrationResponse(**registration)
     except ApiServiceError as error:
         if error.status_code == 401:
             session.commit()
         else:
             session.rollback()
+        _log_service_error("worker_registration_failed", error, worker_key=payload.worker_key)
         _raise_service_error(error)
 
 
@@ -127,9 +155,19 @@ def heartbeat_worker(
             health_summary=payload.health_summary,
         )
         session.commit()
+        logger.debug(
+            "worker heartbeat accepted",
+            extra={
+                "event": "worker_heartbeat_received",
+                "worker_id": current_worker.id,
+                "worker_key": current_worker.worker_key,
+                "status": payload.health_status,
+            },
+        )
         return WorkerHeartbeatResponse(**heartbeat)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_heartbeat_failed", error, worker_id=current_worker.id)
         _raise_service_error(error)
 
 
@@ -147,6 +185,7 @@ def request_remote_job(
         return WorkerJobPollResponse(**payload)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_job_request_failed", error, worker_id=current_worker.id)
         _raise_service_error(error)
 
 
@@ -163,6 +202,7 @@ def claim_remote_job(
         return WorkerJobClaimResponse(**payload)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_job_claim_failed", error, worker_id=current_worker.id, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -190,6 +230,7 @@ def report_remote_job_progress(
         return WorkerJobProgressResponse(**response)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_job_progress_failed", error, worker_id=current_worker.id, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -214,6 +255,7 @@ def report_remote_job_failure(
         return WorkerJobFailureResponse(**response)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_job_failure_report_failed", error, worker_id=current_worker.id, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -237,6 +279,7 @@ def submit_remote_job_result(
         return WorkerJobResultResponse(**response)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_job_result_failed", error, worker_id=current_worker.id, job_id=job_id)
         _raise_service_error(error)
 
 
@@ -327,12 +370,17 @@ def enable_worker(
             request=request,
         )
         session.commit()
+        logger.info(
+            "worker enabled",
+            extra={"event": "worker_enabled", "worker_id": worker.get("id"), "status": "enabled"},
+        )
         return WorkerStateChangeResponse(
             worker=WorkerInventoryDetailResponse(**worker),
             status="enabled",
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_enable_failed", error, worker_id=worker_id)
         _raise_service_error(error)
 
 
@@ -353,12 +401,17 @@ def disable_worker(
             request=request,
         )
         session.commit()
+        logger.info(
+            "worker disabled",
+            extra={"event": "worker_disabled", "worker_id": worker.get("id"), "status": "disabled"},
+        )
         return WorkerStateChangeResponse(
             worker=WorkerInventoryDetailResponse(**worker),
             status="disabled",
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_disable_failed", error, worker_id=worker_id)
         _raise_service_error(error)
 
 
@@ -382,9 +435,24 @@ def setup_local_worker(
             path_mappings=[item.model_dump(mode="json") for item in payload.path_mappings],
         )
         session.commit()
+        logger.info(
+            "local worker preferences updated",
+            extra={
+                "event": "worker_preferences_updated",
+                "worker_id": worker.get("id"),
+                "status": "updated",
+                "preferred_backend": payload.preferred_backend,
+                "allow_cpu_fallback": payload.allow_cpu_fallback,
+            },
+        )
         return WorkerInventoryDetailResponse(**worker)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error(
+            "worker_preferences_update_failed",
+            error,
+            preferred_backend=payload.preferred_backend,
+        )
         _raise_service_error(error)
 
 
@@ -410,9 +478,25 @@ def update_worker_preferences(
             path_mappings=[item.model_dump(mode="json") for item in payload.path_mappings],
         )
         session.commit()
+        logger.info(
+            "worker preferences updated",
+            extra={
+                "event": "worker_preferences_updated",
+                "worker_id": worker.get("id"),
+                "status": "updated",
+                "preferred_backend": payload.preferred_backend,
+                "allow_cpu_fallback": payload.allow_cpu_fallback,
+            },
+        )
         return WorkerInventoryDetailResponse(**worker)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error(
+            "worker_preferences_update_failed",
+            error,
+            worker_id=worker_id,
+            preferred_backend=payload.preferred_backend,
+        )
         _raise_service_error(error)
 
 
@@ -439,6 +523,16 @@ def create_remote_worker_onboarding(
             path_mappings=[item.model_dump(mode="json") for item in payload.path_mappings],
         )
         session.commit()
+        logger.info(
+            "remote worker onboarding created",
+            extra={
+                "event": "worker_onboarding_created",
+                "worker_id": result["worker"].get("id"),
+                "status": result["status"],
+                "preferred_backend": payload.preferred_backend,
+                "allow_cpu_fallback": payload.allow_cpu_fallback,
+            },
+        )
         return RemoteWorkerOnboardingResponse(
             worker=WorkerInventoryDetailResponse(**result["worker"]),
             status=result["status"],
@@ -450,6 +544,7 @@ def create_remote_worker_onboarding(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_onboarding_failed", error, preferred_backend=payload.preferred_backend)
         _raise_service_error(error)
 
 
@@ -469,7 +564,16 @@ def delete_worker(
             request=request,
         )
         session.commit()
+        logger.info(
+            "worker deleted",
+            extra={
+                "event": "worker_deleted",
+                "worker_id": worker_id,
+                "status": result.get("status"),
+            },
+        )
         return WorkerRemovalResponse(**result)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("worker_delete_failed", error, worker_id=worker_id)
         _raise_service_error(error)

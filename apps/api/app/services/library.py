@@ -1,9 +1,11 @@
 from __future__ import annotations
 
+import logging
 import re
 from collections import Counter
 from pathlib import Path
 
+from app.services.diagnostics import exception_fields
 from app.services.errors import ApiNotFoundError, ApiValidationError
 from encodr_core.config import ConfigBundle
 from encodr_core.media import encodr_exclusion_reason
@@ -22,6 +24,7 @@ VIDEO_EXTENSIONS = {
 }
 EPISODE_PATTERN = re.compile(r"(s\d{1,2}e\d{1,3})|(\d{1,2}x\d{1,2})", re.IGNORECASE)
 SEASON_PATTERN = re.compile(r"^season\s*\d+|^s\d{1,2}$", re.IGNORECASE)
+logger = logging.getLogger("encodr.library")
 
 
 class LibraryService:
@@ -85,21 +88,30 @@ class LibraryService:
         current = self.resolve_directory(path)
         active_root = self.root_for_path(current)
         entries = []
-        for item in sorted(current.iterdir(), key=lambda child: (not child.is_dir(), child.name.lower())):
-            if item.name.startswith("."):
-                continue
-            is_video = item.is_file() and self.is_processable_video_file(item)
-            if item.is_file() and not is_video:
-                continue
-            entries.append(
-                {
-                    "name": item.name,
-                    "path": item.resolve().as_posix(),
-                    "entry_type": "directory" if item.is_dir() else "file",
-                    "is_video": is_video,
-                    "size_bytes": item.stat().st_size if item.is_file() else None,
-                }
+        try:
+            for item in sorted(current.iterdir(), key=lambda child: (not child.is_dir(), child.name.lower())):
+                if item.name.startswith("."):
+                    continue
+                is_video = item.is_file() and self.is_processable_video_file(item)
+                if item.is_file() and not is_video:
+                    continue
+                entries.append(
+                    {
+                        "name": item.name,
+                        "path": item.resolve().as_posix(),
+                        "entry_type": "directory" if item.is_dir() else "file",
+                        "is_video": is_video,
+                        "size_bytes": item.stat().st_size if item.is_file() else None,
+                    }
+                )
+        except PermissionError as error:
+            _log_permission_denied(
+                "library_browse_permission_denied",
+                error,
+                operation="browse",
+                path=current,
             )
+            raise ApiValidationError("Permission denied while browsing the selected folder.") from error
 
         parent_path: str | None = None
         if current != active_root:
@@ -123,19 +135,29 @@ class LibraryService:
         directories: list[Path] = []
         video_files: list[Path] = []
         backup_files: list[Path] = []
-        for item in current.rglob("*"):
-            if item.name.startswith("."):
-                continue
-            if item.is_dir():
-                directories.append(item)
-                continue
-            if item.is_file():
-                if self.is_backup_file(item):
-                    backup_files.append(item)
-                elif self.is_processable_video_file(item):
-                    video_files.append(item)
+        direct_children: list[Path] = []
+        try:
+            for item in current.rglob("*"):
+                if item.name.startswith("."):
+                    continue
+                if item.is_dir():
+                    directories.append(item)
+                    continue
+                if item.is_file():
+                    if self.is_backup_file(item):
+                        backup_files.append(item)
+                    elif self.is_processable_video_file(item):
+                        video_files.append(item)
+            direct_children = [child for child in current.iterdir() if child.is_dir() and not child.name.startswith(".")]
+        except PermissionError as error:
+            _log_permission_denied(
+                "library_scan_permission_denied",
+                error,
+                operation="scan",
+                path=current,
+            )
+            raise ApiValidationError("Permission denied while scanning the selected folder.") from error
 
-        direct_children = [child for child in current.iterdir() if child.is_dir() and not child.name.startswith(".")]
         likely_seasons = sum(1 for directory in directories if SEASON_PATTERN.search(directory.name))
         likely_episodes = sum(1 for file_path in video_files if EPISODE_PATTERN.search(file_path.name))
         likely_films = max(len(video_files) - likely_episodes, 0)
@@ -224,3 +246,16 @@ class LibraryService:
             {"value": action, "count": count}
             for action, count in sorted(counts.items(), key=lambda item: item[0])
         ]
+
+
+def _log_permission_denied(event: str, error: PermissionError, *, operation: str, path: Path) -> None:
+    logger.error(
+        "library permission denied",
+        extra={
+            "event": event,
+            "operation": operation,
+            "status": "failed",
+            "path": path.as_posix(),
+            **exception_fields(error),
+        },
+    )

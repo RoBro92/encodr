@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from sqlalchemy.orm import Session
 
@@ -24,6 +26,7 @@ from app.schemas.files import (
     WatchedJobResponse,
 )
 from app.schemas.plans import PlanSnapshotDetailResponse, ProbeSnapshotDetailResponse
+from app.services.diagnostics import exception_fields
 from app.services.errors import ApiServiceError
 from app.services.files import FilesService
 from app.services.library import LibraryService
@@ -39,6 +42,7 @@ router = APIRouter(
     tags=["files"],
     dependencies=[Depends(require_admin_user)],
 )
+logger = logging.getLogger("encodr.api.files")
 
 
 def get_files_service(
@@ -72,6 +76,19 @@ def get_review_service(
 
 def _raise_service_error(error: ApiServiceError) -> None:
     raise HTTPException(status_code=error.status_code, detail=str(error)) from error
+
+
+def _log_service_error(event: str, error: ApiServiceError, **fields: object) -> None:
+    extra = {
+        "event": event,
+        "status": error.status_code,
+        **exception_fields(error),
+        **{key: value for key, value in fields.items() if value is not None},
+    }
+    if error.status_code >= 500:
+        logger.error("API action failed", extra=extra)
+    else:
+        logger.warning("API action failed", extra=extra)
 
 
 @router.get("", response_model=FileListResponse)
@@ -126,6 +143,7 @@ def browse_folder(
     try:
         return FolderBrowseResponse(**library_service.browse_directory(path))
     except ApiServiceError as error:
+        _log_service_error("api_library_browse_failed", error)
         _raise_service_error(error)
 
 
@@ -143,6 +161,7 @@ def scan_folder(
         return FolderScanSummaryResponse(**response)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_library_scan_failed", error)
         _raise_service_error(error)
 
 
@@ -172,6 +191,7 @@ def get_scan(
     try:
         return FolderScanSummaryResponse(**orchestration_service.get_scan(session, scan_id=scan_id))
     except ApiServiceError as error:
+        _log_service_error("api_scan_detail_failed", error, operation_id=scan_id)
         _raise_service_error(error)
 
 
@@ -215,6 +235,7 @@ def create_watched_job(
         return WatchedJobResponse(**result)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_watched_job_create_failed", error)
         _raise_service_error(error)
 
 
@@ -247,6 +268,7 @@ def update_watched_job(
         return WatchedJobResponse(**result)
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_watched_job_update_failed", error, operation_id=watched_job_id)
         _raise_service_error(error)
 
 
@@ -292,6 +314,7 @@ def dry_run(
             items=items,
         )
     except ApiServiceError as error:
+        _log_service_error("api_files_dry_run_failed", error)
         _raise_service_error(error)
 
 
@@ -332,6 +355,7 @@ def batch_plan(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_files_batch_plan_failed", error)
         _raise_service_error(error)
 
 
@@ -347,6 +371,7 @@ def get_file_detail(
     try:
         tracked_file = files_service.get_file(session, file_id=file_id)
     except ApiServiceError as error:
+        _log_service_error("api_file_detail_failed", error, tracked_file_id=file_id, file_id=file_id)
         _raise_service_error(error)
     repository = TrackedFileRepository(session)
     latest_probe = repository.get_latest_probe_snapshot(tracked_file.id)
@@ -380,6 +405,7 @@ def get_latest_probe_snapshot(
         snapshot = files_service.get_latest_probe_snapshot(session, file_id=file_id)
         return ProbeSnapshotDetailResponse.from_snapshot(snapshot)
     except ApiServiceError as error:
+        _log_service_error("api_file_probe_snapshot_failed", error, tracked_file_id=file_id, file_id=file_id)
         _raise_service_error(error)
 
 
@@ -395,6 +421,7 @@ def get_latest_plan_snapshot(
         snapshot = files_service.get_latest_plan_snapshot(session, file_id=file_id)
         return PlanSnapshotDetailResponse.from_snapshot(snapshot)
     except ApiServiceError as error:
+        _log_service_error("api_file_plan_snapshot_failed", error, tracked_file_id=file_id, file_id=file_id)
         _raise_service_error(error)
 
 
@@ -415,6 +442,7 @@ def probe_file(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_file_probe_failed", error)
         _raise_service_error(error)
 
 
@@ -439,4 +467,5 @@ def plan_file(
         )
     except ApiServiceError as error:
         session.rollback()
+        _log_service_error("api_file_plan_failed", error)
         _raise_service_error(error)
