@@ -1269,7 +1269,9 @@ describe("Encodr UI shell", () => {
     expect(screen.getByRole("tab", { name: /^movies$/i })).toHaveAttribute("aria-selected", "true");
     expect(screen.getByRole("tab", { name: /^tv$/i })).toBeInTheDocument();
     expect(screen.getByRole("button", { name: /\+ add watcher/i })).toBeInTheDocument();
-    expect(screen.getByRole("textbox", { name: /movies root directory/i })).toHaveValue("/media/Movies");
+    await waitFor(() => {
+      expect(screen.getByRole("textbox", { name: /movies root directory/i })).toHaveValue("/media/Movies");
+    });
     expect(screen.getByRole("heading", { name: /active watchers/i })).toBeInTheDocument();
     expect(screen.getByRole("heading", { name: /processing dashboard/i })).toBeInTheDocument();
     expect(screen.queryByRole("heading", { name: /current folder/i })).not.toBeInTheDocument();
