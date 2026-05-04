@@ -14,6 +14,7 @@ from encodr_shared.worker_runtime import (
     BinaryProbe,
     HardwareProbe,
     probe_device_node,
+    probe_directory,
     probe_execution_backends,
     probe_intel_qsv,
     probe_intel_vaapi,
@@ -150,6 +151,25 @@ def test_probe_device_node_reports_owner_group_mode_and_readability(
     assert payload["mode"] == "0660"
     assert payload["readable"] is True
     assert payload["status"] == "healthy"
+
+
+def test_probe_directory_reports_os_error_without_raising(monkeypatch: pytest.MonkeyPatch) -> None:
+    def raise_stale_handle(self: Path) -> bool:
+        raise OSError(116, "Stale file handle")
+
+    monkeypatch.setattr("encodr_shared.worker_runtime.Path.exists", raise_stale_handle)
+
+    payload = probe_directory("/media", writable_required=True)
+
+    assert payload["path"] == "/media"
+    assert payload["exists"] is False
+    assert payload["is_directory"] is False
+    assert payload["readable"] is False
+    assert payload["writable"] is False
+    assert payload["status"] == "failed"
+    assert payload["message"] == "Path could not be inspected: Stale file handle."
+    assert payload["reason"] == "Stale file handle"
+    assert payload["errno"] == 116
 
 
 def test_probe_execution_backends_reports_cpu_and_detected_gpu_paths(monkeypatch: pytest.MonkeyPatch) -> None:
