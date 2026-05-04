@@ -15,6 +15,7 @@ from app.services.path_safety import (
     validate_final_output_path,
 )
 from encodr_core.config import ConfigBundle
+from encodr_core.execution import ExecutionResult
 from encodr_core.media import encodr_exclusion_reason
 from encodr_core.planning import ProcessingPlan
 from encodr_db.models import (
@@ -291,6 +292,25 @@ class JobsService:
         )
         logger.info("failed job history cleared", extra={"affected_count": len(jobs)})
         return jobs
+
+    def resolve_problem_jobs(self, session: Session, *, job_ids: list[str], action: str) -> list[Job]:
+        if not job_ids:
+            raise ApiValidationError("Select at least one failed or cancelled job.")
+        if action not in {"retry", "skip"}:
+            raise ApiValidationError("Unsupported failed job resolution action.")
+
+        selected_jobs = self._selected_problem_jobs(session, job_ids=job_ids)
+        error_keys = {_job_problem_error_key(job) for job in selected_jobs}
+        if len(error_keys) > 1:
+            logger.warning(
+                "problem job bulk resolution rejected for mixed errors",
+                extra={"job_ids": job_ids, "error_keys": sorted(error_keys), "action": action},
+            )
+            raise ApiConflictError("Select jobs with the same error before using a bulk action.")
+
+        if action == "retry":
+            return self._retry_problem_jobs(session, selected_jobs)
+        return self._mark_problem_jobs_skipped(session, selected_jobs)
 
     def list_backups(
         self,
@@ -576,10 +596,15 @@ class JobsService:
         if existing_backup_strategy not in {"replace_backup", "keep_existing_backup"}:
             raise ApiValidationError("Unsupported backup handling option for retry.")
         if not _job_failed_because_backup_already_exists(job):
+            logger.warning(
+                "backup retry rejected for non-backup failure",
+                extra={"job_id": job.id, "failure_category": job.failure_category},
+            )
             raise ApiConflictError(
                 "Backup handling options are only available for jobs that failed because a backup already exists."
             )
         if not job.original_backup_path:
+            logger.warning("backup retry rejected because backup path is not recorded", extra={"job_id": job.id})
             raise ApiConflictError("The existing backup file is no longer recorded for this job.")
         backup_path = Path(job.original_backup_path)
         if job.tracked_file is not None:
@@ -588,9 +613,91 @@ class JobsService:
                 f"{source_path.stem}.encodr-backup{source_path.suffix}"
             )
             if backup_path != expected_backup_path:
+                logger.warning(
+                    "backup retry rejected because recorded backup path was unexpected",
+                    extra={
+                        "job_id": job.id,
+                        "backup_path": backup_path.as_posix(),
+                        "expected_backup_path": expected_backup_path.as_posix(),
+                    },
+                )
                 raise ApiConflictError("The recorded backup path does not match the expected source backup.")
         if not backup_path.exists():
+            logger.warning(
+                "backup retry rejected because backup file is missing",
+                extra={"job_id": job.id, "backup_path": backup_path.as_posix()},
+            )
             raise ApiConflictError("The existing backup file is no longer available.")
+
+    def _selected_problem_jobs(self, session: Session, *, job_ids: list[str]) -> list[Job]:
+        jobs_by_id: dict[str, Job] = {}
+        for job_id in job_ids:
+            job = JobRepository(session).get_by_id(job_id)
+            if job is None:
+                raise ApiNotFoundError("One or more selected jobs could not be found.")
+            if job.status not in RETRYABLE_JOB_STATUSES:
+                raise ApiConflictError("Only failed, interrupted, cancelled, manual-review, or skipped jobs can be resolved.")
+            jobs_by_id[job.id] = job
+        return [jobs_by_id[job_id] for job_id in job_ids if job_id in jobs_by_id]
+
+    def _retry_problem_jobs(self, session: Session, selected_jobs: list[Job]) -> list[Job]:
+        retry_targets: dict[str, Job] = {}
+        for job in selected_jobs:
+            current = retry_targets.get(job.tracked_file_id)
+            if current is None or self._normalise_datetime(job.updated_at) > self._normalise_datetime(current.updated_at):
+                retry_targets[job.tracked_file_id] = job
+
+        retried_jobs: list[Job] = []
+        for job in retry_targets.values():
+            retried_jobs.append(self.retry_job(session, job_id=job.id))
+
+        cleared_at = datetime.now(timezone.utc)
+        repository = JobRepository(session)
+        for job in selected_jobs:
+            repository.mark_cleared(job, cleared_at=cleared_at, reason="Requeued by operator.")
+
+        logger.info(
+            "problem jobs requeued by operator",
+            extra={
+                "selected_job_ids": [job.id for job in selected_jobs],
+                "requeued_job_ids": [job.id for job in retried_jobs],
+                "selected_count": len(selected_jobs),
+                "requeued_count": len(retried_jobs),
+            },
+        )
+        return retried_jobs
+
+    def _mark_problem_jobs_skipped(self, session: Session, selected_jobs: list[Job]) -> list[Job]:
+        skipped_at = datetime.now(timezone.utc)
+        jobs = JobRepository(session)
+        tracked_files = TrackedFileRepository(session)
+        for job in selected_jobs:
+            result = ExecutionResult(
+                mode="operator_skip",
+                status="skipped",
+                original_backup_path=Path(job.original_backup_path) if job.original_backup_path else None,
+                failure_message="Skipped by operator.",
+                failure_category="operator_skipped",
+                requested_backend=job.requested_execution_backend,
+                actual_backend=job.actual_execution_backend,
+                actual_accelerator=job.actual_execution_accelerator,
+                backend_fallback_used=job.backend_fallback_used,
+                backend_selection_reason="Skipped by operator from failed jobs bulk action.",
+                started_at=skipped_at,
+                completed_at=skipped_at,
+            )
+            jobs.mark_result(job, result)
+            tracked_files.update_file_state_from_execution_result(
+                job.tracked_file,
+                ProcessingPlan.model_validate(job.plan_snapshot.payload),
+                result,
+            )
+
+        logger.info(
+            "problem jobs marked skipped by operator",
+            extra={"job_ids": [job.id for job in selected_jobs], "affected_count": len(selected_jobs)},
+        )
+        return selected_jobs
 
     def _plan_snapshot_for_retry(
         self,
@@ -699,3 +806,25 @@ def _job_failed_because_backup_already_exists(job: Job) -> bool:
         job.failure_category == "replacement_failed"
         and "backup file already exists" in (job.failure_message or "").lower()
     )
+
+
+def _job_problem_error_key(job: Job) -> str:
+    replacement_payload = job.replacement_payload if isinstance(job.replacement_payload, dict) else {}
+    details = replacement_payload.get("details") if isinstance(replacement_payload.get("details"), dict) else {}
+    code = details.get("failure_code") or job.failure_category or "unknown"
+    message = _normalise_problem_message(
+        " ".join(
+            value
+            for value in [
+                job.failure_message,
+                job.replacement_failure_message,
+                job.interruption_reason,
+            ]
+            if value
+        )
+    )
+    return f"{code}:{message}"
+
+
+def _normalise_problem_message(value: str) -> str:
+    return " ".join(value.strip().lower().split())

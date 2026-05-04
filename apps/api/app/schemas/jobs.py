@@ -197,6 +197,11 @@ class BulkJobClearRequest(BaseModel):
     job_ids: list[str] | None = None
 
 
+class BulkJobResolveRequest(BaseModel):
+    job_ids: list[str] = Field(min_length=1)
+    action: Literal["retry", "skip"]
+
+
 class RetryJobRequest(BaseModel):
     existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
 
@@ -300,6 +305,7 @@ class JobSummaryResponse(BaseModel):
     cancellation_requested_at: datetime | None = None
     cancellation_reason: str | None = None
     backup_policy: str
+    original_backup_path: str | None = None
     backup_retention_until: datetime | None = None
     backup_deleted_at: datetime | None = None
     backup_restored_at: datetime | None = None
@@ -382,6 +388,7 @@ class JobSummaryResponse(BaseModel):
             cancellation_requested_at=job.cancellation_requested_at,
             cancellation_reason=job.cancellation_reason,
             backup_policy=job.backup_policy,
+            original_backup_path=job.original_backup_path,
             backup_retention_until=job.backup_retention_until,
             backup_deleted_at=job.backup_deleted_at,
             backup_restored_at=job.backup_restored_at,

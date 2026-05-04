@@ -330,6 +330,7 @@ export type JobSummary = {
   cancellation_requested_at: string | null;
   cancellation_reason: string | null;
   backup_policy: string;
+  original_backup_path: string | null;
   backup_retention_until: string | null;
   backup_deleted_at: string | null;
   backup_restored_at: string | null;
@@ -426,6 +427,11 @@ export type BulkJobActionResponse = {
 
 export type ClearFailedJobsPayload = {
   job_ids?: string[];
+};
+
+export type ResolveFailedJobsPayload = {
+  job_ids: string[];
+  action: "retry" | "skip";
 };
 
 export type RetryJobPayload = {

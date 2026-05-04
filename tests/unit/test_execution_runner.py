@@ -136,6 +136,8 @@ def test_remux_plan_builds_expected_ffmpeg_command() -> None:
     assert command_plan.command[:4] == ["/usr/bin/ffmpeg", "-y", "-i", str(media.file_path)]
     assert "-c:v" in command_plan.command
     assert "copy" in command_plan.command
+    assert command_plan.requested_backend == "cpu"
+    assert "hardware encoders are not used" in (command_plan.backend_selection_reason or "")
     assert command_plan.output_path == Path("/scratch/encodr/Example Remux Film (2024).job-123.tmp.mkv")
 
 

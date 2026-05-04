@@ -25,6 +25,7 @@ from app.schemas.jobs import (
     BulkQueueStartRequest,
     BulkJobClearRequest,
     BulkJobActionResponse,
+    BulkJobResolveRequest,
     CreateBatchJobsRequest,
     CreateDryRunJobsRequest,
     CreateJobRequest,
@@ -205,6 +206,30 @@ def clear_failed_jobs(
         session.commit()
         return BulkJobActionResponse(
             status="cleared",
+            affected_count=len(jobs),
+            affected_job_ids=[job.id for job in jobs],
+        )
+    except ApiServiceError as error:
+        session.rollback()
+        _raise_service_error(error)
+
+
+@router.post("/resolve-failed", response_model=BulkJobActionResponse)
+def resolve_failed_jobs(
+    payload: BulkJobResolveRequest,
+    session: Session = Depends(get_session),
+    current_user: User = Depends(require_admin_user),
+) -> BulkJobActionResponse:
+    del current_user
+    try:
+        jobs = JobsService().resolve_problem_jobs(
+            session,
+            job_ids=payload.job_ids,
+            action=payload.action,
+        )
+        session.commit()
+        return BulkJobActionResponse(
+            status="queued" if payload.action == "retry" else "skipped",
             affected_count=len(jobs),
             affected_job_ids=[job.id for job in jobs],
         )
