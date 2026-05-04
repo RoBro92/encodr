@@ -202,6 +202,7 @@ class BulkJobClearRequest(BaseModel):
 class BulkJobResolveRequest(BaseModel):
     job_ids: list[str] = Field(min_length=1)
     action: Literal["retry", "skip"]
+    existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
 
 
 class RetryJobRequest(BaseModel):

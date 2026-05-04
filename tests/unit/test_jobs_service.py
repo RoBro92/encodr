@@ -127,6 +127,39 @@ def test_retry_job_can_set_existing_backup_strategy(tmp_path: Path, repo_root: P
         assert retry_job.attempt_count == persisted.job.attempt_count + 1
         assert retry_job.plan_snapshot_id != persisted.job.plan_snapshot_id
         assert retry_job.plan_snapshot.payload["replace"]["existing_backup_strategy"] == "replace_backup"
+        assert persisted.job.cleared_at is not None
+        assert persisted.job.cleared_reason == "Retry job created by operator."
+
+
+def test_resolve_problem_jobs_retries_backup_collisions_with_strategy(tmp_path: Path, repo_root: Path) -> None:
+    _engine, session_factory = create_schema_session_factory()
+    bundle = load_config_bundle(project_root=repo_root)
+    source_path = tmp_path / "Bulk Backup Collision.mkv"
+    backup_path = tmp_path / "Bulk Backup Collision.encodr-backup.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    backup_path.write_text("backup", encoding="utf-8")
+    media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "replacement_failed"
+        persisted.job.failure_message = "A backup file already exists for the source path."
+        persisted.job.original_backup_path = backup_path.as_posix()
+        session.commit()
+
+        with import_api_module("app.services.jobs") as jobs_module:
+            retried = jobs_module.JobsService().resolve_problem_jobs(
+                session,
+                job_ids=[persisted.job.id],
+                action="retry",
+                existing_backup_strategy="keep_existing_backup",
+            )
+
+        assert len(retried) == 1
+        assert retried[0].plan_snapshot.payload["replace"]["existing_backup_strategy"] == "keep_existing_backup"
+        assert persisted.job.cleared_at is not None
+        assert persisted.job.cleared_reason == "Requeued by operator."
 
 
 def test_retry_job_rejects_backup_strategy_for_other_failures(tmp_path: Path, repo_root: Path) -> None:
@@ -216,6 +249,8 @@ def test_resolve_problem_jobs_can_retry_matching_failures(tmp_path: Path, repo_r
         assert [job.status for job in retried] == [JobStatus.PENDING, JobStatus.PENDING]
         assert {job.tracked_file_id for job in retried} == {first.tracked_file_id, second.tracked_file_id}
         assert all(job.attempt_count == 2 for job in retried)
+        assert first.cleared_at is not None
+        assert second.cleared_at is not None
 
 
 def test_resolve_problem_jobs_marks_matching_failures_skipped(tmp_path: Path, repo_root: Path) -> None:

@@ -2134,10 +2134,11 @@ describe("Encodr UI shell", () => {
       },
       {
         method: "POST",
-        path: /\/api\/jobs\/problem-job-[12]\/retry$/,
+        path: "/api/jobs/resolve-failed",
         body: {
-          ...jobDetail(),
-          status: "pending",
+          status: "queued",
+          affected_count: 2,
+          affected_job_ids: ["retry-job-1", "retry-job-2"],
         },
       },
     ]);
@@ -2157,11 +2158,15 @@ describe("Encodr UI shell", () => {
     await waitFor(() => {
       const retryCalls = fetchMock.mock.calls.filter(([url, init]) =>
         typeof url === "string"
-        && /\/api\/jobs\/problem-job-[12]\/retry$/.test(url)
+        && url.includes("/api/jobs/resolve-failed")
         && init?.method === "POST",
       );
-      expect(retryCalls).toHaveLength(2);
-      expect(retryCalls.every(([, init]) => init?.body === JSON.stringify({ existing_backup_strategy: "replace_backup" }))).toBe(true);
+      expect(retryCalls).toHaveLength(1);
+      expect(retryCalls[0]?.[1]?.body).toBe(JSON.stringify({
+        job_ids: ["problem-job-1", "problem-job-2"],
+        action: "retry",
+        existing_backup_strategy: "replace_backup",
+      }));
     });
   });
 
@@ -2305,6 +2310,78 @@ describe("Encodr UI shell", () => {
         ),
       ).toBe(true);
     });
+  });
+
+  it("keeps the jobs page visible when create job returns an API conflict", async () => {
+    const trackedFile = {
+      id: "file-1",
+      source_path: "/media/Movies/Example Film (2024).mkv",
+      source_filename: "Example Film (2024).mkv",
+      source_extension: "mkv",
+      source_directory: "/media/Movies",
+      last_observed_size: 1024,
+      last_observed_modified_time: "2026-04-20T10:00:00Z",
+      fingerprint_placeholder: null,
+      is_4k: false,
+      lifecycle_state: "new",
+      compliance_state: "unknown",
+      is_protected: false,
+      operator_protected: false,
+      protected_source: null,
+      operator_protected_note: null,
+      requires_review: false,
+      review_status: null,
+      last_processed_policy_version: null,
+      last_processed_profile_name: null,
+      created_at: "2026-04-20T10:00:00Z",
+      updated_at: "2026-04-20T10:00:00Z",
+    };
+    const fetchMock = mockFetchRoutes([
+      { method: "GET", path: "/api/worker/status", body: workerStatus() },
+      {
+        method: "GET",
+        path: /\/api\/files\?.*limit=25/,
+        body: {
+          items: [trackedFile],
+          limit: 25,
+          offset: 0,
+          total: 1,
+        },
+      },
+      {
+        method: "GET",
+        path: /\/api\/jobs\?limit=100$/,
+        body: {
+          items: [],
+          limit: 100,
+          offset: 0,
+          total: 0,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs",
+        status: 409,
+        body: { detail: "An active job already exists for this tracked file." },
+      },
+    ]);
+
+    renderApp({ route: "/jobs", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByLabelText(/create job from tracked file/i));
+    await userEvent.click(await screen.findByRole("option", { name: /example film/i }));
+    await userEvent.click(screen.getByRole("button", { name: /^create job$/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+    expect(await screen.findByText(/job creation failed/i)).toBeInTheDocument();
+    expect(screen.getByText(/active job already exists/i)).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /^jobs$/i })).toBeInTheDocument();
   });
 
   it("shows an empty jobs state when the queue is clear", async () => {

@@ -244,6 +244,7 @@ def resolve_failed_jobs(
             session,
             job_ids=payload.job_ids,
             action=payload.action,
+            existing_backup_strategy=payload.existing_backup_strategy,
         )
         session.commit()
         return BulkJobActionResponse(
@@ -253,7 +254,13 @@ def resolve_failed_jobs(
         )
     except ApiServiceError as error:
         session.rollback()
-        _log_service_error("api_failed_jobs_resolve_failed", error, job_ids=payload.job_ids, action=payload.action)
+        _log_service_error(
+            "api_failed_jobs_resolve_failed",
+            error,
+            job_ids=payload.job_ids,
+            action=payload.action,
+            existing_backup_strategy=payload.existing_backup_strategy,
+        )
         _raise_service_error(error)
 
 

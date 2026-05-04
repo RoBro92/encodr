@@ -461,6 +461,7 @@ export type ClearFailedJobsPayload = {
 export type ResolveFailedJobsPayload = {
   job_ids: string[];
   action: "retry" | "skip";
+  existing_backup_strategy?: "fail" | "replace_backup" | "keep_existing_backup";
 };
 
 export type RetryJobPayload = {

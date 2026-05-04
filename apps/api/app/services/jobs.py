@@ -224,6 +224,12 @@ class JobsService:
             ignore_worker_schedule=original_job.ignore_worker_schedule,
             backup_policy=original_job.backup_policy,
         )
+        repository.mark_cleared(
+            original_job,
+            cleared_at=datetime.now(timezone.utc),
+            reason="Retry job created by operator.",
+        )
+
         logger.info(
             "job retried",
             extra={
@@ -233,6 +239,7 @@ class JobsService:
                 "file_id": retry.tracked_file_id,
                 "status": retry.status.value,
                 "original_job_id": original_job.id,
+                "existing_backup_strategy": existing_backup_strategy,
             },
         )
         return retry
@@ -358,11 +365,20 @@ class JobsService:
         )
         return jobs
 
-    def resolve_problem_jobs(self, session: Session, *, job_ids: list[str], action: str) -> list[Job]:
+    def resolve_problem_jobs(
+        self,
+        session: Session,
+        *,
+        job_ids: list[str],
+        action: str,
+        existing_backup_strategy: str = "fail",
+    ) -> list[Job]:
         if not job_ids:
             raise ApiValidationError("Select at least one failed or cancelled job.")
         if action not in {"retry", "skip"}:
             raise ApiValidationError("Unsupported failed job resolution action.")
+        if action != "retry" and existing_backup_strategy != "fail":
+            raise ApiValidationError("Backup handling options are only available when retrying failed jobs.")
 
         selected_jobs = self._selected_problem_jobs(session, job_ids=job_ids)
         error_keys = {_job_problem_error_key(job) for job in selected_jobs}
@@ -374,7 +390,11 @@ class JobsService:
             raise ApiConflictError("Select jobs with the same error before using a bulk action.")
 
         if action == "retry":
-            return self._retry_problem_jobs(session, selected_jobs)
+            return self._retry_problem_jobs(
+                session,
+                selected_jobs,
+                existing_backup_strategy=existing_backup_strategy,
+            )
         return self._mark_problem_jobs_skipped(session, selected_jobs)
 
     def list_backups(
@@ -733,7 +753,13 @@ class JobsService:
             jobs_by_id[job.id] = job
         return [jobs_by_id[job_id] for job_id in job_ids if job_id in jobs_by_id]
 
-    def _retry_problem_jobs(self, session: Session, selected_jobs: list[Job]) -> list[Job]:
+    def _retry_problem_jobs(
+        self,
+        session: Session,
+        selected_jobs: list[Job],
+        *,
+        existing_backup_strategy: str = "fail",
+    ) -> list[Job]:
         retry_targets: dict[str, Job] = {}
         for job in selected_jobs:
             current = retry_targets.get(job.tracked_file_id)
@@ -742,7 +768,13 @@ class JobsService:
 
         retried_jobs: list[Job] = []
         for job in retry_targets.values():
-            retried_jobs.append(self.retry_job(session, job_id=job.id))
+            retried_jobs.append(
+                self.retry_job(
+                    session,
+                    job_id=job.id,
+                    existing_backup_strategy=existing_backup_strategy,
+                )
+            )
 
         cleared_at = datetime.now(timezone.utc)
         repository = JobRepository(session)
@@ -756,6 +788,7 @@ class JobsService:
                 "requeued_job_ids": [job.id for job in retried_jobs],
                 "selected_count": len(selected_jobs),
                 "requeued_count": len(retried_jobs),
+                "existing_backup_strategy": existing_backup_strategy,
             },
         )
         return retried_jobs

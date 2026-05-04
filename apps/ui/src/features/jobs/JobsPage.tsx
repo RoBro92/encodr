@@ -402,17 +402,18 @@ export function JobsPage() {
 
   function retryBackupJobs(strategy: BackupRetryStrategy) {
     const jobIds = backupRetryJobIds ?? [];
-    void Promise.all(jobIds.map((id) =>
-      retryMutation.mutateAsync({
-        jobId: id,
-        request: { existing_backup_strategy: strategy },
-      }),
-    ))
-      .then(() => {
-        setBackupRetryJobIds(null);
-        setSelectedProblemJobIds(new Set());
-      })
-      .catch(() => undefined);
+    if (jobIds.length === 0) {
+      return;
+    }
+    resolveFailedMutation.mutate(
+      { job_ids: jobIds, action: "retry", existing_backup_strategy: strategy },
+      {
+        onSuccess: () => {
+          setBackupRetryJobIds(null);
+          setSelectedProblemJobIds(new Set());
+        },
+      },
+    );
   }
 
   return (
@@ -682,7 +683,7 @@ export function JobsPage() {
                       className="button button-primary button-small"
                       type="button"
                       onClick={() => openBackupRetryModal(selectedProblemJobIdsArray)}
-                      disabled={retryMutation.isPending}
+                      disabled={resolveFailedMutation.isPending}
                     >
                       Backup options ({selectedProblemJobIds.size})
                     </button>
@@ -1002,7 +1003,7 @@ export function JobsPage() {
       {backupRetryJobIds ? (
         <BackupRetryModal
           count={backupRetryJobIds.length}
-          isPending={retryMutation.isPending}
+          isPending={resolveFailedMutation.isPending}
           onCancel={() => setBackupRetryJobIds(null)}
           onRetry={retryBackupJobs}
         />
