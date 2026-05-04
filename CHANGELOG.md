@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.4.6 - 2026-05-04
+
+This hotfix improves Intel QSV runtime diagnostics after live LXC validation showed VAAPI working but QSV encode attempts failing inside FFmpeg.
+
+- changed the QSV smoke probe to use production-like 1280x720/30fps input with the normal QSV quality flag instead of a tiny 128x128/1fps sample
+- treated zero-exit FFmpeg runs with QSV encoder failure text as failed probes, preventing false healthy QSV reports
+- classified unsupported QSV encoder/runtime failures as `QSV encode unsupported` instead of the less specific `QSV init failed`
+- revalidated live that explicit VAAPI selection works with CPU fallback disabled and that Intel auto falls back to validated VAAPI when QSV encode is not usable
+
 ## 0.4.5 - 2026-05-04
 
 This hotfix tightens Intel runtime selection after live VAAPI/QSV validation and includes the stream-stripping work merged after 0.4.4.
