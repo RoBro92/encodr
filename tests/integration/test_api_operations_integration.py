@@ -19,7 +19,15 @@ from tests.helpers.api import create_test_api_context
 from tests.helpers.auth import bootstrap_admin, login_user
 from tests.helpers.db import create_migrated_session_factory
 from tests.helpers.filesystem import FilesystemLayout, create_filesystem_layout
-from tests.helpers.jobs import StaticProbeClient, StagedRunner, create_job, create_planned_file, media_at_path, parse_fixture
+from tests.helpers.jobs import (
+    StaticProbeClient,
+    StagedRunner,
+    create_job,
+    create_planned_file,
+    media_at_path,
+    media_for_plan_output,
+    parse_fixture,
+)
 
 pytestmark = [pytest.mark.integration]
 
@@ -391,12 +399,13 @@ def test_worker_run_once_endpoint_processes_pending_job(
     source_path = layout.create_source_file("Movies/Worker Film (2024).mkv", contents="original")
     media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
     with session_factory() as session:
-        create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        output_media = media_for_plan_output(media, persisted.plan)
         session.commit()
 
     context.app.state.local_worker_loop.execution_service = WorkerExecutionService(
         runner=StagedRunner(output_path=layout.scratch_dir / "api-run-once.mkv"),
-        verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+        verifier=OutputVerifier(probe_client=StaticProbeClient(output_media)),
     )
 
     response = context.client.post("/api/worker/run-once", headers=auth.headers)

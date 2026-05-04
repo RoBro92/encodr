@@ -142,6 +142,33 @@ def test_remux_plan_builds_expected_ffmpeg_command() -> None:
     assert command_plan.output_path == Path("/scratch/encodr/Example Remux Film (2024).job-123.tmp.mkv")
 
 
+def test_remux_plan_maps_selected_streams_and_sets_explicit_dispositions() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    media = parse_fixture("non4k_remux_languages.json")
+    plan = build_processing_plan(media, bundle, source_path="/media/Movies/Example Remux Film (2024).mkv")
+
+    command_plan = build_execution_command_plan(
+        plan,
+        input_path=media.file_path,
+        scratch_dir="/scratch/encodr",
+        ffmpeg_path="/usr/bin/ffmpeg",
+        job_id="job-maps",
+    )
+
+    mapped_inputs = [
+        command_plan.command[index + 1]
+        for index, value in enumerate(command_plan.command)
+        if value == "-map"
+    ]
+    assert mapped_inputs == ["0:0", "0:1", "0:5", "0:4"]
+    assert "0:2" not in mapped_inputs
+    assert "0:3" not in mapped_inputs
+    assert "0:6" not in mapped_inputs
+    assert _option_value(command_plan.command, "-disposition:a:0") == "default"
+    assert _option_value(command_plan.command, "-disposition:s:0") == "forced"
+    assert _option_value(command_plan.command, "-disposition:s:1") == "default"
+
+
 def test_transcode_plan_builds_expected_ffmpeg_command() -> None:
     bundle = load_config_bundle(project_root=REPO_ROOT)
     media = parse_fixture("film_1080p.json")
@@ -159,6 +186,33 @@ def test_transcode_plan_builds_expected_ffmpeg_command() -> None:
     assert "-c:v" in command_plan.command
     assert "libx265" in command_plan.command
     assert command_plan.output_path == Path("/scratch/encodr/Example Film (2024).job-456.tmp.mkv")
+
+
+def test_transcode_plan_maps_selected_streams_only() -> None:
+    bundle = load_config_bundle(project_root=REPO_ROOT)
+    media = parse_fixture("non4k_remux_languages.json")
+    media.video_streams[0].codec_name = "h264"
+    media.video_streams[0].bit_rate = 20_000_000
+    plan = build_processing_plan(media, bundle, source_path="/media/Movies/Example Transcode Strip Film (2024).mkv")
+
+    command_plan = build_execution_command_plan(
+        plan,
+        input_path=media.file_path,
+        scratch_dir="/scratch/encodr",
+        ffmpeg_path="/usr/bin/ffmpeg",
+        job_id="job-transcode-maps",
+    )
+
+    mapped_inputs = [
+        command_plan.command[index + 1]
+        for index, value in enumerate(command_plan.command)
+        if value == "-map"
+    ]
+    assert command_plan.mode == "transcode"
+    assert mapped_inputs == ["0:0", "0:1", "0:5", "0:4"]
+    assert "0:2" not in mapped_inputs
+    assert "0:3" not in mapped_inputs
+    assert "0:6" not in mapped_inputs
 
 
 def test_transcode_plan_respects_configured_crf_override() -> None:
@@ -218,10 +272,11 @@ def test_verified_output_is_placed_and_marks_job_completed(tmp_path: Path) -> No
 
         media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
         job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        output_media = media_for_selected_streams(media, plan)
 
         service = WorkerExecutionService(
             runner=StagedRunner(output_path=staged_path),
-            verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+            verifier=OutputVerifier(probe_client=StaticProbeClient(output_media)),
             replacement_service=ReplacementService(),
         )
         jobs = JobRepository(session)
@@ -474,6 +529,7 @@ def test_replacement_permission_denied_logs_error_with_errno_and_reason(tmp_path
 
         media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
         job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        output_media = media_for_selected_streams(media, plan)
         replacement = ReplacementResult(
             status=ReplacementStatus.FAILED,
             final_output_path=source_path,
@@ -488,7 +544,7 @@ def test_replacement_permission_denied_logs_error_with_errno_and_reason(tmp_path
         )
         service = WorkerExecutionService(
             runner=StagedRunner(output_path=staged_path),
-            verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+            verifier=OutputVerifier(probe_client=StaticProbeClient(output_media)),
             replacement_service=StaticReplacementService(replacement),
         )
         jobs = JobRepository(session)
@@ -772,9 +828,49 @@ def media_at_path(media: MediaFile, file_path: Path) -> MediaFile:
     return updated
 
 
+def media_for_selected_streams(media: MediaFile, plan: ProcessingPlan) -> MediaFile:
+    output_media = media.model_copy(deep=True)
+    output_media.audio_streams = streams_in_plan_order(
+        output_media.audio_streams,
+        plan.selected_streams.audio_stream_indices,
+    )
+    primary_audio = (
+        plan.audio.primary_stream_index
+        if plan.audio.primary_stream_index is not None
+        else (
+            plan.selected_streams.audio_stream_indices[0]
+            if plan.selected_streams.audio_stream_indices
+            else None
+        )
+    )
+    for stream in output_media.audio_streams:
+        stream.disposition.default = stream.index == primary_audio
+
+    output_media.subtitle_streams = streams_in_plan_order(
+        output_media.subtitle_streams,
+        plan.selected_streams.subtitle_stream_indices,
+    )
+    for stream in output_media.subtitle_streams:
+        stream.disposition.default = stream.index == plan.subtitles.main_stream_index
+    return output_media
+
+
+def streams_in_plan_order(streams, selected_indices: list[int]):
+    by_index = {stream.index: stream for stream in streams}
+    return [by_index[index] for index in selected_indices if index in by_index]
+
+
 def build_plan_target_container():
     bundle = load_config_bundle(project_root=REPO_ROOT)
     return bundle.policy.video.output_container
+
+
+def _option_value(command: list[str], option: str) -> str | None:
+    try:
+        index = command.index(option)
+    except ValueError:
+        return None
+    return command[index + 1]
 
 
 class FailIfCalledClient:

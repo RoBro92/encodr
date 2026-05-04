@@ -77,7 +77,7 @@ def build_processing_plan(
         subtitle_stream_indices=subtitle_result.intent.selected_stream_indices,
         attachment_stream_indices=[stream.index for stream in media_file.attachment_streams],
         data_stream_indices=[stream.index for stream in media_file.data_streams],
-        unknown_stream_indices=[stream.index for stream in media_file.unknown_streams],
+        unknown_stream_indices=[],
     )
 
     should_treat_as_protected = (

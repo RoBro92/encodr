@@ -24,7 +24,15 @@ import {
   useRestoreJobBackupMutation,
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
-import type { FileSummary, JobBackup, JobDetail, JobSummary, RetryJobPayload } from "../../lib/types/api";
+import type {
+  AudioStreamDecision,
+  FileSummary,
+  JobBackup,
+  JobDetail,
+  JobSummary,
+  RetryJobPayload,
+  SubtitleStreamDecision,
+} from "../../lib/types/api";
 import { formatBitrate, formatBytes, formatDateTime, formatDurationSeconds, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -1492,6 +1500,14 @@ function JobDetailDrawer({
                         },
                       ]}
                     />
+                    <StreamDecisionList
+                      title="Audio stream plan"
+                      items={detail.analysis_payload.audio_stream_decisions}
+                    />
+                    <StreamDecisionList
+                      title="Subtitle stream plan"
+                      items={detail.analysis_payload.subtitle_stream_decisions}
+                    />
                   </CollapsibleSection>
                 ) : null}
 
@@ -1695,6 +1711,48 @@ function JobMetadataItem({
 
 function MutedValue({ children }: { children: ReactNode }) {
   return <span className="job-drawer-muted-value">{children}</span>;
+}
+
+function StreamDecisionList({
+  title,
+  items,
+}: {
+  title: string;
+  items: AudioStreamDecision[] | SubtitleStreamDecision[];
+}) {
+  if (items.length === 0) {
+    return null;
+  }
+  return (
+    <>
+      <h4>{title}</h4>
+      <KeyValueList
+        items={items.map((item) => ({
+          label: streamDecisionLabel(item),
+          value: streamDecisionValue(item),
+        }))}
+      />
+    </>
+  );
+}
+
+function streamDecisionLabel(item: AudioStreamDecision | SubtitleStreamDecision) {
+  return `#${item.index} ${item.language.toUpperCase()}`;
+}
+
+function streamDecisionValue(item: AudioStreamDecision | SubtitleStreamDecision) {
+  const action = item.selected ? "Keep" : "Remove";
+  const markers = [
+    item.codec,
+    "channels" in item && item.channels != null ? `${item.channels} ch` : null,
+    "channel_layout" in item ? item.channel_layout : null,
+    item.default ? "default" : null,
+    "forced" in item && item.forced ? "forced" : null,
+    "hearing_impaired" in item && item.hearing_impaired ? "hearing impaired" : null,
+    "commentary" in item && item.commentary ? "commentary" : null,
+    item.title,
+  ].filter((part): part is string => Boolean(part));
+  return `${action} ${titleCase(item.role)} - ${titleCase(item.reason)}${markers.length > 0 ? ` - ${markers.join(" • ")}` : ""}`;
 }
 
 function JobArtwork({ jobId, title }: { jobId: string; title: string }) {

@@ -70,6 +70,8 @@ class DryRunAnalysisResponse(BaseModel):
     warning_messages: list[str] = Field(default_factory=list)
     selected_audio_stream_indices: list[int] = Field(default_factory=list)
     selected_subtitle_stream_indices: list[int] = Field(default_factory=list)
+    audio_stream_decisions: list[dict[str, Any]] = Field(default_factory=list)
+    subtitle_stream_decisions: list[dict[str, Any]] = Field(default_factory=list)
     output_filename: str
     current_size_bytes: int | None = None
     estimated_output_size_bytes: int | None = None

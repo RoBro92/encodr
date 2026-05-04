@@ -16,6 +16,7 @@ from tests.helpers.jobs import (
     StagedRunner,
     create_job,
     media_at_path,
+    media_for_plan_output,
     parse_fixture,
 )
 
@@ -36,7 +37,8 @@ def test_worker_job_flow_completes_with_real_db_and_replacement(
     media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
 
     with session_factory() as session:
-        create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        output_media = media_for_plan_output(media, persisted.plan)
         session.commit()
 
     loop = LocalWorkerLoop(
@@ -44,7 +46,7 @@ def test_worker_job_flow_completes_with_real_db_and_replacement(
         bundle,
         execution_service=WorkerExecutionService(
             runner=StagedRunner(output_path=layout.scratch_dir / "completed.mkv"),
-            verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+            verifier=OutputVerifier(probe_client=StaticProbeClient(output_media)),
         ),
         poll_interval_seconds=0.01,
     )
@@ -76,7 +78,8 @@ def test_local_worker_result_preserves_configured_local_paths(
     staged_path = layout.scratch_dir / "local-path-output.mkv"
 
     with session_factory() as session:
-        create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        output_media = media_for_plan_output(media, persisted.plan)
         session.commit()
 
     loop = LocalWorkerLoop(
@@ -84,7 +87,7 @@ def test_local_worker_result_preserves_configured_local_paths(
         bundle,
         execution_service=WorkerExecutionService(
             runner=StagedRunner(output_path=staged_path),
-            verifier=OutputVerifier(probe_client=StaticProbeClient(media)),
+            verifier=OutputVerifier(probe_client=StaticProbeClient(output_media)),
         ),
         poll_interval_seconds=0.01,
     )

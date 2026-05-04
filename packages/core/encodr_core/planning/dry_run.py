@@ -50,6 +50,8 @@ def build_dry_run_analysis_payload(
         "warning_messages": [warning.message for warning in plan.warnings],
         "selected_audio_stream_indices": plan.selected_streams.audio_stream_indices,
         "selected_subtitle_stream_indices": plan.selected_streams.subtitle_stream_indices,
+        "audio_stream_decisions": build_audio_stream_decisions(media_file, plan),
+        "subtitle_stream_decisions": build_subtitle_stream_decisions(media_file, plan),
         "output_filename": preview_output_filename(media_file.file_path, plan),
         "current_size_bytes": current_size,
         "estimated_output_size_bytes": estimated_output_size,
@@ -76,6 +78,136 @@ def build_dry_run_analysis_payload(
         "manual_review_triggered": plan.action == PlanAction.MANUAL_REVIEW,
         "manual_review_reasons": review_reasons,
     }
+
+
+def build_audio_stream_decisions(media_file: MediaFile, plan: ProcessingPlan) -> list[dict[str, Any]]:
+    selected = set(plan.audio.selected_stream_indices)
+    available_preferred = set(plan.audio.available_preferred_language_stream_indices)
+    commentary_removed = set(plan.audio.commentary_removed_stream_indices)
+    decisions: list[dict[str, Any]] = []
+    for stream in media_file.audio_streams:
+        selected_stream = stream.index in selected
+        role = audio_stream_role(stream.index, plan)
+        decisions.append(
+            {
+                "index": stream.index,
+                "language": language_code(stream.language),
+                "codec": stream.codec_name,
+                "channels": stream.channels,
+                "channel_layout": stream.channel_layout,
+                "title": stream.title,
+                "default": stream.disposition.default,
+                "commentary": stream.is_commentary_candidate,
+                "selected": selected_stream,
+                "role": role,
+                "reason": audio_stream_decision_reason(
+                    stream.index,
+                    selected_stream=selected_stream,
+                    role=role,
+                    available_preferred=available_preferred,
+                    commentary_removed=commentary_removed,
+                ),
+            }
+        )
+    return decisions
+
+
+def build_subtitle_stream_decisions(media_file: MediaFile, plan: ProcessingPlan) -> list[dict[str, Any]]:
+    selected = set(plan.subtitles.selected_stream_indices)
+    required_languages = set(plan.subtitles.required_language_codes)
+    decisions: list[dict[str, Any]] = []
+    for stream in media_file.subtitle_streams:
+        selected_stream = stream.index in selected
+        role = subtitle_stream_role(stream.index, plan)
+        decisions.append(
+            {
+                "index": stream.index,
+                "language": language_code(stream.language),
+                "codec": stream.codec_name,
+                "title": stream.title,
+                "default": stream.disposition.default,
+                "forced": stream.disposition.forced or stream.is_forced,
+                "hearing_impaired": stream.is_hearing_impaired_candidate,
+                "selected": selected_stream,
+                "role": role,
+                "reason": subtitle_stream_decision_reason(
+                    stream.index,
+                    language=language_code(stream.language),
+                    selected_stream=selected_stream,
+                    role=role,
+                    required_languages=required_languages,
+                ),
+            }
+        )
+    return decisions
+
+
+def audio_stream_role(stream_index: int, plan: ProcessingPlan) -> str:
+    if stream_index == plan.audio.primary_stream_index:
+        return "primary"
+    if stream_index in plan.audio.preserved_atmos_stream_indices:
+        return "atmos"
+    if stream_index in plan.audio.preserved_surround_stream_indices:
+        return "surround"
+    if stream_index in plan.audio.selected_stream_indices:
+        return "preferred"
+    return "removed"
+
+
+def audio_stream_decision_reason(
+    stream_index: int,
+    *,
+    selected_stream: bool,
+    role: str,
+    available_preferred: set[int],
+    commentary_removed: set[int],
+) -> str:
+    if selected_stream and role == "primary":
+        return "primary_preferred_audio"
+    if selected_stream and role == "atmos":
+        return "atmos_audio_preserved"
+    if selected_stream and role == "surround":
+        return "surround_audio_preserved"
+    if selected_stream:
+        return "preferred_audio_selected"
+    if stream_index in commentary_removed:
+        return "commentary_audio_removed"
+    if stream_index in available_preferred:
+        return "spare_preferred_audio_removed"
+    return "non_preferred_audio_removed"
+
+
+def subtitle_stream_role(stream_index: int, plan: ProcessingPlan) -> str:
+    if stream_index in plan.subtitles.forced_stream_indices:
+        return "forced"
+    if stream_index == plan.subtitles.main_stream_index:
+        return "primary"
+    if stream_index in plan.subtitles.hearing_impaired_stream_indices:
+        return "hearing_impaired"
+    if stream_index in plan.subtitles.selected_stream_indices:
+        return "preferred"
+    return "removed"
+
+
+def subtitle_stream_decision_reason(
+    stream_index: int,
+    *,
+    language: str,
+    selected_stream: bool,
+    role: str,
+    required_languages: set[str],
+) -> str:
+    if selected_stream and role == "forced":
+        return "forced_subtitle_preserved"
+    if selected_stream and role == "primary":
+        return "primary_preferred_subtitle"
+    if selected_stream and role == "hearing_impaired":
+        return "hearing_impaired_subtitle_preserved"
+    if selected_stream:
+        return "preferred_subtitle_selected"
+    if language in required_languages:
+        return "spare_preferred_subtitle_removed"
+    return "non_preferred_subtitle_removed"
 
 
 def estimate_output_size_bytes(
@@ -192,3 +324,7 @@ def estimate_output_video_bitrate_bps(plan: ProcessingPlan) -> int | None:
         return plan.video.source_bitrate_bps
     reduction_factor = QUALITY_REDUCTION_FACTORS.get(plan.video.quality_mode or "", 0.58)
     return int(round(plan.video.source_bitrate_bps * reduction_factor))
+
+
+def language_code(value: str | None) -> str:
+    return value or "und"

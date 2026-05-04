@@ -220,6 +220,33 @@ export type DryRunBatchResponse = {
   items: DryRunItem[];
 };
 
+export type AudioStreamDecision = {
+  index: number;
+  language: string;
+  codec: string | null;
+  channels: number | null;
+  channel_layout: string | null;
+  title: string | null;
+  default: boolean;
+  commentary: boolean;
+  selected: boolean;
+  role: string;
+  reason: string;
+};
+
+export type SubtitleStreamDecision = {
+  index: number;
+  language: string;
+  codec: string | null;
+  title: string | null;
+  default: boolean;
+  forced: boolean;
+  hearing_impaired: boolean;
+  selected: boolean;
+  role: string;
+  reason: string;
+};
+
 export type DryRunAnalysis = {
   mode: string;
   source_path: string;
@@ -234,6 +261,8 @@ export type DryRunAnalysis = {
   warning_messages: string[];
   selected_audio_stream_indices: number[];
   selected_subtitle_stream_indices: number[];
+  audio_stream_decisions: AudioStreamDecision[];
+  subtitle_stream_decisions: SubtitleStreamDecision[];
   output_filename: string;
   current_size_bytes: number | null;
   estimated_output_size_bytes: number | null;
