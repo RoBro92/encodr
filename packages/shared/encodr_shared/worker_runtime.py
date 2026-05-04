@@ -1458,10 +1458,24 @@ def _qsv_init_candidates(render_devices: list[str], *, is_windows: bool) -> list
 
 def probe_directory(path: Path | str, *, writable_required: bool) -> dict[str, object]:
     resolved = Path(path)
-    exists = resolved.exists()
-    is_directory = resolved.is_dir()
-    readable = os.access(resolved, os.R_OK) if exists else False
-    writable = os.access(resolved, os.W_OK) if exists else False
+    try:
+        exists = resolved.exists()
+        is_directory = resolved.is_dir() if exists else False
+        readable = os.access(resolved, os.R_OK) if exists else False
+        writable = os.access(resolved, os.W_OK) if exists else False
+    except OSError as error:
+        reason = error.strerror or str(error)
+        return {
+            "path": resolved.as_posix(),
+            "exists": False,
+            "is_directory": False,
+            "readable": False,
+            "writable": False,
+            "status": "failed",
+            "message": f"Path could not be inspected: {reason}.",
+            "reason": reason,
+            "errno": error.errno,
+        }
 
     if not exists:
         status = "failed"
