@@ -25,7 +25,7 @@ import {
 } from "../../lib/api/hooks";
 import { ApiError } from "../../lib/api/client";
 import { bulkProgressSummary, useBulkQueueProgress } from "../bulk-queue/BulkQueueProgress";
-import type { FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
+import type { ExistingBackupStrategy, FolderScanSummary, JobSummary, WatchedJob, WatchedJobPayload } from "../../lib/types/api";
 import { formatBitrate, formatBytes, formatDateTime, titleCase } from "../../lib/utils/format";
 import { APP_ROUTES } from "../../lib/utils/routes";
 
@@ -196,6 +196,7 @@ export function FilesPage() {
   const [dryRunModalOpen, setDryRunModalOpen] = useState(false);
   const [dryRunWorkerId, setDryRunWorkerId] = useState("");
   const [backupPolicy, setBackupPolicy] = useState("keep");
+  const [existingBackupStrategy, setExistingBackupStrategy] = useState<ExistingBackupStrategy>("fail");
   const [dryRunScheduleConflict, setDryRunScheduleConflict] = useState<{
     worker_id: string;
     worker_name: string;
@@ -728,7 +729,7 @@ export function FilesPage() {
     setSelectedFolder(path);
     setSelectedPaths([]);
     setActiveTab("jobs-created");
-    await startBulkQueue({ folder_path: path, backup_policy: backupPolicy });
+    await startBulkQueue({ folder_path: path, backup_policy: backupPolicy, existing_backup_strategy: existingBackupStrategy });
   }
 
   function openWatcherDraft(item?: WatchedJob) {
@@ -820,7 +821,13 @@ export function FilesPage() {
     }
   }
 
-  async function startBulkQueue(payload: { folder_path?: string; selected_paths?: string[]; source_path?: string; backup_policy: string }) {
+  async function startBulkQueue(payload: {
+    folder_path?: string;
+    selected_paths?: string[];
+    source_path?: string;
+    backup_policy: string;
+    existing_backup_strategy: ExistingBackupStrategy;
+  }) {
     await bulkQueue.start(payload);
   }
 
@@ -829,7 +836,7 @@ export function FilesPage() {
       return;
     }
     setActiveTab("jobs-created");
-    void startBulkQueue({ ...activeSelection, backup_policy: backupPolicy });
+    void startBulkQueue({ ...activeSelection, backup_policy: backupPolicy, existing_backup_strategy: existingBackupStrategy });
   }
 
   const tabs: Array<{ key: LibraryTab; label: string }> = [
@@ -1274,6 +1281,17 @@ export function FilesPage() {
                 <option value="keep">Keep backup</option>
                 <option value="keep_for_1_day">Keep for 1 day</option>
                 <option value="delete_after_success">Delete after success</option>
+              </select>
+            </label>
+            <label className="field field-inline">
+              <span>Existing backup</span>
+              <select
+                value={existingBackupStrategy}
+                onChange={(event) => setExistingBackupStrategy(event.target.value as ExistingBackupStrategy)}
+              >
+                <option value="fail">Stop for review</option>
+                <option value="keep_existing_backup">Keep original backup</option>
+                <option value="replace_backup">Replace backup</option>
               </select>
             </label>
             <button

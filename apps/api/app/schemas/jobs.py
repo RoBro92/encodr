@@ -17,6 +17,7 @@ class CreateJobRequest(BaseModel):
     preferred_backend_override: str | None = None
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
     backup_policy: str = "keep"
+    existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
 
     @model_validator(mode="after")
     def validate_target(self) -> "CreateJobRequest":
@@ -35,6 +36,7 @@ class CreateBatchJobsRequest(BaseModel):
     preferred_backend_override: str | None = None
     schedule_windows: list[ScheduleWindowRequest] = Field(default_factory=list)
     backup_policy: str = "keep"
+    existing_backup_strategy: Literal["fail", "replace_backup", "keep_existing_backup"] = "fail"
     summary_only: bool = False
 
     @model_validator(mode="after")

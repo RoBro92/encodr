@@ -1458,6 +1458,7 @@ describe("Encodr UI shell", () => {
           body: JSON.stringify({
             folder_path: "/media/Movies",
             backup_policy: "keep",
+            existing_backup_strategy: "fail",
           }),
         }),
       );
@@ -1679,6 +1680,121 @@ describe("Encodr UI shell", () => {
         expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
       );
     });
+  });
+
+  it("offers strip-only recovery for output-too-large failed jobs instead of retry", async () => {
+    const fetchMock = mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/files",
+        body: { items: [], limit: 25, offset: 0 },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/job-output-large",
+        body: {
+          ...jobDetail(),
+          id: "job-output-large",
+          status: "failed",
+          failure_category: "output_larger_than_input",
+          failure_code: "output_larger_than_input",
+          failure_message: "Encoded output is larger than the source file.",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-output-large",
+              status: "failed",
+              failure_category: "output_larger_than_input",
+              failure_code: "output_larger_than_input",
+              failure_message: "Encoded output is larger than the source file.",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/jobs/job-output-large/strip-only-recovery",
+        body: {
+          ...jobDetail(),
+          id: "job-output-large-recovery",
+          status: "pending",
+          plan_reason_messages: [
+            "Video transcode skipped after failed size/quality guard; audio/subtitle cleanup only.",
+          ],
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs/job-output-large", initialSession: makeSession() });
+
+    expect(await screen.findByRole("button", { name: /skip transcode \/ strip only/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry job/i })).not.toBeInTheDocument();
+
+    await userEvent.click(screen.getByRole("button", { name: /skip transcode \/ strip only/i }));
+    const dialog = await screen.findByRole("dialog", { name: /skip transcode \/ strip only/i });
+    expect(within(dialog).getByText(/keeps the original video stream unchanged/i)).toBeInTheDocument();
+
+    await userEvent.click(within(dialog).getByRole("button", { name: /skip transcode \/ strip only/i }));
+
+    await waitFor(() => {
+      expect(fetchMock).toHaveBeenCalledWith(
+        expect.stringContaining("/api/jobs/job-output-large/strip-only-recovery"),
+        expect.objectContaining({ method: "POST", headers: expect.any(Headers) }),
+      );
+    });
+  });
+
+  it("offers strip-only recovery for output-too-small compression safety failures", async () => {
+    mockFetchRoutes([
+      {
+        method: "GET",
+        path: "/api/files",
+        body: { items: [], limit: 25, offset: 0 },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs/job-too-small",
+        body: {
+          ...jobDetail(),
+          id: "job-too-small",
+          status: "manual_review",
+          failure_category: "compression_safety_bitrate_floor",
+          failure_code: "compression_safety_bitrate_floor",
+          failure_message: "Output video bitrate is below the compression safety floor.",
+        },
+      },
+      {
+        method: "GET",
+        path: "/api/jobs",
+        body: {
+          items: [
+            {
+              ...jobDetail(),
+              id: "job-too-small",
+              status: "manual_review",
+              failure_category: "compression_safety_bitrate_floor",
+              failure_code: "compression_safety_bitrate_floor",
+              failure_message: "Output video bitrate is below the compression safety floor.",
+            },
+          ],
+          limit: 100,
+          offset: 0,
+        },
+      },
+    ]);
+
+    renderApp({ route: "/jobs/job-too-small", initialSession: makeSession() });
+
+    expect(await screen.findByRole("button", { name: /skip transcode \/ strip only/i })).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /retry job/i })).not.toBeInTheDocument();
   });
 
   it("shows running job progress and worker details in the jobs queue", async () => {

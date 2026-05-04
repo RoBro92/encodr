@@ -60,6 +60,7 @@ import {
   probeFile,
   dryRunSelection,
   rejectReviewItem,
+  recoverJobWithStripOnly,
   resolveFailedJobs,
   retryJob,
   restoreJobBackup,
@@ -1033,6 +1034,19 @@ export function useRetryJobMutation() {
     onSuccess: async () => {
       await queryClient.invalidateQueries({ queryKey: ["jobs"] });
       await queryClient.invalidateQueries({ queryKey: ["review"] });
+    },
+  });
+}
+
+export function useStripOnlyRecoveryMutation() {
+  const { apiClient } = useSession();
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (jobId: string) => recoverJobWithStripOnly(apiClient, jobId),
+    onSuccess: async () => {
+      await queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      await queryClient.invalidateQueries({ queryKey: ["review"] });
+      await queryClient.invalidateQueries({ queryKey: ["files"] });
     },
   });
 }

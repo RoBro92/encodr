@@ -268,6 +268,44 @@ def test_retry_endpoint_allows_replacement_failure_manual_review_retry(
     assert payload["attempt_count"] == 2
 
 
+def test_strip_only_recovery_endpoint_queues_remux_for_size_guard_failure(
+    tmp_path: Path,
+    repo_root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    context, session_factory, layout, bundle = build_context(tmp_path, repo_root, monkeypatch)
+    auth = authenticate(context)
+
+    source_path = layout.create_source_file("Movies/Output Growth Film (2024).mkv", contents="retry")
+    media = media_at_path(parse_fixture("non4k_remux_languages.json"), source_path)
+    with session_factory() as session:
+        persisted = create_job(session, bundle, media, source_path=source_path.as_posix())
+        persisted.job.status = JobStatus.FAILED
+        persisted.job.failure_category = "output_larger_than_input"
+        persisted.job.failure_message = "Encoded output is larger than the source file."
+        session.commit()
+        original_job_id = persisted.job.id
+
+    response = context.client.post(
+        f"/api/jobs/{original_job_id}/strip-only-recovery",
+        headers=auth.headers,
+    )
+
+    assert response.status_code == 201
+    payload = response.json()
+    assert payload["id"] != original_job_id
+    assert payload["status"] == JobStatus.PENDING.value
+    assert payload["attempt_count"] == 2
+
+    with session_factory() as session:
+        jobs = session.query(Job).order_by(Job.created_at.asc(), Job.attempt_count.asc()).all()
+        assert len(jobs) == 2
+        assert jobs[0].cleared_reason == "Video transcode skipped after failed size/quality guard; audio/subtitle cleanup only."
+        assert jobs[1].plan_snapshot.payload["action"] == "remux"
+        assert jobs[1].plan_snapshot.payload["video"]["transcode_required"] is False
+        assert jobs[1].completed_at is None
+
+
 def test_retry_endpoint_keeps_protected_replacement_failure_behind_review_gate(
     tmp_path: Path,
     repo_root: Path,

@@ -468,6 +468,8 @@ export type RetryJobPayload = {
   existing_backup_strategy?: "fail" | "replace_backup" | "keep_existing_backup";
 };
 
+export type ExistingBackupStrategy = "fail" | "replace_backup" | "keep_existing_backup";
+
 export type JobBackup = {
   job_id: string;
   tracked_file_id: string;
@@ -1111,6 +1113,7 @@ export type CreateJobPayload = {
   preferred_backend_override?: string | null;
   schedule_windows?: ScheduleWindow[];
   backup_policy?: string;
+  existing_backup_strategy?: ExistingBackupStrategy;
 };
 
 export type CreateBatchJobsPayload = FileSelectionPayload & {
@@ -1119,6 +1122,7 @@ export type CreateBatchJobsPayload = FileSelectionPayload & {
   preferred_backend_override?: string | null;
   schedule_windows?: ScheduleWindow[];
   backup_policy?: string;
+  existing_backup_strategy?: ExistingBackupStrategy;
   summary_only?: boolean;
 };
 

@@ -22,6 +22,7 @@ import {
   useRetryJobMutation,
   useResolveFailedJobsMutation,
   useRestoreJobBackupMutation,
+  useStripOnlyRecoveryMutation,
   useWorkerStatusQuery,
 } from "../../lib/api/hooks";
 import type {
@@ -100,6 +101,7 @@ export function JobsPage() {
   const [selectedResolveJobIds, setSelectedResolveJobIds] = useState<string[] | null>(null);
   const [mixedProblemSelectionOpen, setMixedProblemSelectionOpen] = useState(false);
   const [backupRetryJobIds, setBackupRetryJobIds] = useState<string[] | null>(null);
+  const [stripOnlyRecoveryJobId, setStripOnlyRecoveryJobId] = useState<string | null>(null);
 
   const filters = useMemo(
     () => ({
@@ -146,6 +148,7 @@ export function JobsPage() {
   const problemJobsQuery = useJobsQuery(problemFilters);
   const detailQuery = useJobDetailQuery(jobId);
   const retryMutation = useRetryJobMutation();
+  const stripOnlyRecoveryMutation = useStripOnlyRecoveryMutation();
   const cancelMutation = useCancelJobMutation();
   const clearQueueMutation = useClearQueueMutation();
   const resolveFailedMutation = useResolveFailedJobsMutation();
@@ -191,7 +194,8 @@ export function JobsPage() {
   const localWorkerId = workerStatusQuery.data?.worker_id ?? null;
   const detail = detailQuery.data;
   const metrics = summariseJobs(jobs);
-  const canRetry = detail ? ["failed", "interrupted", "cancelled", "manual_review", "skipped"].includes(detail.status) : false;
+  const canStripOnlyRecovery = detail ? canRecoverWithStripOnly(detail) : false;
+  const canRetry = detail ? ["failed", "interrupted", "cancelled", "manual_review", "skipped"].includes(detail.status) && !canStripOnlyRecovery : false;
   const selectedJobId = detail?.id;
   const backupItems = jobBackupsQuery.data?.items ?? [];
   const backupTotal = jobBackupsQuery.data?.total ?? backupItems.length;
@@ -426,6 +430,9 @@ export function JobsPage() {
 
       {retryMutation.error instanceof Error ? (
         <ErrorPanel title="Retry failed" message={retryMutation.error.message} />
+      ) : null}
+      {stripOnlyRecoveryMutation.error instanceof Error ? (
+        <ErrorPanel title="Strip-only recovery failed" message={stripOnlyRecoveryMutation.error.message} />
       ) : null}
       {cancelMutation.error instanceof Error ? (
         <ErrorPanel title="Cancel failed" message={cancelMutation.error.message} />
@@ -1009,14 +1016,30 @@ export function JobsPage() {
         />
       ) : null}
 
+      {stripOnlyRecoveryJobId ? (
+        <StripOnlyRecoveryModal
+          isPending={stripOnlyRecoveryMutation.isPending}
+          onCancel={() => setStripOnlyRecoveryJobId(null)}
+          onConfirm={() => {
+            stripOnlyRecoveryMutation.mutate(stripOnlyRecoveryJobId, {
+              onSuccess: () => {
+                setStripOnlyRecoveryJobId(null);
+              },
+            });
+          }}
+        />
+      ) : null}
+
       {jobId ? (
         <JobDetailDrawer
           detail={detail}
           files={files}
           isLoading={detailQuery.isLoading}
           canRetry={canRetry}
+          canStripOnlyRecovery={canStripOnlyRecovery}
           canCancel={detail ? canCancelJob(detail, localWorkerId) : false}
           isRetryPending={retryMutation.isPending}
+          isStripOnlyRecoveryPending={stripOnlyRecoveryMutation.isPending}
           isCancelPending={cancelMutation.isPending}
           onClose={closeDrawer}
           onRetry={() => {
@@ -1026,6 +1049,11 @@ export function JobsPage() {
               } else {
                 retryMutation.mutate(selectedJobId);
               }
+            }
+          }}
+          onStripOnlyRecovery={() => {
+            if (selectedJobId) {
+              setStripOnlyRecoveryJobId(selectedJobId);
             }
           }}
           onCancel={() => {
@@ -1267,6 +1295,40 @@ function BackupRetryModal({
   );
 }
 
+function StripOnlyRecoveryModal({
+  isPending,
+  onCancel,
+  onConfirm,
+}: {
+  isPending: boolean;
+  onCancel: () => void;
+  onConfirm: () => void;
+}) {
+  return (
+    <div className="modal-backdrop" role="dialog" aria-modal="true" aria-label="Skip transcode / strip only">
+      <section className="modal-panel">
+        <div className="card-stack">
+          <div>
+            <strong>Skip transcode / strip only</strong>
+            <p className="muted-copy">
+              This keeps the original video stream unchanged and only cleans audio and subtitle tracks using the current profile policy.
+              The file is marked complete only after strip-only verification and replacement succeed.
+            </p>
+          </div>
+          <div className="section-card-actions">
+            <button className="button button-secondary" type="button" onClick={onCancel} disabled={isPending}>
+              Cancel
+            </button>
+            <button className="button button-primary" type="button" onClick={onConfirm} disabled={isPending}>
+              {isPending ? "Queueing…" : "Skip transcode / strip only"}
+            </button>
+          </div>
+        </div>
+      </section>
+    </div>
+  );
+}
+
 function BackupRow({
   item,
   selected,
@@ -1317,22 +1379,28 @@ function JobDetailDrawer({
   files,
   isLoading,
   canRetry,
+  canStripOnlyRecovery,
   canCancel,
   isRetryPending,
+  isStripOnlyRecoveryPending,
   isCancelPending,
   onClose,
   onRetry,
+  onStripOnlyRecovery,
   onCancel,
 }: {
   detail: JobDetail | undefined;
   files: FileSummary[];
   isLoading: boolean;
   canRetry: boolean;
+  canStripOnlyRecovery: boolean;
   canCancel: boolean;
   isRetryPending: boolean;
+  isStripOnlyRecoveryPending: boolean;
   isCancelPending: boolean;
   onClose: () => void;
   onRetry: () => void;
+  onStripOnlyRecovery: () => void;
   onCancel: () => void;
 }) {
   const closeButtonRef = useRef<HTMLButtonElement>(null);
@@ -1588,7 +1656,7 @@ function JobDetailDrawer({
           )}
         </div>
 
-        {detail && (canRetry || canCancel) ? (
+        {detail && (canRetry || canStripOnlyRecovery || canCancel) ? (
           <footer className="job-drawer-footer">
             {canRetry ? (
               <button
@@ -1598,6 +1666,16 @@ function JobDetailDrawer({
                 disabled={isRetryPending}
               >
                 {isRetryPending ? "Retrying…" : "Retry job"}
+              </button>
+            ) : null}
+            {canStripOnlyRecovery ? (
+              <button
+                className="button button-primary"
+                type="button"
+                onClick={onStripOnlyRecovery}
+                disabled={isStripOnlyRecoveryPending}
+              >
+                {isStripOnlyRecoveryPending ? "Queueing…" : "Skip transcode / strip only"}
               </button>
             ) : null}
             {canCancel ? (
@@ -2116,6 +2194,28 @@ function isCompletedJob(job: JobSummary) {
 
 function isProblemJob(job: JobSummary) {
   return ["failed", "interrupted", "cancelled", "manual_review"].includes(normalisedJobStatus(job));
+}
+
+function canRecoverWithStripOnly(job: JobSummary | JobDetail) {
+  if (!["failed", "cancelled", "manual_review"].includes(normalisedJobStatus(job))) {
+    return false;
+  }
+  const code = (job.failure_code ?? "").toLowerCase();
+  const category = (job.failure_category ?? "").toLowerCase();
+  const message = [job.failure_message, job.skipped_reason]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+  const guardCodes = new Set([
+    "output_larger_than_input",
+    "compression_safety_bitrate_floor",
+    "compression_safety_exceeded",
+    "compression_safety_unmeasurable",
+  ]);
+  if (guardCodes.has(code) || guardCodes.has(category)) {
+    return true;
+  }
+  return /larger than (the )?source|output is larger|output grew|too small|bitrate (is )?below|compression safety/.test(message);
 }
 
 function problemSelectionErrorKeys(jobs: JobSummary[]) {
