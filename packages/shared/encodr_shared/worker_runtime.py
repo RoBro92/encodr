@@ -728,6 +728,14 @@ def _classify_intel_qsv_failure(stderr: str) -> tuple[str, str]:
         return "QSV runtime missing", "Intel QSV userspace runtime is missing or could not be loaded."
     if "unknown encoder" in lowered or "encoder" in lowered and "not found" in lowered:
         return "QSV encoder missing", "FFmpeg does not include the required Intel QSV encoder."
+    if (
+        "error while opening encoder" in lowered
+        or "could not open encoder" in lowered
+        or "nothing was written into output file" in lowered
+        or "some encoding parameters are not supported" in lowered
+        or "function not implemented" in lowered
+    ):
+        return "QSV encode unsupported", "Intel QSV is visible, but FFmpeg could not run a QSV encode in this runtime."
     if "qsv" in lowered:
         return "QSV init failed", "Intel QSV initialisation failed in the current runtime."
     return "QSV smoke test failed", "Intel QSV is visible, but the FFmpeg QSV smoke test failed."
@@ -1355,13 +1363,15 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
             "-f",
             "lavfi",
             "-i",
-            "testsrc2=size=128x128:rate=1",
+            "testsrc2=size=1280x720:rate=30",
             "-frames:v",
-            "1",
+            "30",
             "-vf",
             "format=nv12,hwupload=extra_hw_frames=64",
             "-c:v",
             "h264_qsv",
+            "-global_quality",
+            "23",
             "-f",
             "null",
             "-",
@@ -1380,7 +1390,7 @@ def probe_intel_qsv(ffmpeg_path: Path | str) -> HardwareProbe:
             "stderr": stderr.strip()[:1000] if stderr else None,
         }
         attempts.append(smoke_payload)
-        if returncode == 0:
+        if returncode == 0 and not _qsv_smoke_output_indicates_failure(stdout, stderr):
             selected_attempt = smoke_payload
             break
 
@@ -1454,6 +1464,18 @@ def _qsv_init_candidates(render_devices: list[str], *, is_windows: bool) -> list
             ],
         ),
     ]
+
+
+def _qsv_smoke_output_indicates_failure(stdout: str, stderr: str) -> bool:
+    output = f"{stdout}\n{stderr}".lower()
+    failure_markers = (
+        "error while opening encoder",
+        "could not open encoder",
+        "nothing was written into output file",
+        "some encoding parameters are not supported",
+        "function not implemented",
+    )
+    return any(marker in output for marker in failure_markers)
 
 
 def probe_directory(path: Path | str, *, writable_required: bool) -> dict[str, object]:

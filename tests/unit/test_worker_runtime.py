@@ -512,6 +512,66 @@ def test_probe_intel_qsv_validates_smoke_test(monkeypatch: pytest.MonkeyPatch) -
     assert probe.usable is True
     assert probe.status == "healthy"
     assert probe.details["validation_state"] == "usable"
+    command = probe.details["ffmpeg_smoke_test"]["command"]
+    assert "testsrc2=size=1280x720:rate=30" in command
+    assert "-global_quality 23" in command
+
+
+def test_probe_intel_qsv_rejects_zero_exit_encoder_errors(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr("encodr_shared.worker_runtime.detect_ffmpeg_hwaccels", lambda _path: ["qsv", "vaapi"])
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.discover_runtime_devices",
+        lambda: [
+            {
+                "path": "/dev/dri/renderD128",
+                "exists": True,
+                "readable": True,
+                "writable": True,
+                "is_character_device": True,
+                "status": "healthy",
+                "message": "Device path is present and readable.",
+                "vendor_id": "0x8086",
+                "vendor_name": "Intel",
+            }
+        ],
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime.probe_binary",
+        lambda path: type(
+            "BinaryProbe",
+            (),
+            {
+                "configured_path": str(path),
+                "resolved_path": "/usr/bin/ffmpeg",
+                "exists": True,
+                "executable": True,
+                "discoverable": True,
+                "status": "healthy",
+                "message": "Binary is discoverable and executable.",
+            },
+        )(),
+    )
+    monkeypatch.setattr(
+        "encodr_shared.worker_runtime._run_command_capture",
+        lambda command, **kwargs: (
+            0,
+            "",
+            "\n".join(
+                [
+                    "[h264_qsv] some encoding parameters are not supported by the QSV runtime",
+                    "Error while opening encoder",
+                    "Nothing was written into output file",
+                ]
+            ),
+        ),
+    )
+
+    probe = probe_intel_qsv("ffmpeg")
+
+    assert probe.detected is True
+    assert probe.usable is False
+    assert probe.status == "failed"
+    assert probe.details["reason_unavailable"] == "QSV encode unsupported"
 
 
 def test_probe_execution_backends_keeps_worker_healthy_when_qsv_fails_and_vaapi_passes(
