@@ -424,9 +424,121 @@ def test_high_video_reduction_with_safe_output_bitrate_is_accepted(tmp_path: Pat
 
         refreshed_job = session.get(Job, job.id)
         assert result.status == "completed"
+        assert result.output_video_bitrate_bps == 2_500_000
         assert refreshed_job.status == JobStatus.COMPLETED
         assert refreshed_job.compression_reduction_percent is not None
         assert refreshed_job.compression_reduction_percent > 10
+
+
+def test_output_bitrate_fallback_from_size_and_duration_allows_safe_high_reduction(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="encodr.worker.loop")
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        staged_path = tmp_path / "scratch" / "safe-derived-bitrate-output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        output_media = media.model_copy(deep=True)
+        duration = output_media.container.duration_seconds
+        assert duration is not None
+        derived_video_bitrate = 2_500_000
+        output_media.video_streams[0].codec_name = "hevc"
+        output_media.video_streams[0].bit_rate = None
+        output_media.container.size_bytes = int(
+            (derived_video_bitrate * duration / 8)
+            + ((output_media.audio_streams[0].bit_rate or 0) * duration / 8)
+        )
+
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        plan.video.max_allowed_video_reduction_percent = 10
+
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=PassingVerifierWithProbeClient(output_media),
+            replacement_service=StaticReplacementService.succeeded(source_path),
+        )
+        JobRepository(session).mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed_job = session.get(Job, job.id)
+        assert result.status == "completed"
+        assert result.output_video_bitrate_bps == derived_video_bitrate
+        assert refreshed_job.status == JobStatus.COMPLETED
+        fallback_record = next(
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "bitrate_fallback_used"
+        )
+        assert getattr(fallback_record, "output_video_bitrate_bps", None) == derived_video_bitrate
+        assert getattr(fallback_record, "diagnostic_type", None) == "worker_runtime"
+
+
+def test_missing_output_bitrate_duration_and_size_send_to_review_with_reason(
+    tmp_path: Path,
+    caplog,
+) -> None:
+    caplog.set_level(logging.WARNING, logger="encodr.worker.loop")
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+        source_path = tmp_path / "Movies" / "Example Film (2024).mkv"
+        source_path.parent.mkdir(parents=True)
+        source_path.write_text("original", encoding="utf-8")
+        staged_path = tmp_path / "scratch" / "unmeasurable-bitrate-output.mkv"
+        staged_path.parent.mkdir(parents=True)
+
+        media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+        output_media = media.model_copy(deep=True)
+        output_media.video_streams[0].codec_name = "hevc"
+        output_media.video_streams[0].bit_rate = None
+        output_media.audio_streams[0].bit_rate = None
+        output_media.container.duration_seconds = None
+        output_media.container.size_bytes = None
+
+        job, plan = create_job(session, bundle, media, source_path=source_path.as_posix())
+        plan.video.max_allowed_video_reduction_percent = 10
+
+        service = WorkerExecutionService(
+            runner=StagedRunner(output_path=staged_path),
+            verifier=PassingVerifierWithProbeClient(output_media),
+            replacement_service=ReplacementService(),
+        )
+        JobRepository(session).mark_running(job, worker_name="worker-local")
+        result = service.execute_job(
+            session,
+            job_id=job.id,
+            plan=plan,
+            media_file=media,
+            ffmpeg_path="/usr/bin/ffmpeg",
+            scratch_dir=tmp_path / "scratch",
+        )
+
+        refreshed_job = session.get(Job, job.id)
+        assert result.status == "manual_review"
+        assert result.failure_category == "compression_safety_unmeasurable"
+        assert refreshed_job.status == JobStatus.MANUAL_REVIEW
+        assert "output_video_bitrate_bps" in (result.failure_message or "")
+        assert "duration" in (result.failure_message or "").lower()
+        assert "video size" in (result.failure_message or "").lower()
+        unavailable_record = next(
+            record
+            for record in caplog.records
+            if getattr(record, "event", None) == "bitrate_measurement_unavailable"
+        )
+        assert getattr(unavailable_record, "diagnostic_type", None) == "worker_runtime"
+        assert "duration" in str(getattr(unavailable_record, "reason", "")).lower()
 
 
 def test_output_larger_than_input_guard_sends_result_to_review(tmp_path: Path) -> None:
@@ -656,6 +768,36 @@ def test_packet_size_fallback_measures_video_reduction_without_stream_bitrates(
     assert metrics["video_space_saved_bytes"] == 450_000
     assert metrics["non_video_space_saved_bytes"] == 50_000
     assert metrics["compression_reduction_percent"] == 45.0
+
+
+def test_empty_packet_probe_allows_container_minus_audio_video_size_fallback(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    source_path = tmp_path / "source.mkv"
+    output_path = tmp_path / "output.mkv"
+    source_path.write_text("source", encoding="utf-8")
+    output_path.write_text("output", encoding="utf-8")
+
+    source_media = media_at_path(parse_fixture("film_1080p.json"), source_path)
+    output_media = media_at_path(parse_fixture("film_1080p.json"), output_path)
+    for media in (source_media, output_media):
+        media.video_streams[0].bit_rate = None
+        media.container.size_bytes = 10_000_000
+        media.audio_streams[0].bit_rate = 800_000
+        media.container.duration_seconds = 10
+
+    monkeypatch.setattr(
+        "encodr_core.execution.metrics.probe_packet_sizes_by_stream",
+        lambda file_path, *, ffprobe_path: {},
+    )
+
+    metrics = calculate_media_savings(source_media, output_media, ffprobe_path="/usr/bin/ffprobe")
+
+    assert metrics["video_input_size_bytes"] == 9_000_000
+    assert metrics["video_output_size_bytes"] == 9_000_000
+    assert metrics["output_video_bitrate_bps"] == 7_200_000
+    assert metrics["output_video_bitrate_source"] == "derived_video_size_duration"
 
 
 def test_worker_loop_processes_next_pending_job(tmp_path: Path) -> None:

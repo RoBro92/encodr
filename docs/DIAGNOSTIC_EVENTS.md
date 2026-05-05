@@ -108,6 +108,8 @@ Secrets, tokens, auth headers, API keys, and DSNs with credentials are redacted 
 | `api_job_retry_failed` | `api` | WARNING/ERROR | Job retry failed and was shown to the UI. |
 | `api_job_cancel_failed` | `api` | WARNING/ERROR | Job cancellation failed and was shown to the UI. |
 | `api_batch_jobs_create_failed` | `api` | WARNING/ERROR | Batch job creation failed and was shown to the UI. |
+| `dashboard_count_filter_mismatch` | `api` | WARNING | Dashboard historical status counts differed from current unresolved queue counts. |
+| `bulk_queue_operation_summary_normalised` | `api` / `ui` | DEBUG | Bulk queue response count fields were missing or invalid and were normalised to numeric values. |
 | `api_dry_run_jobs_create_failed` | `api` | WARNING/ERROR | Dry-run job creation failed and was shown to the UI. |
 | `api_review_item_detail_failed` | `api` | WARNING/ERROR | Review item lookup failed and was shown to the UI. |
 | `api_review_approve_failed` | `api` | WARNING/ERROR | Review approve failed and was shown to the UI. |
@@ -168,6 +170,8 @@ Secrets, tokens, auth headers, API keys, and DSNs with credentials are redacted 
 | `ffprobe_failed` | `worker` / `worker-agent` | ERROR | FFprobe dependency or probe run failed. |
 | `verification_failed` | `worker` / `worker-agent` | ERROR | Output verification failed. |
 | `output_growth_guard_triggered` | `worker` / `worker-agent` | WARNING | Output-growth guard sent a job to review. |
+| `bitrate_measurement_unavailable` | `worker` / `worker-agent` | WARNING | Output video bitrate could not be measured for the compression safety floor. |
+| `bitrate_fallback_used` | `worker` / `worker-agent` | WARNING | Output video bitrate was derived from video size and duration because stream bit rate was absent. |
 | `replacement_started` | `worker` / `worker-agent` | INFO | Replacement/backup operation began. |
 | `replacement_succeeded` | `worker` / `worker-agent` | INFO/WARNING | Replacement completed; warning if cleanup had recoverable issues. |
 | `replacement_failed` | `worker` / `worker-agent` | ERROR | Replacement/backup/restore/delete operation failed. |

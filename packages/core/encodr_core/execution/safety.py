@@ -15,7 +15,7 @@ class ExecutionSafetyFailure:
 def evaluate_execution_safety(
     *,
     plan: ProcessingPlan,
-    metrics: dict[str, float | int | None],
+    metrics: dict[str, object],
 ) -> ExecutionSafetyFailure | None:
     output_larger_failure = _output_larger_than_input_failure(plan=plan, metrics=metrics)
     if output_larger_failure is not None:
@@ -30,9 +30,26 @@ def evaluate_execution_safety(
 
     reduction = metrics.get("compression_reduction_percent")
     if reduction is None:
+        missing_reasons = [
+            _safe_text(
+                metrics.get("compression_reduction_unavailable_reason"),
+                "compression_reduction_percent could not be derived.",
+            )
+        ]
+        output_bitrate_reason = metrics.get("output_video_bitrate_unavailable_reason")
+        if output_bitrate_reason is not None:
+            missing_reasons.append(
+                _safe_text(
+                    output_bitrate_reason,
+                    "output_video_bitrate_bps could not be derived.",
+                )
+            )
         return ExecutionSafetyFailure(
             category="compression_safety_unmeasurable",
-            message="Video reduction could not be measured safely, so the output requires manual review.",
+            message=(
+                "Video reduction could not be measured safely, so the output requires manual review. "
+                f"Missing value: {' '.join(missing_reasons)}"
+            ),
         )
 
     output_bitrate = _number(metrics.get("output_video_bitrate_bps"))
@@ -55,10 +72,12 @@ def evaluate_execution_safety(
     if minimum_bitrate is None or output_bitrate is None:
         return ExecutionSafetyFailure(
             category="compression_safety_unmeasurable",
-            message=(
-                f"Video compression reduced the picture by {float(reduction):.1f}%, above the "
-                f"configured review threshold of {reduction_limit}%, but output bitrate could not "
-                "be measured against a quality floor."
+            message=_unmeasurable_bitrate_message(
+                reduction=float(reduction),
+                reduction_limit=reduction_limit,
+                minimum_bitrate=minimum_bitrate,
+                output_bitrate=output_bitrate,
+                metrics=metrics,
             ),
         )
 
@@ -75,7 +94,7 @@ def evaluate_execution_safety(
 def _output_larger_than_input_failure(
     *,
     plan: ProcessingPlan,
-    metrics: dict[str, float | int | None],
+    metrics: dict[str, object],
 ) -> ExecutionSafetyFailure | None:
     guard_percent = plan.video.output_larger_than_input_review_percent
     if guard_percent is None:
@@ -99,4 +118,37 @@ def _output_larger_than_input_failure(
 def _number(value: float | int | None) -> float | None:
     if value is None:
         return None
+    if not isinstance(value, (float, int)):
+        return None
     return float(value)
+
+
+def _unmeasurable_bitrate_message(
+    *,
+    reduction: float,
+    reduction_limit: float,
+    minimum_bitrate: float | None,
+    output_bitrate: float | None,
+    metrics: dict[str, object],
+) -> str:
+    reasons: list[str] = []
+    if output_bitrate is None:
+        reasons.append(
+            _safe_text(
+                metrics.get("output_video_bitrate_unavailable_reason"),
+                "output_video_bitrate_bps is unavailable because ffprobe did not report video stream bit_rate.",
+            )
+        )
+    if minimum_bitrate is None:
+        reasons.append("minimum_output_bitrate_bps is not configured for this plan.")
+    return (
+        f"Video compression reduced the picture by {reduction:.1f}%, above the "
+        f"configured review threshold of {reduction_limit}%, but output bitrate could not "
+        f"be measured against a quality floor. Missing value: {' '.join(reasons)}"
+    )
+
+
+def _safe_text(value: object, fallback: str) -> str:
+    if isinstance(value, str) and value.strip():
+        return value.strip()
+    return fallback

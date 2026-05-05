@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from datetime import datetime
+import logging
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, ValidationError, model_validator
 
 from app.schemas.schedules import ScheduleWindowRequest, ScheduleWindowResponse
 from encodr_db.models import BulkQueueOperation, Job
+
+logger = logging.getLogger("encodr.api.jobs")
 
 CreateExistingBackupStrategy = Literal["fail", "replace_backup", "keep_existing_backup", "keep_existing_backup_if_present"]
 
@@ -141,10 +144,10 @@ class BulkQueueOperationResponse(BaseModel):
     batch_size: int
     total_expected: int
     discovered_count: int
-    queued_count: int
-    skipped_count: int
-    blocked_count: int
-    failed_count: int
+    queued_count: int = 0
+    skipped_count: int = 0
+    blocked_count: int = 0
+    failed_count: int = 0
     current_batch: int
     total_batches: int
     error_summary: str | None = None
@@ -159,6 +162,20 @@ class BulkQueueOperationResponse(BaseModel):
         result_summary = operation.result_summary if isinstance(operation.result_summary, dict) else {}
         raw_items = result_summary.get("items") if isinstance(result_summary, dict) else []
         items = raw_items if isinstance(raw_items, list) else []
+        normalised_fields: list[str] = []
+        counts = {
+            name: _operation_count(operation, result_summary, name, normalised_fields)
+            for name in ("queued", "skipped", "blocked", "failed")
+        }
+        if normalised_fields:
+            logger.debug(
+                "bulk queue operation summary normalised",
+                extra={
+                    "event": "bulk_queue_operation_summary_normalised",
+                    "operation_id": operation.id,
+                    "missing_fields": normalised_fields,
+                },
+            )
         return cls(
             id=operation.id,
             scope=operation.scope,
@@ -168,10 +185,10 @@ class BulkQueueOperationResponse(BaseModel):
             batch_size=operation.batch_size,
             total_expected=operation.total_expected,
             discovered_count=operation.discovered_count,
-            queued_count=operation.queued_count,
-            skipped_count=operation.skipped_count,
-            blocked_count=operation.blocked_count,
-            failed_count=operation.failed_count,
+            queued_count=counts["queued"],
+            skipped_count=counts["skipped"],
+            blocked_count=counts["blocked"],
+            failed_count=counts["failed"],
             current_batch=operation.current_batch,
             total_batches=operation.total_batches,
             error_summary=operation.error_summary,
@@ -189,6 +206,36 @@ class BulkQueueOperationResponse(BaseModel):
             created_at=operation.created_at,
             updated_at=operation.updated_at,
         )
+
+
+def _operation_count(
+    operation: BulkQueueOperation,
+    result_summary: dict,
+    name: str,
+    normalised_fields: list[str] | None = None,
+) -> int:
+    field_name = f"{name}_count"
+    model_value = getattr(operation, field_name, None)
+    if model_value is not None:
+        model_count = _coerce_operation_count(model_value)
+        if model_count is not None:
+            return model_count
+    summary_value = result_summary.get(field_name, result_summary.get(name))
+    summary_count = _coerce_operation_count(summary_value)
+    if normalised_fields is not None:
+        normalised_fields.append(field_name)
+    if summary_count is None:
+        return 0
+    return summary_count
+
+
+def _coerce_operation_count(value: Any) -> int | None:
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 class BulkQueueOperationListResponse(BaseModel):
