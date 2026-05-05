@@ -252,6 +252,7 @@ export function FilesPage() {
   const bulkOperation = bulkQueue.operation;
   const bulkOperationActive = bulkQueue.active;
   const bulkOperationDone = bulkQueue.terminal;
+  const bulkOperationSummary = bulkOperation ? bulkProgressSummary(bulkOperation) : null;
   const moviesRoot = roots?.movies_root ?? null;
   const tvRoot = roots?.tv_root ?? null;
   const rootWatcherByKind = useMemo(() => {
@@ -1721,24 +1722,24 @@ export function FilesPage() {
                 <div className="card-stack">
                   <div className="info-strip">
                     <strong>{bulkOperationDone ? "Jobs created" : "Adding to queue"}</strong>
-                    <span>{bulkProgressSummary(bulkOperation).outcomeLabel}</span>
+                    <span>{bulkOperationSummary?.outcomeLabel}</span>
                   </div>
                   <div className="metric-grid">
                     <div className="metric-panel">
                       <span className="metric-label">Queued</span>
-                      <strong>{bulkOperation.queued_count}</strong>
+                      <strong>{bulkOperationSummary?.counts.queued ?? 0}</strong>
                     </div>
                     <div className="metric-panel">
                       <span className="metric-label">Skipped</span>
-                      <strong>{bulkOperation.skipped_count}</strong>
+                      <strong>{bulkOperationSummary?.counts.skipped ?? 0}</strong>
                     </div>
                     <div className="metric-panel">
                       <span className="metric-label">Blocked</span>
-                      <strong>{bulkOperation.blocked_count}</strong>
+                      <strong>{bulkOperationSummary?.counts.blocked ?? 0}</strong>
                     </div>
                     <div className="metric-panel">
                       <span className="metric-label">Failed</span>
-                      <strong>{bulkOperation.failed_count}</strong>
+                      <strong>{bulkOperationSummary?.counts.failed ?? 0}</strong>
                     </div>
                   </div>
                   {bulkOperation.items.length > 0 ? (

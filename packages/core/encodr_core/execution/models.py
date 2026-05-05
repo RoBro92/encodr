@@ -37,6 +37,13 @@ class ExecutionResult(ConfigModel):
     video_space_saved_bytes: int | None = None
     source_video_bitrate_bps: int | None = None
     output_video_bitrate_bps: int | None = None
+    source_video_bitrate_source: str | None = None
+    output_video_bitrate_source: str | None = None
+    source_video_bitrate_unavailable_reason: str | None = None
+    output_video_bitrate_unavailable_reason: str | None = None
+    source_duration_seconds: float | None = None
+    output_duration_seconds: float | None = None
+    compression_reduction_unavailable_reason: str | None = None
     non_video_space_saved_bytes: int | None = None
     compression_reduction_percent: float | None = None
     exit_code: int | None = None

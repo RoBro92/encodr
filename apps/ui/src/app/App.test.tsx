@@ -1631,6 +1631,80 @@ describe("Encodr UI shell", () => {
     expect(await screen.findByRole("status")).toHaveTextContent(/queue add complete/i);
   });
 
+  it("normalises missing bulk queue counts across modal, sidebar, banner, and toast", async () => {
+    const operationWithMissingCounts = bulkQueueOperation({
+      queued_count: undefined,
+      skipped_count: undefined,
+      blocked_count: undefined,
+      failed_count: undefined,
+      items: [],
+    });
+    const debugSpy = vi.spyOn(console, "debug").mockImplementation(() => undefined);
+    mockFetchRoutes([
+      { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },
+      { method: "GET", path: "/api/files/scans", body: { items: [] } },
+      { method: "GET", path: "/api/files/watchers", body: { items: [] } },
+      { method: "GET", path: "/api/workers", body: { items: [workerInventory()] } },
+      { method: "GET", path: "/api/jobs", body: { items: [], limit: 100, offset: 0 } },
+      {
+        method: "GET",
+        path: "/api/config/setup/library-roots",
+        body: {
+          media_root: "/media",
+          movies_root: "/media/Movies",
+          tv_root: "/media/TV",
+        },
+      },
+      {
+        method: "POST",
+        path: "/api/files/scan",
+        body: {
+          folder_path: "/media/Movies",
+          root_path: "/media",
+          directory_count: 1,
+          direct_directory_count: 1,
+          video_file_count: 2,
+          likely_show_count: 0,
+          likely_season_count: 0,
+          likely_episode_count: 0,
+          likely_film_count: 2,
+          files: [
+            { name: "Film One (2024).mkv", path: "/media/Movies/Film One (2024).mkv", entry_type: "file", is_video: true },
+            { name: "Film Two (2024).mkv", path: "/media/Movies/Film Two (2024).mkv", entry_type: "file", is_video: true },
+          ],
+        },
+      },
+      { method: "POST", path: "/api/jobs/bulk-queue", body: operationWithMissingCounts },
+      { method: "GET", path: "/api/jobs/bulk-queue/bulk-1", body: operationWithMissingCounts },
+    ]);
+
+    renderApp({ route: "/files", initialSession: makeSession() });
+
+    expect(await screen.findByRole("heading", { name: /^library$/i })).toBeInTheDocument();
+    await userEvent.click(screen.getByRole("button", { name: /advanced options/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /^movies/i }));
+    await userEvent.click(await screen.findByRole("button", { name: /create jobs/i }));
+
+    const modal = await screen.findByRole("dialog", { name: /adding to queue/i });
+    expect(within(modal).getByText(/0 queued, 0 skipped, 0 blocked, 0 failed/i)).toBeInTheDocument();
+    expect(within(modal).getAllByText(/^0$/)).toHaveLength(4);
+    await userEvent.click(screen.getByRole("button", { name: /done/i }));
+
+    expect(screen.getByRole("button", { name: /jobs created/i })).toHaveTextContent(/0 \/ 2 files queued/i);
+    expect(screen.getAllByText(/0 queued, 0 skipped, 0 blocked, 0 failed/i).length).toBeGreaterThanOrEqual(1);
+    expect(screen.getAllByText(/^0$/).length).toBeGreaterThanOrEqual(4);
+    expect(await screen.findByRole("status")).toHaveTextContent(/queue add complete: 0 queued, 0 skipped, 0 blocked, 0 failed/i);
+    expect(screen.queryByText(/undefined queued/i)).not.toBeInTheDocument();
+    expect(debugSpy).toHaveBeenCalledWith(
+      "bulk_queue_operation_summary_normalised",
+      expect.objectContaining({
+        missing_fields: expect.arrayContaining(["queued_count", "skipped_count", "blocked_count", "failed_count"]),
+        operation_id: "bulk-1",
+      }),
+    );
+    debugSpy.mockRestore();
+  });
+
   it("shows safe rerun summary and starts strip-only cleanup through bulk queue", async () => {
     const fetchMock = mockFetchRoutes([
       { method: "GET", path: "/api/system/runtime", body: runtimeStatus() },

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from sqlalchemy.orm import Session
 
 from app.schemas.analytics import (
@@ -18,8 +20,11 @@ from app.schemas.analytics import (
 )
 from encodr_core.config import ConfigBundle
 from encodr_db.models import Job, JobStatus
-from encodr_db.repositories import AnalyticsRepository
+from encodr_db.repositories import AnalyticsRepository, JobRepository
 from app.services.review import REVIEW_STATUS_HELD, REVIEW_STATUS_OPEN, ReviewService
+
+
+logger = logging.getLogger("encodr.api.analytics")
 
 
 class AnalyticsService:
@@ -175,7 +180,12 @@ class AnalyticsService:
 
     def _dashboard_queue_counts(self, session: Session) -> DashboardQueueCountsResponse:
         repository = AnalyticsRepository(session)
-        status_counts = repository.count_jobs_by_status()
+        historical_status_counts = repository.count_jobs_by_status()
+        status_counts = JobRepository(session).count_by_status()
+        self._log_dashboard_count_filter_mismatches(
+            historical_status_counts=historical_status_counts,
+            current_status_counts=status_counts,
+        )
         pending_review_count = len(
             [
                 item
@@ -191,6 +201,33 @@ class AnalyticsService:
             running=status_counts.get(JobStatus.RUNNING.value, 0),
             completed=status_counts.get(JobStatus.COMPLETED.value, 0),
         )
+
+    def _log_dashboard_count_filter_mismatches(
+        self,
+        *,
+        historical_status_counts: dict[str, int],
+        current_status_counts: dict[str, int],
+    ) -> None:
+        for status in (
+            JobStatus.FAILED,
+            JobStatus.INTERRUPTED,
+            JobStatus.RUNNING,
+            JobStatus.COMPLETED,
+        ):
+            historical_count = historical_status_counts.get(status.value, 0)
+            current_count = current_status_counts.get(status.value, 0)
+            if historical_count == current_count:
+                continue
+            logger.warning(
+                "dashboard count/filter mismatch detected",
+                extra={
+                    "event": "dashboard_count_filter_mismatch",
+                    "status": status.value,
+                    "historical_count": historical_count,
+                    "current_count": current_count,
+                    "filter": "cleared_at IS NULL",
+                },
+            )
 
     def _dashboard_media(self, session: Session) -> AnalyticsMediaResponse:
         repository = AnalyticsRepository(session)

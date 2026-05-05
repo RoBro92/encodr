@@ -1,9 +1,17 @@
 from __future__ import annotations
 
+from dataclasses import dataclass
 import subprocess
 from pathlib import Path
 
 from encodr_core.media.models import MediaFile
+
+
+@dataclass(frozen=True, slots=True)
+class BitrateMeasurement:
+    value: int | None
+    source: str | None
+    unavailable_reason: str | None
 
 
 def calculate_media_savings(
@@ -42,6 +50,9 @@ def calculate_media_savings(
     if source_video_size and video_saved is not None and source_video_size > 0:
         compression_reduction_percent = (video_saved / source_video_size) * 100.0
 
+    source_bitrate = measure_video_bitrate(source_media, video_size_bytes=source_video_size, label="source")
+    output_bitrate = measure_video_bitrate(output_media, video_size_bytes=output_video_size, label="output")
+
     return {
         "input_size_bytes": source_total_size,
         "output_size_bytes": output_total_size,
@@ -49,8 +60,18 @@ def calculate_media_savings(
         "video_input_size_bytes": source_video_size,
         "video_output_size_bytes": output_video_size,
         "video_space_saved_bytes": video_saved,
-        "source_video_bitrate_bps": first_video_bitrate(source_media),
-        "output_video_bitrate_bps": first_video_bitrate(output_media),
+        "source_video_bitrate_bps": source_bitrate.value,
+        "output_video_bitrate_bps": output_bitrate.value,
+        "source_video_bitrate_source": source_bitrate.source,
+        "output_video_bitrate_source": output_bitrate.source,
+        "source_video_bitrate_unavailable_reason": source_bitrate.unavailable_reason,
+        "output_video_bitrate_unavailable_reason": output_bitrate.unavailable_reason,
+        "source_duration_seconds": source_media.container.duration_seconds,
+        "output_duration_seconds": output_media.container.duration_seconds,
+        "compression_reduction_unavailable_reason": compression_reduction_unavailable_reason(
+            source_video_size=source_video_size,
+            output_video_size=output_video_size,
+        ),
         "non_video_space_saved_bytes": non_video_saved,
         "compression_reduction_percent": compression_reduction_percent,
     }
@@ -71,10 +92,10 @@ def estimate_stream_class_sizes(
         packet_sizes = probe_packet_sizes_by_stream(media.file_path, ffprobe_path=ffprobe_path)
         if video_size is None:
             video_indices = {stream.index for stream in media.video_streams}
-            video_size = sum(packet_sizes.get(index, 0) for index in video_indices)
+            video_size = sum_packet_sizes_if_present(packet_sizes, video_indices)
         if non_video_size is None:
             non_video_indices = {stream.index for stream in [*media.audio_streams, *media.subtitle_streams]}
-            non_video_size = sum(packet_sizes.get(index, 0) for index in non_video_indices)
+            non_video_size = sum_packet_sizes_if_present(packet_sizes, non_video_indices)
 
     total_size = media.container.size_bytes
     if video_size is None and total_size is not None and non_video_size is not None:
@@ -102,10 +123,76 @@ def estimate_stream_size_from_bitrate(streams, *, duration: float | None) -> int
     return total if found else None
 
 
+def sum_packet_sizes_if_present(packet_sizes: dict[int, int], stream_indices: set[int]) -> int | None:
+    if not any(index in packet_sizes for index in stream_indices):
+        return None
+    return sum(packet_sizes.get(index, 0) for index in stream_indices)
+
+
 def first_video_bitrate(media: MediaFile) -> int | None:
     if not media.video_streams:
         return None
     return media.video_streams[0].bit_rate
+
+
+def measure_video_bitrate(
+    media: MediaFile,
+    *,
+    video_size_bytes: int | None,
+    label: str,
+) -> BitrateMeasurement:
+    stream_bitrate = first_video_bitrate(media)
+    if stream_bitrate is not None:
+        return BitrateMeasurement(
+            value=stream_bitrate,
+            source="stream_bit_rate",
+            unavailable_reason=None,
+        )
+
+    missing: list[str] = ["video stream bit_rate"]
+    duration = media.container.duration_seconds
+    if video_size_bytes is None:
+        missing.append("video size")
+    if duration is None or duration <= 0:
+        missing.append("duration")
+    if video_size_bytes is None or duration is None or duration <= 0:
+        return BitrateMeasurement(
+            value=None,
+            source=None,
+            unavailable_reason=(
+                f"{label}_video_bitrate_bps is unavailable because ffprobe did not report "
+                f"{_format_missing_values(missing)}."
+            ),
+        )
+
+    return BitrateMeasurement(
+        value=int(round((video_size_bytes * 8) / duration)),
+        source="derived_video_size_duration",
+        unavailable_reason=None,
+    )
+
+
+def compression_reduction_unavailable_reason(
+    *,
+    source_video_size: int | None,
+    output_video_size: int | None,
+) -> str | None:
+    missing: list[str] = []
+    if source_video_size is None:
+        missing.append("source video size")
+    if output_video_size is None:
+        missing.append("output video size")
+    if not missing:
+        return None
+    return f"compression_reduction_percent is unavailable because {_format_missing_values(missing)} could not be derived."
+
+
+def _format_missing_values(values: list[str]) -> str:
+    if len(values) == 1:
+        return values[0]
+    if len(values) == 2:
+        return f"{values[0]} or {values[1]}"
+    return f"{', '.join(values[:-1])}, or {values[-1]}"
 
 
 def probe_packet_sizes_by_stream(

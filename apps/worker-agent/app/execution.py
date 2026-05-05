@@ -679,14 +679,32 @@ class RemoteExecutionService:
         source_media: MediaFile,
         output_path: Path | str,
         verifier: OutputVerifier,
-    ) -> dict[str, float | int | None]:
+    ) -> dict[str, object]:
         probe_client = getattr(verifier, "probe_client", None)
         if probe_client is None:
-            return {}
+            return {
+                "output_video_bitrate_unavailable_reason": (
+                    "output_video_bitrate_bps is unavailable because no ffprobe client was available "
+                    "to measure the staged output."
+                ),
+                "compression_reduction_unavailable_reason": (
+                    "compression_reduction_percent is unavailable because no ffprobe client was available "
+                    "to measure the staged output."
+                ),
+            }
         try:
             output_media = probe_client.probe_file(output_path)
-        except ProbeError:
-            return {}
+        except ProbeError as error:
+            return {
+                "output_video_bitrate_unavailable_reason": (
+                    "output_video_bitrate_bps is unavailable because ffprobe could not probe the staged "
+                    f"output ({error.kind})."
+                ),
+                "compression_reduction_unavailable_reason": (
+                    "compression_reduction_percent is unavailable because ffprobe could not probe the staged "
+                    f"output ({error.kind})."
+                ),
+            }
         return calculate_media_savings(
             source_media,
             output_media,
@@ -702,6 +720,12 @@ class RemoteExecutionService:
         staged_result: ExecutionResult,
         verification: VerificationResult,
     ) -> ExecutionResult | None:
+        _log_bitrate_measurement_diagnostics(
+            job_id=job_id,
+            plan=plan,
+            metrics=metrics,
+            staged_output_path=staged_result.output_path,
+        )
         failure = evaluate_execution_safety(plan=plan, metrics=metrics)
         if failure is None:
             return None
@@ -851,6 +875,48 @@ def _output_growth_details(
         "output_growth_percent": growth_percent,
         "output_growth_guard_percent": plan.video.output_larger_than_input_review_percent,
     }
+
+
+def _log_bitrate_measurement_diagnostics(
+    *,
+    job_id: str,
+    plan: ProcessingPlan,
+    metrics: dict[str, object],
+    staged_output_path: Path | str | None,
+) -> None:
+    if not plan.video.transcode_required or plan.video.minimum_output_bitrate_bps is None:
+        return
+    output_bitrate = metrics.get("output_video_bitrate_bps")
+    if metrics.get("output_video_bitrate_source") == "derived_video_size_duration":
+        logger.warning(
+            "bitrate fallback used",
+            extra=_worker_log_extra(
+                "bitrate_fallback_used",
+                job_id=job_id,
+                staged_output_path=str(staged_output_path) if staged_output_path is not None else None,
+                output_video_bitrate_bps=output_bitrate,
+                output_video_bitrate_source=metrics.get("output_video_bitrate_source"),
+                video_output_size_bytes=metrics.get("video_output_size_bytes"),
+                output_size_bytes=metrics.get("output_size_bytes"),
+                output_duration_seconds=metrics.get("output_duration_seconds"),
+                minimum_output_bitrate_bps=plan.video.minimum_output_bitrate_bps,
+            ),
+        )
+    elif output_bitrate is None:
+        logger.warning(
+            "bitrate measurement unavailable",
+            extra=_worker_log_extra(
+                "bitrate_measurement_unavailable",
+                job_id=job_id,
+                staged_output_path=str(staged_output_path) if staged_output_path is not None else None,
+                reason=metrics.get("output_video_bitrate_unavailable_reason")
+                or "output_video_bitrate_bps is unavailable.",
+                video_output_size_bytes=metrics.get("video_output_size_bytes"),
+                output_size_bytes=metrics.get("output_size_bytes"),
+                output_duration_seconds=metrics.get("output_duration_seconds"),
+                minimum_output_bitrate_bps=plan.video.minimum_output_bitrate_bps,
+            ),
+        )
 
 
 def _blocked_artifact_result(

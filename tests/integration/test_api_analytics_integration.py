@@ -174,6 +174,26 @@ def test_dashboard_counts_match_open_review_and_status_filters(
             source_path=completed_source.as_posix(),
         )
         completed_context.job.status = JobStatus.COMPLETED
+
+        cleared_failed_source = layout.create_source_file("Movies/Cleared Failed Dashboard Film (2024).mkv", contents="failed")
+        cleared_failed_context = create_job(
+            session,
+            bundle,
+            media_at_path(parse_fixture("non4k_remux_languages.json"), cleared_failed_source),
+            source_path=cleared_failed_source.as_posix(),
+        )
+        cleared_failed_context.job.status = JobStatus.FAILED
+        cleared_failed_context.job.cleared_at = datetime.now(timezone.utc)
+        cleared_failed_context.job.cleared_reason = "Resolved by operator."
+
+        skipped_source = layout.create_source_file("Movies/Skipped Dashboard Film (2024).mkv", contents="skipped")
+        skipped_context = create_job(
+            session,
+            bundle,
+            media_at_path(parse_fixture("non4k_remux_languages.json"), skipped_source),
+            source_path=skipped_source.as_posix(),
+        )
+        skipped_context.job.status = JobStatus.SKIPPED
         session.commit()
 
     hold_response = context.client.post(
@@ -193,6 +213,10 @@ def test_dashboard_counts_match_open_review_and_status_filters(
         "running": 1,
         "completed": 1,
     }
+
+    failed_jobs = context.client.get("/api/jobs?status_group=problem&status=failed&limit=10&offset=0", headers=auth.headers)
+    assert failed_jobs.status_code == 200
+    assert failed_jobs.json()["total"] == response.json()["queue_counts"]["failed"]
 
     approve_response = context.client.post(
         f"/api/review/items/{planned.tracked_file_id}/approve",

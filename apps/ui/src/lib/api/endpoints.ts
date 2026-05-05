@@ -407,10 +407,10 @@ export function startBulkQueueOperation(
   client: ApiClient,
   payload: CreateBatchJobsPayload,
 ): Promise<BulkQueueOperation> {
-  return client.request<BulkQueueOperation>("/jobs/bulk-queue", {
+  return client.request<unknown>("/jobs/bulk-queue", {
     method: "POST",
     body: JSON.stringify(payload),
-  });
+  }).then(normaliseBulkQueueOperation);
 }
 
 export function listBulkQueueOperations(
@@ -424,15 +424,71 @@ export function listBulkQueueOperations(
     }
   });
   const suffix = search.size > 0 ? `?${search.toString()}` : "";
-  return client.request<BulkQueueOperationListResponse>(`/jobs/bulk-queue${suffix}`);
+  return client.request<unknown>(`/jobs/bulk-queue${suffix}`).then(normaliseBulkQueueOperationList);
 }
 
 export function getBulkQueueOperation(client: ApiClient, operationId: string): Promise<BulkQueueOperation> {
-  return client.request<BulkQueueOperation>(`/jobs/bulk-queue/${operationId}`);
+  return client.request<unknown>(`/jobs/bulk-queue/${operationId}`).then(normaliseBulkQueueOperation);
 }
 
 export function cancelBulkQueueOperation(client: ApiClient, operationId: string): Promise<BulkQueueOperation> {
-  return client.request<BulkQueueOperation>(`/jobs/bulk-queue/${operationId}/cancel`, { method: "POST" });
+  return client.request<unknown>(`/jobs/bulk-queue/${operationId}/cancel`, { method: "POST" }).then(normaliseBulkQueueOperation);
+}
+
+function normaliseBulkQueueOperationList(raw: unknown): BulkQueueOperationListResponse {
+  const payload = isRecord(raw) ? raw : {};
+  const items = Array.isArray(payload.items) ? payload.items.map(normaliseBulkQueueOperation) : [];
+  return {
+    ...(payload as BulkQueueOperationListResponse),
+    items,
+  };
+}
+
+function normaliseBulkQueueOperation(raw: unknown): BulkQueueOperation {
+  const payload = isRecord(raw) ? raw : {};
+  const missingFields: string[] = [];
+  const operation = {
+    ...(payload as BulkQueueOperation),
+    batch_size: normaliseNumericField(payload, "batch_size", missingFields),
+    total_expected: normaliseNumericField(payload, "total_expected", missingFields),
+    discovered_count: normaliseNumericField(payload, "discovered_count", missingFields),
+    queued_count: normaliseNumericField(payload, "queued_count", missingFields),
+    skipped_count: normaliseNumericField(payload, "skipped_count", missingFields),
+    blocked_count: normaliseNumericField(payload, "blocked_count", missingFields),
+    failed_count: normaliseNumericField(payload, "failed_count", missingFields),
+    current_batch: normaliseNumericField(payload, "current_batch", missingFields),
+    total_batches: normaliseNumericField(payload, "total_batches", missingFields),
+    items: Array.isArray(payload.items) ? payload.items : [],
+  } as BulkQueueOperation;
+
+  const countFields = missingFields.filter((field) =>
+    ["queued_count", "skipped_count", "blocked_count", "failed_count"].includes(field),
+  );
+  if (countFields.length > 0) {
+    console.debug("bulk_queue_operation_summary_normalised", {
+      operation_id: typeof operation.id === "string" ? operation.id : null,
+      missing_fields: countFields,
+    });
+  }
+  return operation;
+}
+
+function normaliseNumericField(payload: Record<string, unknown>, field: string, missingFields: string[]): number {
+  const value = payload[field];
+  if (value === undefined || value === null || value === "") {
+    missingFields.push(field);
+    return 0;
+  }
+  const numeric = Number(value);
+  if (!Number.isFinite(numeric)) {
+    missingFields.push(field);
+    return 0;
+  }
+  return numeric;
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 export function retryJob(client: ApiClient, jobId: string, payload?: RetryJobPayload): Promise<JobDetail> {

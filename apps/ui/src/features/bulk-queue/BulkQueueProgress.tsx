@@ -267,19 +267,19 @@ export function BulkQueueProgressModal({
           <div className="metric-grid">
             <div className="metric-panel">
               <span className="metric-label">Queued</span>
-              <strong>{operation.queued_count}</strong>
+              <strong>{summary.counts.queued}</strong>
             </div>
             <div className="metric-panel">
               <span className="metric-label">Skipped</span>
-              <strong>{operation.skipped_count}</strong>
+              <strong>{summary.counts.skipped}</strong>
             </div>
             <div className="metric-panel">
               <span className="metric-label">Blocked</span>
-              <strong>{operation.blocked_count}</strong>
+              <strong>{summary.counts.blocked}</strong>
             </div>
             <div className="metric-panel">
               <span className="metric-label">Failed</span>
-              <strong>{operation.failed_count}</strong>
+              <strong>{summary.counts.failed}</strong>
             </div>
           </div>
 
@@ -315,17 +315,32 @@ export function isBulkOperationTerminal(operation: BulkQueueOperation) {
 }
 
 export function bulkProgressSummary(operation: BulkQueueOperation) {
-  const total = Math.max(operation.total_expected, operation.discovered_count, operation.queued_count + operation.skipped_count + operation.blocked_count + operation.failed_count);
-  const processed = operation.queued_count + operation.skipped_count + operation.blocked_count + operation.failed_count;
+  const counts = {
+    queued: normaliseBulkCount(operation.queued_count),
+    skipped: normaliseBulkCount(operation.skipped_count),
+    blocked: normaliseBulkCount(operation.blocked_count),
+    failed: normaliseBulkCount(operation.failed_count),
+  };
+  const total = Math.max(
+    normaliseBulkCount(operation.total_expected),
+    normaliseBulkCount(operation.discovered_count),
+    counts.queued + counts.skipped + counts.blocked + counts.failed,
+  );
+  const processed = counts.queued + counts.skipped + counts.blocked + counts.failed;
   const percent = total > 0 ? Math.min(100, Math.round((processed / total) * 100)) : 0;
   return {
+    counts,
     total,
     processed,
     percent,
-    countsLabel: `${operation.queued_count} / ${total} files queued`,
-    outcomeLabel: `${operation.queued_count} queued, ${operation.skipped_count} skipped, ${operation.blocked_count} blocked, ${operation.failed_count} failed`,
+    countsLabel: `${counts.queued} / ${total} files queued`,
+    outcomeLabel: `${counts.queued} queued, ${counts.skipped} skipped, ${counts.blocked} blocked, ${counts.failed} failed`,
     statusLabel: bulkProgressStatusLabel(operation),
   };
+}
+
+function normaliseBulkCount(value: number | null | undefined) {
+  return Number.isFinite(value) ? Number(value) : 0;
 }
 
 function bulkTerminalToastMessage(operation: BulkQueueOperation) {
