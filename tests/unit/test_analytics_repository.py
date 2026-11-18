@@ -96,6 +96,29 @@ def test_analytics_repository_summaries_are_derived_from_persisted_rows() -> Non
         ]
 
 
+def test_processing_history_counts_removed_tracks_from_plan_when_analysis_payload_is_missing() -> None:
+    with database_session() as session:
+        bundle = load_config_bundle(project_root=REPO_ROOT)
+
+        context = create_job(
+            session,
+            bundle,
+            parse_fixture("non4k_remux_languages.json"),
+            source_path="/media/Movies/Plan Count Fallback (2024).mkv",
+        )
+        assert len(context.plan.audio.dropped_stream_indices) == 2
+        assert len(context.plan.subtitles.dropped_stream_indices) == 1
+        context.job.status = JobStatus.COMPLETED
+        context.job.completed_at = datetime(2026, 4, 20, 10, 0, tzinfo=timezone.utc)
+        context.job.analysis_payload = None
+        session.commit()
+
+        processing = AnalyticsRepository(session).summarise_processing_history()
+
+        assert processing.total_audio_tracks_removed == 2
+        assert processing.total_subtitle_tracks_removed == 1
+
+
 def database_session() -> Session:
     engine = create_engine("sqlite+pysqlite:///:memory:", future=True)
     Base.metadata.create_all(engine)

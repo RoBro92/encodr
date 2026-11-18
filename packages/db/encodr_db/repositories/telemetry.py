@@ -90,8 +90,16 @@ class TelemetryAggregationRepository:
         if aggregation.last_completed_at is None or completed_at > _normalise_datetime(aggregation.last_completed_at):
             aggregation.last_completed_at = completed_at
 
-        aggregation.total_audio_tracks_removed += _analysis_count(job, "audio_tracks_removed_count")
-        aggregation.total_subtitle_tracks_removed += _analysis_count(job, "subtitle_tracks_removed_count")
+        aggregation.total_audio_tracks_removed += _removed_track_count(
+            job,
+            payload_key="audio_tracks_removed_count",
+            plan_section="audio",
+        )
+        aggregation.total_subtitle_tracks_removed += _removed_track_count(
+            job,
+            payload_key="subtitle_tracks_removed_count",
+            plan_section="subtitles",
+        )
 
         if job.input_size_bytes is None or job.output_size_bytes is None:
             return
@@ -115,12 +123,26 @@ def _empty_savings_by_action() -> dict[str, dict[str, int]]:
     }
 
 
-def _analysis_count(job: Job, key: str) -> int:
+def _removed_track_count(job: Job, *, payload_key: str, plan_section: str) -> int:
     payload: Any = job.analysis_payload
-    if not isinstance(payload, dict):
+    if isinstance(payload, dict) and payload_key in payload:
+        return _int_count(payload.get(payload_key))
+
+    plan_payload = getattr(getattr(job, "plan_snapshot", None), "payload", None)
+    if not isinstance(plan_payload, dict):
         return 0
+    section = plan_payload.get(plan_section)
+    if not isinstance(section, dict):
+        return 0
+    dropped = section.get("dropped_stream_indices")
+    if not isinstance(dropped, list):
+        return 0
+    return len(dropped)
+
+
+def _int_count(value: Any) -> int:
     try:
-        return int(payload.get(key) or 0)
+        return int(value or 0)
     except (TypeError, ValueError):
         return 0
 

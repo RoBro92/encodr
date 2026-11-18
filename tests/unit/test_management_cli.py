@@ -1,4 +1,10 @@
 from __future__ import annotations
+import cli.docker
+import cli.db
+import cli.health
+import cli.system
+import cli.utils
+import cli.main
 
 import argparse
 import builtins
@@ -26,9 +32,9 @@ def test_command_version_prints_release_summary(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle())
 
-    result = encodr_cli.command_version(argparse.Namespace(project_root="."))
+    result = cli.system.command_version(argparse.Namespace(project_root="."))
 
     output = capsys.readouterr().out
     assert result == 0
@@ -40,10 +46,10 @@ def test_command_doctor_reports_runtime_and_storage_status(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(encodr_cli, "should_use_dockerised_doctor", lambda _root: False)
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
-    monkeypatch.setattr(encodr_cli, "create_session_factory", lambda _bundle: object())
-    monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
+    monkeypatch.setattr(cli.main, "should_use_dockerised_doctor", lambda _root: False)
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(cli.db, "create_session_factory", lambda _bundle: object())
+    monkeypatch.setattr(cli.health, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
 
     class FakeSystemService:
         def __init__(self, **_kwargs) -> None:
@@ -76,9 +82,9 @@ def test_command_doctor_reports_runtime_and_storage_status(
                 "media_mounts": [{**healthy_path, "role": "media_mount", "display_name": "Media library", "path": "/media"}],
             }
 
-    monkeypatch.setattr(encodr_cli, "get_system_service_class", lambda: FakeSystemService)
+    monkeypatch.setattr(cli.utils, "get_system_service_class", lambda: FakeSystemService)
 
-    result = encodr_cli.command_doctor(argparse.Namespace(project_root="."))
+    result = cli.health.command_doctor(argparse.Namespace(project_root="."))
 
     output = capsys.readouterr().out
     assert result == 0
@@ -91,10 +97,10 @@ def test_command_status_reports_media_mount_problem_clearly(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(encodr_cli, "should_use_dockerised_doctor", lambda _root: False)
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
-    monkeypatch.setattr(encodr_cli, "create_session_factory", lambda _bundle: object())
-    monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
+    monkeypatch.setattr(cli.main, "should_use_dockerised_doctor", lambda _root: False)
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(cli.db, "create_session_factory", lambda _bundle: object())
+    monkeypatch.setattr(cli.health, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
 
     class FakeSystemService:
         def __init__(self, **_kwargs) -> None:
@@ -135,9 +141,9 @@ def test_command_status_reports_media_mount_problem_clearly(
                 }],
             }
 
-    monkeypatch.setattr(encodr_cli, "get_system_service_class", lambda: FakeSystemService)
+    monkeypatch.setattr(cli.utils, "get_system_service_class", lambda: FakeSystemService)
 
-    result = encodr_cli.command_doctor(argparse.Namespace(project_root="."))
+    result = cli.health.command_doctor(argparse.Namespace(project_root="."))
 
     output = capsys.readouterr().out
     assert result == 1
@@ -150,9 +156,9 @@ def test_command_doctor_prefers_dockerised_runtime_context(
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
-    monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
-    monkeypatch.setattr(encodr_cli, "should_use_dockerised_doctor", lambda _root: True)
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(cli.health, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
+    monkeypatch.setattr(cli.main, "should_use_dockerised_doctor", lambda _root: True)
     monkeypatch.setattr(
         encodr_cli,
         "maybe_collect_dockerised_doctor_payload",
@@ -199,9 +205,9 @@ def test_command_doctor_prefers_dockerised_runtime_context(
     def fail_if_called(_bundle):
         raise AssertionError("Host database session factory should not be used when dockerised doctor is available.")
 
-    monkeypatch.setattr(encodr_cli, "create_session_factory", fail_if_called)
+    monkeypatch.setattr(cli.db, "create_session_factory", fail_if_called)
 
-    result = encodr_cli.command_doctor(argparse.Namespace(project_root="."))
+    result = cli.health.command_doctor(argparse.Namespace(project_root="."))
 
     output = capsys.readouterr().out
     assert result == 0
@@ -218,14 +224,14 @@ def test_command_doctor_does_not_use_host_db_for_private_compose_database(
         "load_bundle",
         lambda _root: fake_bundle(database_url="postgresql+psycopg://encodr:secret@postgres:5432/encodr"),
     )
-    monkeypatch.setattr(encodr_cli, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
-    monkeypatch.setattr(encodr_cli, "maybe_collect_dockerised_doctor_payload", lambda _root: None)
-    monkeypatch.setattr(encodr_cli, "running_inside_container", lambda: False)
+    monkeypatch.setattr(cli.health, "check_api_health", lambda _bundle: {"status": "healthy", "summary": "API responded with ok."})
+    monkeypatch.setattr(cli.health, "maybe_collect_dockerised_doctor_payload", lambda _root: None)
+    monkeypatch.setattr(cli.utils, "running_inside_container", lambda: False)
 
     def fail_if_called(_bundle):
         raise AssertionError("Private Compose doctor must not fall back to host DB access.")
 
-    monkeypatch.setattr(encodr_cli, "create_session_factory", fail_if_called)
+    monkeypatch.setattr(cli.db, "create_session_factory", fail_if_called)
 
     class FakeSystemService:
         def __init__(self, **kwargs) -> None:
@@ -258,9 +264,9 @@ def test_command_doctor_does_not_use_host_db_for_private_compose_database(
                 "media_mounts": [{**path_status, "role": "media_mount", "display_name": "Media library", "path": "/media"}],
             }
 
-    monkeypatch.setattr(encodr_cli, "get_system_service_class", lambda: FakeSystemService)
+    monkeypatch.setattr(cli.utils, "get_system_service_class", lambda: FakeSystemService)
 
-    result = encodr_cli.command_doctor(argparse.Namespace(project_root="."))
+    result = cli.health.command_doctor(argparse.Namespace(project_root="."))
 
     output = capsys.readouterr().out
     assert result == 1
@@ -297,7 +303,7 @@ def test_dockerised_doctor_uses_one_off_api_container_when_exec_is_unavailable(
         },
     }
 
-    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda _root: None)
+    monkeypatch.setattr(cli.docker, "ensure_runtime_compose_override", lambda _root: None)
 
     def fake_run(command: list[str], **_kwargs):
         commands.append(command)
@@ -313,7 +319,7 @@ def test_dockerised_doctor_uses_one_off_api_container_when_exec_is_unavailable(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.maybe_collect_dockerised_doctor_payload(project_root)
+    result = cli.health.maybe_collect_dockerised_doctor_payload(project_root)
 
     assert result == payload
     assert [
@@ -341,7 +347,7 @@ def test_command_reset_admin_creates_first_admin(
 ) -> None:
     database_url = f"sqlite+pysqlite:///{(tmp_path / 'cli-reset-admin.sqlite').as_posix()}"
     _, session_factory = create_migrated_session_factory(repo_root=repo_root, database_url=database_url)
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle(database_url=database_url))
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle(database_url=database_url))
     monkeypatch.setattr(
         encodr_cli,
         "create_session_factory",
@@ -358,7 +364,7 @@ def test_command_reset_admin_creates_first_admin(
         lambda: load_api_security_module().PasswordHashService,
     )
 
-    result = encodr_cli.command_reset_admin(
+    result = cli.db.command_reset_admin(
         argparse.Namespace(project_root=".", username="admin", password="super-secure-password"),
     )
 
@@ -397,8 +403,8 @@ def test_command_reset_admin_uses_api_container_when_database_is_private(
         "create_local_cli_session_factory",
         lambda _bundle, _project_root: pytest.fail("private production DB commands must not use host DB access"),
     )
-    monkeypatch.setattr(encodr_cli, "running_inside_container", lambda: False)
-    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda _root: None)
+    monkeypatch.setattr(cli.utils, "running_inside_container", lambda: False)
+    monkeypatch.setattr(cli.docker, "ensure_runtime_compose_override", lambda _root: None)
 
     def fake_run(command: list[str], **kwargs):
         commands.append(command)
@@ -407,7 +413,7 @@ def test_command_reset_admin_uses_api_container_when_database_is_private(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.command_reset_admin(
+    result = cli.db.command_reset_admin(
         argparse.Namespace(project_root=str(project_root), username="admin", password=password),
     )
 
@@ -441,7 +447,7 @@ def test_command_reset_admin_uses_api_container_when_database_is_private(
             "api",
             "python",
             "-c",
-            encodr_cli.RESET_ADMIN_CONTAINER_SCRIPT,
+            cli.main.RESET_ADMIN_CONTAINER_SCRIPT,
         ],
     ]
     assert len(inputs) == 2
@@ -464,8 +470,8 @@ def test_command_reset_admin_reports_clear_error_when_api_container_unavailable(
         "load_bundle",
         lambda _root: fake_bundle(database_url="postgresql+psycopg://encodr:secret@postgres:5432/encodr"),
     )
-    monkeypatch.setattr(encodr_cli, "running_inside_container", lambda: False)
-    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda _root: None)
+    monkeypatch.setattr(cli.utils, "running_inside_container", lambda: False)
+    monkeypatch.setattr(cli.docker, "ensure_runtime_compose_override", lambda _root: None)
 
     calls = 0
 
@@ -485,7 +491,7 @@ def test_command_reset_admin_reports_clear_error_when_api_container_unavailable(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.command_reset_admin(
+    result = cli.db.command_reset_admin(
         argparse.Namespace(project_root=str(project_root), username="admin", password=password),
     )
 
@@ -499,7 +505,7 @@ def test_command_reset_admin_reports_clear_error_when_api_container_unavailable(
 
 
 def test_cli_error_redaction_handles_no_user_dsn_and_freeform_tokens() -> None:
-    output = encodr_cli.redact_sensitive_text(
+    output = cli.main.redact_sensitive_text(
         "redis://:redis-password@redis:6379/0 Bearer live-token-123 "
         "https://updates.example/latest?api_key=live-key&channel=stable",
         sensitive_values=[],
@@ -520,12 +526,12 @@ def test_command_reset_admin_reads_password_from_stdin(
 ) -> None:
     database_url = f"sqlite+pysqlite:///{(tmp_path / 'cli-reset-admin-stdin.sqlite').as_posix()}"
     _, session_factory = create_migrated_session_factory(repo_root=repo_root, database_url=database_url)
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle(database_url=database_url))
-    monkeypatch.setattr(encodr_cli, "create_local_cli_session_factory", lambda _bundle, _project_root: session_factory)
-    monkeypatch.setattr(encodr_cli, "get_password_hash_service_class", lambda: load_api_security_module().PasswordHashService)
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle(database_url=database_url))
+    monkeypatch.setattr(cli.db, "create_local_cli_session_factory", lambda _bundle, _project_root: session_factory)
+    monkeypatch.setattr(cli.utils, "get_password_hash_service_class", lambda: load_api_security_module().PasswordHashService)
     monkeypatch.setattr(sys, "stdin", io.StringIO("super-secure-password\n"))
 
-    result = encodr_cli.command_reset_admin(
+    result = cli.db.command_reset_admin(
         argparse.Namespace(project_root=".", username="admin", password=None, password_stdin=True),
     )
 
@@ -552,19 +558,19 @@ def test_command_dev_seed_ui_uses_api_container_when_database_is_private(
         "create_local_cli_session_factory",
         lambda _bundle, _project_root: pytest.fail("private DB demo seed must not use host DB access"),
     )
-    monkeypatch.setattr(encodr_cli, "running_inside_container", lambda: False)
+    monkeypatch.setattr(cli.utils, "running_inside_container", lambda: False)
 
     def fake_run_api_container_python(project_root_arg: Path, script: str, *, operation: str, input_text: str | None = None) -> int:
         assert input_text is None
         calls.append((project_root_arg, script, operation))
         return 0
 
-    monkeypatch.setattr(encodr_cli, "run_api_container_python", fake_run_api_container_python)
+    monkeypatch.setattr(cli.db, "run_api_container_python", fake_run_api_container_python)
 
-    result = encodr_cli.command_dev_seed_ui(argparse.Namespace(project_root=str(project_root)))
+    result = cli.db.command_dev_seed_ui(argparse.Namespace(project_root=str(project_root)))
 
     assert result == 0
-    assert calls == [(project_root, encodr_cli.DEV_SEED_UI_CONTAINER_SCRIPT, "dev-seed-ui")]
+    assert calls == [(project_root, cli.main.DEV_SEED_UI_CONTAINER_SCRIPT, "dev-seed-ui")]
 
 
 def test_command_mount_setup_validation_mode_checks_target_directory(
@@ -574,9 +580,9 @@ def test_command_mount_setup_validation_mode_checks_target_directory(
 ) -> None:
     mount_path = tmp_path / "media"
     mount_path.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle(media_mount=str(mount_path)))
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle(media_mount=str(mount_path)))
 
-    result = encodr_cli.command_mount_setup(
+    result = cli.system.command_mount_setup(
         argparse.Namespace(
             project_root=".",
             type="nfs",
@@ -603,8 +609,8 @@ def test_command_health_checks_local_ui_service_not_public_url(
     project_root.mkdir(parents=True, exist_ok=True)
     (project_root / ".env").write_text("UI_PORT=5544\n", encoding="utf-8")
 
-    monkeypatch.setattr(encodr_cli, "bootstrap_repo", lambda _root: None)
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(cli.utils, "bootstrap_repo", lambda _root: None)
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle())
 
     def fake_run(*_args, **_kwargs):
         return SimpleNamespace(returncode=0, stdout="api up\nui up\n", stderr="")
@@ -616,9 +622,9 @@ def test_command_health_checks_local_ui_service_not_public_url(
         return {"status": "healthy", "summary": "ok"}
 
     monkeypatch.setattr(subprocess, "run", fake_run)
-    monkeypatch.setattr(encodr_cli, "check_url", fake_check_url)
+    monkeypatch.setattr(cli.health, "check_url", fake_check_url)
 
-    result = encodr_cli.command_health(argparse.Namespace(project_root=str(project_root)))
+    result = cli.docker.command_health(argparse.Namespace(project_root=str(project_root)))
 
     output = capsys.readouterr().out
     assert result == 0
@@ -645,7 +651,7 @@ def test_command_compose_config_uses_managed_compose_files(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.command_compose_config(
+    result = cli.docker.command_compose_config(
         argparse.Namespace(project_root=str(project_root)),
     )
 
@@ -681,7 +687,7 @@ def test_command_addhost_updates_env_and_recreates_stack(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.command_addhost(
+    result = cli.system.command_addhost(
         argparse.Namespace(project_root=str(project_root), host="encodr.example.test"),
     )
 
@@ -701,7 +707,7 @@ def test_command_addhost_rejects_invalid_host(
     project_root.mkdir(parents=True, exist_ok=True)
     (project_root / ".env").write_text("PROJECT_NAME=encodr\n", encoding="utf-8")
 
-    result = encodr_cli.command_addhost(
+    result = cli.system.command_addhost(
         argparse.Namespace(project_root=str(project_root), host="https://encodr.example.com"),
     )
 
@@ -721,7 +727,7 @@ def test_command_update_prompts_for_restart_after_successful_apply(
     class FakeStatus(SimpleNamespace):
         pass
 
-    monkeypatch.setattr(encodr_cli, "load_bundle", lambda _root: fake_bundle())
+    monkeypatch.setattr(cli.utils, "load_bundle", lambda _root: fake_bundle())
     monkeypatch.setattr(
         encodr_cli,
         "build_update_checker",
@@ -741,14 +747,14 @@ def test_command_update_prompts_for_restart_after_successful_apply(
             )
         ),
     )
-    monkeypatch.setattr(encodr_cli, "apply_archive_update", lambda **_kwargs: None)
+    monkeypatch.setattr(cli.system, "apply_archive_update", lambda **_kwargs: None)
     monkeypatch.setattr(
         encodr_cli,
         "command_doctor",
         lambda _args: pytest.fail("update must run doctor in a fresh CLI process"),
     )
-    monkeypatch.setattr(encodr_cli, "run_updated_doctor", lambda _project_root: 0)
-    monkeypatch.setattr(encodr_cli, "detect_restart_environment", lambda: "lxc")
+    monkeypatch.setattr(cli.health, "run_updated_doctor", lambda _project_root: 0)
+    monkeypatch.setattr(cli.main, "detect_restart_environment", lambda: "lxc")
     monkeypatch.setattr(builtins, "input", lambda _prompt="": "n")
 
     commands: list[list[str]] = []
@@ -759,7 +765,7 @@ def test_command_update_prompts_for_restart_after_successful_apply(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.command_update(
+    result = cli.system.command_update(
         argparse.Namespace(project_root=str(project_root), apply=True, yes=True),
     )
 
@@ -786,7 +792,7 @@ def test_run_updated_doctor_invokes_installed_launcher(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.run_updated_doctor(project_root)
+    result = cli.health.run_updated_doctor(project_root)
 
     assert result == 0
     assert commands == [([str(launcher), "doctor"], project_root)]
@@ -806,7 +812,7 @@ def test_run_updated_doctor_falls_back_to_python_cli(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    result = encodr_cli.run_updated_doctor(project_root)
+    result = cli.health.run_updated_doctor(project_root)
 
     assert result == 1
     assert commands == [
@@ -827,7 +833,7 @@ def test_prompt_for_restart_after_update_reboots_when_confirmed(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     commands: list[list[str]] = []
-    monkeypatch.setattr(encodr_cli, "detect_restart_environment", lambda: "system")
+    monkeypatch.setattr(cli.main, "detect_restart_environment", lambda: "system")
     monkeypatch.setattr(builtins, "input", lambda _prompt="": "yes")
 
     def fake_run(command: list[str], **_kwargs):
@@ -836,7 +842,7 @@ def test_prompt_for_restart_after_update_reboots_when_confirmed(
 
     monkeypatch.setattr(subprocess, "run", fake_run)
 
-    encodr_cli.prompt_for_restart_after_update()
+    cli.system.prompt_for_restart_after_update()
 
     assert commands == [["reboot"]]
 
@@ -939,7 +945,7 @@ def test_local_dev_host_cli_maps_container_postgres_dsn_to_loopback_port(
     (tmp_path / "infra" / "compose" / "local.override.yml").write_text("services: {}\n", encoding="utf-8")
     (tmp_path / ".env").write_text("ENCODR_ENV=development\nPOSTGRES_PORT=6543\n", encoding="utf-8")
 
-    resolved = encodr_cli.host_reachable_database_dsn(
+    resolved = cli.db.host_reachable_database_dsn(
         "postgresql+psycopg://encodr:local-secret@postgres:5432/encodr",
         tmp_path,
     )
@@ -962,7 +968,7 @@ def test_production_host_cli_preserves_private_container_postgres_dsn(
     monkeypatch.setattr(encodr_cli, "Path", FakePath)
 
     dsn = "postgresql+psycopg://encodr:local-secret@postgres:5432/encodr"
-    resolved = encodr_cli.host_reachable_database_dsn(dsn, tmp_path)
+    resolved = cli.db.host_reachable_database_dsn(dsn, tmp_path)
 
     assert resolved == dsn
     assert "127.0.0.1:5432" not in resolved
@@ -987,7 +993,7 @@ def test_production_git_checkout_preserves_private_container_postgres_dsn(
     (tmp_path / ".env").write_text("ENCODR_ENV=production\nPOSTGRES_PORT=6543\n", encoding="utf-8")
 
     dsn = "postgresql+psycopg://encodr:local-secret@postgres:5432/encodr"
-    resolved = encodr_cli.host_reachable_database_dsn(dsn, tmp_path)
+    resolved = cli.db.host_reachable_database_dsn(dsn, tmp_path)
 
     assert resolved == dsn
 
@@ -1006,7 +1012,7 @@ def test_worker_agent_installers_protect_and_clear_registration_credentials(repo
 
 
 def test_compose_env_sets_local_media_and_temp_fallbacks(repo_root: Path) -> None:
-    env = encodr_cli.compose_env(repo_root)
+    env = cli.docker.compose_env(repo_root)
 
     assert env["ENCODR_MEDIA_HOST_PATH"] == str(repo_root / ".runtime" / "media")
     assert env["ENCODR_TEMP_HOST_PATH"] == str(repo_root / ".runtime" / "temp")
@@ -1038,7 +1044,7 @@ def test_compose_env_repairs_runtime_mount_permissions_for_non_root_containers(
     monkeypatch.setattr(encodr_cli.os, "geteuid", lambda: 0)
     monkeypatch.setattr(encodr_cli.os, "chown", fake_chown)
 
-    env = encodr_cli.compose_env(tmp_path)
+    env = cli.docker.compose_env(tmp_path)
 
     assert env["ENCODR_RUNTIME_UID"] == "2000"
     assert env["ENCODR_RUNTIME_GID"] == "3000"
@@ -1063,7 +1069,7 @@ def test_compose_env_creates_runtime_logs_directory_for_non_root_containers(
     monkeypatch.setattr(encodr_cli.os, "geteuid", lambda: 0)
     monkeypatch.setattr(encodr_cli.os, "chown", fake_chown)
 
-    env = encodr_cli.compose_env(tmp_path)
+    env = cli.docker.compose_env(tmp_path)
 
     logs_dir = tmp_path / ".runtime" / "data" / "logs"
     assert logs_dir.is_dir()
@@ -1095,7 +1101,7 @@ def test_compose_env_does_not_traverse_runtime_log_symlink_when_repairing_permis
     monkeypatch.setattr(encodr_cli.os, "geteuid", lambda: 0)
     monkeypatch.setattr(encodr_cli.os, "chown", fake_chown)
 
-    encodr_cli.compose_env(tmp_path)
+    cli.docker.compose_env(tmp_path)
 
     assert (outside_file.resolve(), 2000, 3000) not in chowned
 
@@ -1123,7 +1129,7 @@ def test_compose_env_does_not_repair_through_symlinked_runtime_root(
     monkeypatch.setattr(encodr_cli.os, "geteuid", lambda: 0)
     monkeypatch.setattr(encodr_cli.os, "chown", fake_chown)
 
-    encodr_cli.compose_env(tmp_path)
+    cli.docker.compose_env(tmp_path)
 
     assert (outside_data.resolve(), 2000, 3000) not in chowned
     assert (outside_file.resolve(), 2000, 3000) not in chowned
@@ -1152,9 +1158,9 @@ def test_local_checkout_uses_compose_override_for_dev_data_volumes(
     local_override = project_root / "infra" / "compose" / "local.override.yml"
     local_override.write_text((repo_root / "infra" / "compose" / "local.override.yml").read_text(encoding="utf-8"), encoding="utf-8")
     (project_root / ".env").write_text("ENCODR_ENV=development\n", encoding="utf-8")
-    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda _root: None)
+    monkeypatch.setattr(cli.docker, "ensure_runtime_compose_override", lambda _root: None)
 
-    command = encodr_cli.compose_command(project_root, "ps")
+    command = cli.docker.compose_command(project_root, "ps")
 
     assert command[:6] == [
         "docker",
@@ -1177,9 +1183,9 @@ def test_compose_command_includes_runtime_override_when_present(
     runtime_override = project_root / ".runtime" / "compose.runtime.yml"
     runtime_override.write_text("services: {}\n", encoding="utf-8")
     calls: list[Path] = []
-    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda root: calls.append(root))
+    monkeypatch.setattr(cli.docker, "ensure_runtime_compose_override", lambda root: calls.append(root))
 
-    command = encodr_cli.compose_command(project_root, "ps")
+    command = cli.docker.compose_command(project_root, "ps")
 
     assert calls == [project_root]
     assert command == [
@@ -1206,9 +1212,9 @@ def test_local_checkout_uses_both_dev_and_runtime_compose_overrides(
     (project_root / ".env").write_text("ENCODR_ENV=development\n", encoding="utf-8")
     runtime_override = project_root / ".runtime" / "compose.runtime.yml"
     runtime_override.write_text("services: {}\n", encoding="utf-8")
-    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda _root: None)
+    monkeypatch.setattr(cli.docker, "ensure_runtime_compose_override", lambda _root: None)
 
-    command = encodr_cli.compose_command(project_root, "config")
+    command = cli.docker.compose_command(project_root, "config")
 
     assert command == [
         "docker",
@@ -1233,9 +1239,9 @@ def test_production_checkout_omits_local_dev_compose_override(
     local_override = project_root / "infra" / "compose" / "local.override.yml"
     local_override.write_text("services: {}\n", encoding="utf-8")
     (project_root / ".env").write_text("ENCODR_ENV=production\n", encoding="utf-8")
-    monkeypatch.setattr(encodr_cli, "ensure_runtime_compose_override", lambda _root: None)
+    monkeypatch.setattr(cli.docker, "ensure_runtime_compose_override", lambda _root: None)
 
-    command = encodr_cli.compose_command(project_root, "ps")
+    command = cli.docker.compose_command(project_root, "ps")
 
     assert str(local_override) not in command
     assert command == ["docker", "compose", "-f", "docker-compose.yml", "ps"]
@@ -1379,7 +1385,7 @@ def test_release_tree_sync_excludes_repo_only_files(tmp_path: Path) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(relative_path, encoding="utf-8")
 
-    encodr_cli.sync_release_tree(source_root=source_root, target_root=target_root)
+    cli.main.sync_release_tree(source_root=source_root, target_root=target_root)
 
     for relative_path in required_files:
         assert (target_root / relative_path).exists()
@@ -1400,7 +1406,7 @@ def test_release_tree_sync_preserves_existing_config_without_nested_config(tmp_p
     (target_root / "config" / "policy.yaml").write_text("existing policy\n", encoding="utf-8")
     (target_root / "config" / "workers.yaml").write_text("existing workers\n", encoding="utf-8")
 
-    encodr_cli.sync_release_tree(source_root=source_root, target_root=target_root)
+    cli.main.sync_release_tree(source_root=source_root, target_root=target_root)
 
     assert (target_root / "config" / "app.yaml").read_text(encoding="utf-8") == "existing app\n"
     assert (target_root / "config" / "policy.yaml").read_text(encoding="utf-8") == "existing policy\n"
